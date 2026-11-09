@@ -4,8 +4,15 @@
   #error "This windows.h is only for Android and iOS!"
 #endif
 
-#if defined(__APPLE__)
-  #ifndef ANDROID
+#ifdef __APPLE__
+#ifdef __cplusplus
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <unordered_map>
+#include <cmath>
+#endif
+#ifndef ANDROID
     #define ANDROID 1
   #endif
   #ifndef __ANDROID__
