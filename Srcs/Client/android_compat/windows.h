@@ -102,6 +102,42 @@ typedef long HRESULT;
 #define CALLBACK
 #define __stdcall
 #define STDMETHODCALLTYPE
+typedef char CHAR;
+typedef char* LPSTR;
+typedef const char* LPCSTR;
+typedef wchar_t WCHAR;
+typedef WCHAR* LPWSTR;
+typedef const WCHAR* LPCWSTR;
+typedef BOOL* LPBOOL;
+typedef DWORD* LPDWORD;
+#ifdef __APPLE__
+#ifdef __cplusplus
+#pragma push_macro("__ANDROID__")
+#undef __ANDROID__
+#include <locale.h>
+#include <locale>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <unordered_map>
+#include <map>
+#include <set>
+#include <list>
+#include <memory>
+#include <functional>
+#include <iostream>
+#include <sstream>
+#include <fstream>
+#include <cmath>
+#pragma pop_macro("__ANDROID__")
+#endif
+#ifndef ANDROID
+#define ANDROID 1
+#endif
+#ifndef __ANDROID__
+#define __ANDROID__ 1
+#endif
+#endif
 
 typedef struct _RECT {
   LONG left;
