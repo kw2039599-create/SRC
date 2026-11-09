@@ -83,6 +83,7 @@ file(WRITE "${PY_GEN_DIR}/pyconfig.h" "
 #define HAVE_UTIME_H 1
 #define HAVE_PTHREAD_H 1
 #define HAVE_DLFCN_H 1
+#define HAVE_WCHAR_H 1
 
 #define _REENTRANT 1
 #define WITH_THREAD 1
@@ -459,7 +460,7 @@ target_include_directories(python27_static PRIVATE
     "${PYTHON_SRC_DIR}/Modules"
 )
 target_compile_definitions(python27_static PRIVATE Py_BUILD_CORE PLATFORM="android")
-target_compile_options(python27_static PRIVATE -w -fwrapv)
+target_compile_options(python27_static PRIVATE -w -fwrapv -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-function-pointer-types)
 
 if(ANDROID)
     # Include Android NDK sources for cpu-features.h
