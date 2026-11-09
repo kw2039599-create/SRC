@@ -15,7 +15,8 @@ add_definitions(-DCRYPTOPP_DISABLE_ASM)
 if(ANDROID)
     add_definitions(-DANDROID -D__ANDROID__)
 elseif(APPLE)
-    add_definitions(-DANDROID -D__ANDROID__)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/android_compat)
+    add_definitions(-DANDROID)
 endif()
 
 # 1. Build Granny 3D from Extern/granny/source
@@ -634,4 +635,7 @@ elseif(APPLE)
         z
         m
     )
+endif()
+if(APPLE)
+    target_compile_definitions(metin2_mobile PRIVATE __ANDROID__=1)
 endif()
