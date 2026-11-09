@@ -188,6 +188,13 @@
 #endif
 
 
+// FixiOSPlatform
+#if PLATFORM_ANDROID
+#undef PLATFORM_IPHONE
+#define PLATFORM_IPHONE 0
+#undef PLATFORM_MACOSX
+#define PLATFORM_MACOSX 0
+#endif
 #if (!PLATFORM_WIN32 && !PLATFORM_WIN64 && !PLATFORM_MACOSX &&                                      \
      !PLATFORM_XENON && !PLATFORM_SEKRIT && !PLATFORM_PS2 && !PLATFORM_PSP &&                      \
      !PLATFORM_PS3 && !PLATFORM_GAMECUBE && !PLATFORM_WII && !PLATFORM_WIIU && !PLATFORM_N3DS &&    \
