@@ -84,6 +84,12 @@ file(WRITE "${PY_GEN_DIR}/pyconfig.h" "
 #define HAVE_PTHREAD_H 1
 #define HAVE_DLFCN_H 1
 #define HAVE_WCHAR_H 1
+// FixiOSSystem
+#ifdef __APPLE__
+#include <stdlib.h>
+#undef system
+#define system(cmd) (-1)
+#endif
 
 #define _REENTRANT 1
 #define WITH_THREAD 1
