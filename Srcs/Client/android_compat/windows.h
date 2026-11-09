@@ -2286,6 +2286,8 @@ static inline MMRESULT timeGetDevCaps(LPTIMECAPS ptc, UINT cbtc) {
 #include <stdarg.h>
 #include <wchar.h>
 #include <math.h>
+#include <float.h>
+#include <limits.h>
 
 #ifndef _vsnprintf
 #define _vsnprintf vsnprintf

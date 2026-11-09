@@ -18,7 +18,7 @@ jobs:
         working-directory: Srcs/Client
         run: |
           set +e
-          cmake --build build_ios --config Release -- -sdk iphoneos -PBXBuildsContinueAfterErrors=YES -continueBuildingAfterErrors=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1
+          cmake --build build_ios --config Release -- -sdk iphoneos -IDEBuildingContinueBuildingAfterErrors=YES -PBXBuildsContinueAfterErrors=YES -continueBuildingAfterErrors=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1
           BUILD_STATUS=$?
           if [ $BUILD_STATUS -ne 0 ]; then
             echo '================ ALL COMPILER ERRORS (BEGINNING TO END) ================'
