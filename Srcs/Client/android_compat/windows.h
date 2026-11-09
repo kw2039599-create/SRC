@@ -5,14 +5,7 @@
 #endif
 
 #ifdef __APPLE__
-#ifdef __cplusplus
-#include <vector>
-#include <string>
-#include <algorithm>
-#include <unordered_map>
-#include <cmath>
-#endif
-#ifndef ANDROID
+  #ifndef ANDROID
     #define ANDROID 1
   #endif
   #ifndef __ANDROID__
