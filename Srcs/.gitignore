@@ -1,0 +1,16 @@
+*.lib
+*.pdb
+*.dll
+*.exe
+*.obj
+*.pch
+*.ipch
+*.ilk
+*.exp
+*.apk
+*.aab
+*.so
+.vs/
+.cxx/
+build/
+build_ios/

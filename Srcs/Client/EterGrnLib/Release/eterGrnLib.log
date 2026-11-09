@@ -1,0 +1,12 @@
+﻿  ModelInstanceModel.cpp
+  ModelInstanceUpdate.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ModelInstanceUpdate.cpp(31,59): warning C5055: operator '*': deprecated between enumerations and floating-point types
+  (compiling source file '/ModelInstanceUpdate.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ModelInstanceUpdate.cpp(39,55): warning C4244: 'argument': conversion from 'double' to 'granny_real32', possible loss of data
+  (compiling source file '/ModelInstanceUpdate.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ModelInstanceUpdate.cpp(55,55): warning C4244: 'argument': conversion from 'double' to 'granny_real32', possible loss of data
+  (compiling source file '/ModelInstanceUpdate.cpp')
+  
+  eterGrnLib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\Release\eterGrnLib.lib

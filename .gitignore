@@ -1,0 +1,12 @@
+*.pdb
+*.pch
+*.ipch
+*.ilk
+*.exp
+*.apk
+*.aab
+*.so
+.vs/
+.cxx/
+build/
+build_ios/

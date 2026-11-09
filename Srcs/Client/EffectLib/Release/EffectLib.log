@@ -1,0 +1,7 @@
+﻿  EffectInstance.cpp
+  EffectManager.cpp
+  EffectMesh.cpp
+  EffectMeshInstance.cpp
+  ParticleInstance.cpp
+  ParticleSystemInstance.cpp
+  EffectLib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EffectLib\Release\EffectLib.lib

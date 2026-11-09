@@ -1,0 +1,5 @@
+^C:\USERS\ADMIN\DESKTOP\M2\S3LL_CLIENT\SRCS\EXTERN\CRYPTOPP\ADHOC.CPP.PROTO
+if not exist adhoc.cpp copy "C:\Users\Admin\Desktop\M2\s3ll_client\Srcs\Extern\cryptopp\adhoc.cpp.proto" adhoc.cpp
+        echo: >> adhoc.cpp.copied
+^C:\USERS\ADMIN\DESKTOP\M2\S3LL_CLIENT\SRCS\EXTERN\CRYPTOPP\RDRAND.ASM
+ml.exe /c /nologo /D_M_X86 /W3 /Cx /Zi /safeseh /Fo"Win32\cryptlib\Release\rdrand-x86.obj" "C:\Users\Admin\Desktop\M2\s3ll_client\Srcs\Extern\cryptopp\rdrand.asm"

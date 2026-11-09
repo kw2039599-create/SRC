@@ -1,0 +1,450 @@
+#pragma once
+
+#ifndef __ANDROID__
+  #error "This ranges header is only for Android!"
+#endif
+
+#include <algorithm>
+#include <functional>
+#include <iterator>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+
+namespace std {
+namespace ranges {
+
+struct identity {
+    template <typename T>
+    constexpr T&& operator()(T&& t) const noexcept {
+        return std::forward<T>(t);
+    }
+};
+
+struct less {
+    template <typename T, typename U>
+    constexpr bool operator()(T&& t, U&& u) const {
+        return std::forward<T>(t) < std::forward<U>(u);
+    }
+};
+
+struct greater {
+    template <typename T, typename U>
+    constexpr bool operator()(T&& t, U&& u) const {
+        return std::forward<T>(t) > std::forward<U>(u);
+    }
+};
+
+struct equal_to {
+    template <typename T, typename U>
+    constexpr bool operator()(T&& t, U&& u) const {
+        return std::forward<T>(t) == std::forward<U>(u);
+    }
+};
+
+using std::begin;
+using std::end;
+using std::rbegin;
+using std::rend;
+using std::size;
+using std::empty;
+
+template <typename It>
+constexpr auto distance(It first, It last) -> decltype(std::distance(first, last)) {
+    return std::distance(first, last);
+}
+
+template <typename R>
+constexpr auto distance(R&& r) -> decltype(std::distance(std::begin(r), std::end(r))) {
+    return std::distance(std::begin(r), std::end(r));
+}
+
+template <typename R, typename T, typename Proj = identity>
+auto find(R&& r, const T& value, Proj proj = {}) {
+    auto first = std::begin(r);
+    auto last = std::end(r);
+    for (; first != last; ++first) {
+        if (std::invoke(proj, *first) == value)
+            return first;
+    }
+    return last;
+}
+
+template <typename R, typename Pred, typename Proj = identity>
+auto find_if(R&& r, Pred pred, Proj proj = {}) {
+    auto first = std::begin(r);
+    auto last = std::end(r);
+    for (; first != last; ++first) {
+        if (std::invoke(pred, std::invoke(proj, *first)))
+            return first;
+    }
+    return last;
+}
+
+template <typename R, typename Pred, typename Proj = identity>
+auto find_if_not(R&& r, Pred pred, Proj proj = {}) {
+    auto first = std::begin(r);
+    auto last = std::end(r);
+    for (; first != last; ++first) {
+        if (!std::invoke(pred, std::invoke(proj, *first)))
+            return first;
+    }
+    return last;
+}
+
+template <typename R, typename Pred, typename Proj = identity>
+bool any_of(R&& r, Pred pred, Proj proj = {}) {
+    return ranges::find_if(std::forward<R>(r), std::move(pred), std::move(proj)) != std::end(r);
+}
+
+template <typename R, typename Pred, typename Proj = identity>
+bool all_of(R&& r, Pred pred, Proj proj = {}) {
+    return ranges::find_if_not(std::forward<R>(r), std::move(pred), std::move(proj)) == std::end(r);
+}
+
+template <typename R, typename Pred, typename Proj = identity>
+bool none_of(R&& r, Pred pred, Proj proj = {}) {
+    return !ranges::any_of(std::forward<R>(r), std::move(pred), std::move(proj));
+}
+
+template <typename R, typename Fun, typename Proj = identity>
+Fun for_each(R&& r, Fun f, Proj proj = {}) {
+    for (auto&& elem : r) {
+        std::invoke(f, std::invoke(proj, elem));
+    }
+    return f;
+}
+
+template <typename R, typename T, typename Proj = identity>
+auto count(R&& r, const T& value, Proj proj = {}) {
+    typename std::iterator_traits<decltype(std::begin(r))>::difference_type ret = 0;
+    for (auto&& elem : r) {
+        if (std::invoke(proj, elem) == value)
+            ++ret;
+    }
+    return ret;
+}
+
+template <typename R, typename Pred, typename Proj = identity>
+auto count_if(R&& r, Pred pred, Proj proj = {}) {
+    typename std::iterator_traits<decltype(std::begin(r))>::difference_type ret = 0;
+    for (auto&& elem : r) {
+        if (std::invoke(pred, std::invoke(proj, elem)))
+            ++ret;
+    }
+    return ret;
+}
+
+template <typename R, typename Comp = less, typename Proj = identity>
+void sort(R&& r, Comp comp = {}, Proj proj = {}) {
+    std::sort(std::begin(r), std::end(r), [&](auto&& a, auto&& b) {
+        return std::invoke(comp, std::invoke(proj, a), std::invoke(proj, b));
+    });
+}
+
+template <typename R, typename OutIter>
+OutIter copy(R&& r, OutIter out) {
+    return std::copy(std::begin(r), std::end(r), out);
+}
+
+template <typename R, typename OutIter, typename Pred, typename Proj = identity>
+OutIter copy_if(R&& r, OutIter out, Pred pred, Proj proj = {}) {
+    for (auto&& elem : r) {
+        if (std::invoke(pred, std::invoke(proj, elem))) {
+            *out++ = elem;
+        }
+    }
+    return out;
+}
+
+template <typename R, typename T>
+void fill(R&& r, const T& value) {
+    std::fill(std::begin(r), std::end(r), value);
+}
+
+template <typename R, typename OutIter, typename Op, typename Proj = identity>
+OutIter transform(R&& r, OutIter out, Op op, Proj proj = {}) {
+    for (auto&& elem : r) {
+        *out++ = std::invoke(op, std::invoke(proj, elem));
+    }
+    return out;
+}
+
+template <typename R, typename Comp = less, typename Proj = identity>
+auto min_element(R&& r, Comp comp = {}, Proj proj = {}) {
+    return std::min_element(std::begin(r), std::end(r), [&](auto&& a, auto&& b) {
+        return std::invoke(comp, std::invoke(proj, a), std::invoke(proj, b));
+    });
+}
+
+template <typename R, typename Comp = less, typename Proj = identity>
+auto max_element(R&& r, Comp comp = {}, Proj proj = {}) {
+    return std::max_element(std::begin(r), std::end(r), [&](auto&& a, auto&& b) {
+        return std::invoke(comp, std::invoke(proj, a), std::invoke(proj, b));
+    });
+}
+
+namespace views {
+
+template <size_t Index, typename It>
+class tuple_element_iterator {
+public:
+    using iterator_category = std::bidirectional_iterator_tag;
+    using value_type = typename std::tuple_element<Index, typename std::decay<decltype(*std::declval<It>())>::type>::type;
+    using difference_type = ptrdiff_t;
+    using pointer = typename std::remove_reference<value_type>::type*;
+    using reference = decltype(std::get<Index>(*std::declval<It>()));
+
+    tuple_element_iterator() = default;
+    explicit tuple_element_iterator(It it) : m_it(it) {}
+
+    decltype(auto) operator*() const { return std::get<Index>(*m_it); }
+    auto operator->() const { return std::addressof(std::get<Index>(*m_it)); }
+
+    tuple_element_iterator& operator++() { ++m_it; return *this; }
+    tuple_element_iterator operator++(int) { auto tmp = *this; ++m_it; return tmp; }
+    tuple_element_iterator& operator--() { --m_it; return *this; }
+    tuple_element_iterator operator--(int) { auto tmp = *this; --m_it; return tmp; }
+
+    bool operator==(const tuple_element_iterator& other) const { return m_it == other.m_it; }
+    bool operator!=(const tuple_element_iterator& other) const { return m_it != other.m_it; }
+
+private:
+    It m_it{};
+};
+
+template <typename R, size_t Index>
+class elements_view {
+public:
+    explicit elements_view(R&& r) : m_r(std::forward<R>(r)) {}
+    auto begin() {
+        using It = decltype(std::begin(m_r));
+        return tuple_element_iterator<Index, It>(std::begin(m_r));
+    }
+    auto end() {
+        using It = decltype(std::end(m_r));
+        return tuple_element_iterator<Index, It>(std::end(m_r));
+    }
+    auto begin() const {
+        using It = decltype(std::begin(m_r));
+        return tuple_element_iterator<Index, It>(std::begin(m_r));
+    }
+    auto end() const {
+        using It = decltype(std::end(m_r));
+        return tuple_element_iterator<Index, It>(std::end(m_r));
+    }
+    auto rbegin() { return std::make_reverse_iterator(end()); }
+    auto rend() { return std::make_reverse_iterator(begin()); }
+    auto rbegin() const { return std::make_reverse_iterator(end()); }
+    auto rend() const { return std::make_reverse_iterator(begin()); }
+private:
+    R m_r;
+};
+
+template <size_t Index>
+struct elements_fn {
+    template <typename R>
+    auto operator()(R&& r) const {
+        return elements_view<R, Index>(std::forward<R>(r));
+    }
+    template <typename R>
+    friend auto operator|(R&& r, const elements_fn& fn) {
+        return fn(std::forward<R>(r));
+    }
+};
+
+inline constexpr elements_fn<0> keys{};
+inline constexpr elements_fn<1> values{};
+
+template <typename R>
+class reverse_view {
+public:
+    explicit reverse_view(R&& r) : m_r(std::forward<R>(r)) {}
+    auto begin() { return std::rbegin(m_r); }
+    auto end() { return std::rend(m_r); }
+    auto begin() const { return std::rbegin(m_r); }
+    auto end() const { return std::rend(m_r); }
+private:
+    R m_r;
+};
+
+struct reverse_fn {
+    template <typename R>
+    auto operator()(R&& r) const {
+        return reverse_view<R>(std::forward<R>(r));
+    }
+    template <typename R>
+    friend auto operator|(R&& r, const reverse_fn& fn) {
+        return fn(std::forward<R>(r));
+    }
+};
+
+inline constexpr reverse_fn reverse{};
+
+template <typename R, typename Pred>
+class filter_view {
+public:
+    template <typename It>
+    class iterator {
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = typename std::iterator_traits<It>::value_type;
+        using difference_type = typename std::iterator_traits<It>::difference_type;
+        using pointer = typename std::iterator_traits<It>::pointer;
+        using reference = typename std::iterator_traits<It>::reference;
+
+        iterator(It cur, It last, const Pred* pred) : m_cur(cur), m_last(last), m_pred(pred) {
+            satisfy();
+        }
+        decltype(auto) operator*() const { return *m_cur; }
+        auto operator->() const { return std::addressof(*m_cur); }
+        iterator& operator++() { ++m_cur; satisfy(); return *this; }
+        iterator operator++(int) { auto tmp = *this; ++(*this); return tmp; }
+        bool operator==(const iterator& o) const { return m_cur == o.m_cur; }
+        bool operator!=(const iterator& o) const { return m_cur != o.m_cur; }
+    private:
+        void satisfy() {
+            while (m_cur != m_last && !std::invoke(*m_pred, *m_cur))
+                ++m_cur;
+        }
+        It m_cur, m_last;
+        const Pred* m_pred;
+    };
+
+    filter_view(R&& r, Pred p) : m_r(std::forward<R>(r)), m_pred(std::move(p)) {}
+    auto begin() { return iterator<decltype(std::begin(m_r))>(std::begin(m_r), std::end(m_r), &m_pred); }
+    auto end() { return iterator<decltype(std::end(m_r))>(std::end(m_r), std::end(m_r), &m_pred); }
+    auto begin() const { return iterator<decltype(std::begin(m_r))>(std::begin(m_r), std::end(m_r), &m_pred); }
+    auto end() const { return iterator<decltype(std::end(m_r))>(std::end(m_r), std::end(m_r), &m_pred); }
+private:
+    R m_r;
+    Pred m_pred;
+};
+
+template <typename Pred>
+struct filter_closure {
+    Pred m_pred;
+    template <typename R>
+    friend auto operator|(R&& r, const filter_closure& c) {
+        return filter_view<R, Pred>(std::forward<R>(r), c.m_pred);
+    }
+};
+
+struct filter_fn {
+    template <typename R, typename Pred>
+    auto operator()(R&& r, Pred p) const {
+        return filter_view<R, Pred>(std::forward<R>(r), std::move(p));
+    }
+    template <typename Pred>
+    auto operator()(Pred p) const {
+        return filter_closure<Pred>{std::move(p)};
+    }
+};
+
+inline constexpr filter_fn filter{};
+
+template <typename R, typename Fn>
+class transform_view {
+public:
+    template <typename It>
+    class iterator {
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using difference_type = typename std::iterator_traits<It>::difference_type;
+        using reference = decltype(std::invoke(std::declval<const Fn&>(), *std::declval<It>()));
+        using value_type = typename std::decay<reference>::type;
+        using pointer = value_type*;
+
+        iterator(It cur, const Fn* fn) : m_cur(cur), m_fn(fn) {}
+        decltype(auto) operator*() const { return std::invoke(*m_fn, *m_cur); }
+        iterator& operator++() { ++m_cur; return *this; }
+        iterator operator++(int) { auto tmp = *this; ++m_cur; return tmp; }
+        bool operator==(const iterator& o) const { return m_cur == o.m_cur; }
+        bool operator!=(const iterator& o) const { return m_cur != o.m_cur; }
+    private:
+        It m_cur;
+        const Fn* m_fn;
+    };
+
+    transform_view(R&& r, Fn fn) : m_r(std::forward<R>(r)), m_fn(std::move(fn)) {}
+    auto begin() { return iterator<decltype(std::begin(m_r))>(std::begin(m_r), &m_fn); }
+    auto end() { return iterator<decltype(std::end(m_r))>(std::end(m_r), &m_fn); }
+    auto begin() const { return iterator<decltype(std::begin(m_r))>(std::begin(m_r), &m_fn); }
+    auto end() const { return iterator<decltype(std::end(m_r))>(std::end(m_r), &m_fn); }
+private:
+    R m_r;
+    Fn m_fn;
+};
+
+template <typename Fn>
+struct transform_closure {
+    Fn m_fn;
+    template <typename R>
+    friend auto operator|(R&& r, const transform_closure& c) {
+        return transform_view<R, Fn>(std::forward<R>(r), c.m_fn);
+    }
+};
+
+struct transform_fn {
+    template <typename R, typename Fn>
+    auto operator()(R&& r, Fn fn) const {
+        return transform_view<R, Fn>(std::forward<R>(r), std::move(fn));
+    }
+    template <typename Fn>
+    auto operator()(Fn fn) const {
+        return transform_closure<Fn>{std::move(fn)};
+    }
+};
+
+inline constexpr transform_fn transform{};
+
+template <typename W, typename Bound = W>
+class iota_view {
+public:
+    class iterator {
+    public:
+        using iterator_category = std::random_access_iterator_tag;
+        using value_type = W;
+        using difference_type = ptrdiff_t;
+        using pointer = const W*;
+        using reference = W;
+
+        constexpr iterator() = default;
+        constexpr explicit iterator(W val) : m_val(val) {}
+
+        constexpr W operator*() const { return m_val; }
+        constexpr iterator& operator++() { ++m_val; return *this; }
+        constexpr iterator operator++(int) { auto tmp = *this; ++m_val; return tmp; }
+        constexpr iterator& operator--() { --m_val; return *this; }
+        constexpr iterator operator--(int) { auto tmp = *this; --m_val; return tmp; }
+
+        constexpr bool operator==(const iterator& o) const { return m_val == o.m_val; }
+        constexpr bool operator!=(const iterator& o) const { return m_val != o.m_val; }
+        constexpr bool operator<(const iterator& o) const { return m_val < o.m_val; }
+    private:
+        W m_val{};
+    };
+
+    constexpr iota_view(W start, Bound bound) : m_start(start), m_bound(bound) {}
+    constexpr iterator begin() const { return iterator(m_start); }
+    constexpr iterator end() const { return iterator(static_cast<W>(m_bound)); }
+private:
+    W m_start;
+    Bound m_bound;
+};
+
+struct iota_fn {
+    template <typename W, typename Bound>
+    constexpr auto operator()(W start, Bound bound) const {
+        using Common = typename std::common_type<W, Bound>::type;
+        return iota_view<Common, Common>(static_cast<Common>(start), static_cast<Common>(bound));
+    }
+};
+
+inline constexpr iota_fn iota{};
+} // namespace views
+} // namespace ranges
+
+namespace views = ranges::views;
+
+} // namespace std

@@ -1,0 +1,74 @@
+#pragma once
+
+#include "AbstractSingleton.h"
+
+class CInstanceBase;
+
+class IAbstractPlayer : public TAbstractSingleton<IAbstractPlayer>
+{
+	public:
+		IAbstractPlayer() {}
+		virtual ~IAbstractPlayer() {}
+
+		virtual DWORD	GetMainCharacterIndex() = 0;
+		virtual void	SetMainCharacterIndex(int iIndex) = 0;
+		virtual bool	IsMainCharacterIndex(DWORD dwIndex) = 0;
+
+		virtual int		GetStatus(DWORD dwType) = 0;
+
+		virtual const char *	GetName() = 0;
+
+		virtual void	SetRace(DWORD dwRace) = 0;
+
+		virtual void	StartStaminaConsume(DWORD dwConsumePerSec, DWORD dwCurrentStamina) = 0;
+		virtual void	StopStaminaConsume(DWORD dwCurrentStamina) = 0;
+
+		virtual bool	IsPartyMemberByVID(DWORD dwVID) = 0;
+		virtual bool	PartyMemberVIDToPID(DWORD dwVID, DWORD * pdwPID) = 0;
+		virtual bool	IsSamePartyMember(DWORD dwVID1, DWORD dwVID2) = 0;
+
+		virtual void	SetItemData(TItemPos itemPos, const TItemData & c_rkItemInst) = 0;
+		virtual void	SetItemCount(TItemPos itemPos, BYTE byCount) = 0;
+		virtual void	SetItemMetinSocket(TItemPos itemPos, DWORD dwMetinSocketIndex, DWORD dwMetinNumber) = 0;
+		virtual void	SetItemAttribute(TItemPos itemPos, DWORD dwAttrIndex, BYTE byType, short sValue) = 0;
+#if defined(__BL_TRANSMUTATION__)
+		virtual void	SetItemTransmutationVnum(TItemPos& Cell, const DWORD blVnum) = 0;
+#endif
+#ifdef ENABLE_SOULBIND_SYSTEM
+		virtual void	SetItemUnbindTime(TItemPos dwItemSlotIndex, DWORD dwUnbindSecondsLeft) = 0;
+#endif
+#ifdef ENABLE_NEW_SOCKET_VALUE
+		virtual void SetItemMinMaxValue(TItemPos itemPos, DWORD dwApplyIndex, long iSocValue) = 0;
+#endif
+
+		virtual DWORD	GetItemIndex(TItemPos itemPos) = 0;
+		virtual DWORD	GetItemFlags(TItemPos itemPos) = 0;
+		virtual DWORD	GetItemCount(TItemPos itemPos) = 0;
+#ifdef ELEMENT_SPELL_WORLDARD
+		virtual void	SetElement(TItemPos itemPos, BYTE value_grade_element, BYTE type_element) = 0;
+		virtual void 	SetElementAttack(TItemPos itemPos, DWORD attack_element_index, DWORD attack_element) = 0;
+		virtual void 	SetElementValue(TItemPos itemPos, DWORD elements_value_bonus_index, short elements_value_bonus) = 0;
+#endif
+		virtual bool	IsEquipItemInSlot(TItemPos itemPos) = 0;
+
+		virtual void	AddQuickSlot(int QuickslotIndex, char IconType, char IconPosition) = 0;
+		virtual void	DeleteQuickSlot(int QuickslotIndex) = 0;
+		virtual void	MoveQuickSlot(int Source, int Target) = 0;
+
+		virtual void	SetWeaponPower(DWORD dwMinPower, DWORD dwMaxPower, DWORD dwMinMagicPower, DWORD dwMaxMagicPower, DWORD dwAddPower) = 0;
+
+		virtual void	SetTarget(DWORD dwVID, BOOL bForceChange = TRUE) = 0;
+		virtual void	NotifyCharacterUpdate(DWORD dwVID) = 0;
+		virtual void	NotifyCharacterDead(DWORD dwVID) = 0;
+		virtual void	NotifyDeletingCharacterInstance(DWORD dwVID) = 0;
+		virtual void	NotifyChangePKMode() = 0;
+
+		virtual void	SetObserverMode(bool isEnable) = 0;
+		virtual void	SetComboSkillFlag(BOOL bFlag) = 0;
+
+		virtual void	StartEmotionProcess() = 0;
+		virtual void	EndEmotionProcess() = 0;
+
+		virtual CInstanceBase* NEW_GetMainActorPtr() = 0;
+};
+//martysama0134's fb0d8d5d0566583187a94f9a823b2075

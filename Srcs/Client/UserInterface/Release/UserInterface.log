@@ -1,0 +1,3 @@
+﻿  AndroidMain.cpp
+  PythonPlayerInput.cpp
+LINK : fatal error LNK1104: cannot open file 'C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\..\..\..\Client\WorldofMetin2.exe'

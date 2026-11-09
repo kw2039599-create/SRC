@@ -1,0 +1,11 @@
+﻿  MapOutdoorCharacterShadow.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorCharacterShadow.cpp(1287,67): warning C4305: 'argument': truncation from 'double' to 'FLOAT'
+  (compiling source file '/MapOutdoorCharacterShadow.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorCharacterShadow.cpp(1287,56): warning C4305: 'argument': truncation from 'double' to 'FLOAT'
+  (compiling source file '/MapOutdoorCharacterShadow.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorCharacterShadow.cpp(1287,45): warning C4305: 'argument': truncation from 'double' to 'FLOAT'
+  (compiling source file '/MapOutdoorCharacterShadow.cpp')
+  
+  gamelib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\Release\gamelib.lib

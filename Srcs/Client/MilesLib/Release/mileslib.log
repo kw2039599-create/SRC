@@ -1,0 +1,73 @@
+﻿  SoundManager.cpp
+C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\utility(274,54): warning C4244: 'initializing': conversion from '_Ty' to '_Ty2', possible loss of data
+C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\utility(274,54): warning C4244:         with
+C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\utility(274,54): warning C4244:         [
+C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\utility(274,54): warning C4244:             _Ty=double
+C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\utility(274,54): warning C4244:         ]
+C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\utility(274,54): warning C4244:         and
+C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\utility(274,54): warning C4244:         [
+C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\utility(274,54): warning C4244:             _Ty2=float
+C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\utility(274,54): warning C4244:         ]
+  (compiling source file '/SoundManager.cpp')
+      C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\utility(274,54):
+      the template instantiation context (the oldest one first) is
+          C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\MilesLib\SoundManager.cpp(415,25):
+          see reference to function template instantiation 'std::pair<std::_Tree_iterator<std::_Tree_val<std::_Tree_simple_types<std::pair<const std::string,float>>>>,bool> std::_Tree<std::_Tmap_traits<_Kty,_Ty,_Pr,_Alloc,false>>::emplace<const char*&,double>(const char *&,double &&)' being compiled
+          with
+          [
+              _Kty=std::string,
+              _Ty=float,
+              _Pr=std::less<std::string>,
+              _Alloc=std::allocator<std::pair<const std::string,float>>
+          ]
+              C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\MilesLib\SoundManager.cpp(415,32):
+              see the first reference to 'std::_Tree<std::_Tmap_traits<_Kty,_Ty,_Pr,_Alloc,false>>::emplace' in 'CSoundManager::PlayCharacterSound3D'
+          with
+          [
+              _Kty=std::string,
+              _Ty=float,
+              _Pr=std::less<std::string>,
+              _Alloc=std::allocator<std::pair<const std::string,float>>
+          ]
+          C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\xtree(1038,30):
+          see reference to function template instantiation 'std::pair<std::_Tree_node<std::pair<const std::string,float>,std::_Default_allocator_traits<_Alloc>::void_pointer> *,bool> std::_Tree<std::_Tmap_traits<_Kty,_Ty,_Pr,_Alloc,false>>::_Emplace<const char*&,double>(const char *&,double &&)' being compiled
+          with
+          [
+              _Alloc=std::allocator<std::pair<const std::string,float>>,
+              _Kty=std::string,
+              _Ty=float,
+              _Pr=std::less<std::string>
+          ]
+          C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\xtree(1016,46):
+          see reference to function template instantiation 'std::_Tree_temp_node<std::allocator<std::_Tree_node<std::pair<const std::string,float>,std::_Default_allocator_traits<_Alloc>::void_pointer>>>::_Tree_temp_node<const char*&,_Ty>(_Alnode &,std::_Tree_node<std::pair<const std::string,float>,std::_Default_allocator_traits<_Alloc>::void_pointer> *,const char *&,_Ty &&)' being compiled
+          with
+          [
+              _Alloc=std::allocator<std::pair<const std::string,float>>,
+              _Ty=double,
+              _Alnode=std::allocator<std::_Tree_node<std::pair<const std::string,float>,std::_Default_allocator_traits<std::allocator<std::pair<const std::string,float>>>::void_pointer>>
+          ]
+          C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\xtree(820,25):
+          see reference to function template instantiation 'void std::_Default_allocator_traits<_Alloc>::construct<_Ty,const char*&,double>(_Alloc &,_Objty *const ,const char *&,double &&)' being compiled
+          with
+          [
+              _Alloc=std::allocator<std::_Tree_node<std::pair<const std::string,float>,std::_Default_allocator_traits<std::allocator<std::pair<const std::string,float>>>::void_pointer>>,
+              _Ty=std::pair<const std::string,float>,
+              _Objty=std::pair<const std::string,float>
+          ]
+          C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\xmemory(730,14):
+          see reference to function template instantiation '_Ty *std::construct_at<_Objty,const char*&,double>(_Ty *const ,const char *&,double &&) noexcept(false)' being compiled
+          with
+          [
+              _Ty=std::pair<const std::string,float>,
+              _Objty=std::pair<const std::string,float>
+          ]
+          C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.43.34808\include\xutility(493,69):
+          see reference to function template instantiation 'std::pair<const std::string,float>::pair<const char*&,_Ty,0>(_Other1,_Other2 &&) noexcept(false)' being compiled
+          with
+          [
+              _Ty=double,
+              _Other1=const char *&,
+              _Other2=double
+          ]
+  
+  mileslib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\MilesLib\Release\mileslib.lib
