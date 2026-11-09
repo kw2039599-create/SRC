@@ -1,4 +1,8 @@
 #pragma once
+#ifndef _LIBCPP_ENABLE_CXX17_REMOVED_FEATURES
+#define _LIBCPP_ENABLE_CXX17_REMOVED_FEATURES 1
+#define _LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION 1
+#endif
 
 #if !defined(__ANDROID__) && !defined(__APPLE__)
   #error "This windows.h is only for Android and iOS!"
