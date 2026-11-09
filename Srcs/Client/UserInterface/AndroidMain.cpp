@@ -1,3 +1,7 @@
+#ifdef __APPLE__
+#define _XOPEN_SOURCE 600
+#define _DARWIN_C_SOURCE 1
+#endif
 #include "StdAfx.h"
 #ifdef __ANDROID__
 #include "PythonApplication.h"

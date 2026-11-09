@@ -1,4 +1,5 @@
 #pragma once
+#define __INSIDE_WINDOWS_H__ 1
 #ifndef _LIBCPP_ENABLE_CXX17_REMOVED_FEATURES
 #define _LIBCPP_ENABLE_CXX17_REMOVED_FEATURES 1
 #define _LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION 1
@@ -58,7 +59,11 @@ extern "C" {
 #define _WIN32
 #endif
 
+#if defined(__APPLE__) && defined(__OBJC__)
+#include <objc/objc.h>
+#else
 typedef int BOOL;
+#endif
 typedef int32_t LONG;
 typedef uint32_t DWORD;
 typedef uint16_t WORD;
@@ -167,35 +172,7 @@ typedef struct IDirect3DTexture8 *LPDIRECT3DTEXTURE8;
 #ifdef __cplusplus
 }
 #endif
-// FixAppleSTLAfterExternC
-#ifdef __APPLE__
-#ifdef __cplusplus
-#pragma push_macro("__ANDROID__")
-#undef __ANDROID__
-#include <locale.h>
-#include <locale>
-#include <vector>
-#include <string>
-#include <algorithm>
-#include <unordered_map>
-#include <map>
-#include <set>
-#include <list>
-#include <memory>
-#include <functional>
-#include <iostream>
-#include <sstream>
-#include <fstream>
-#include <cmath>
-#pragma pop_macro("__ANDROID__")
-#endif
-#ifndef ANDROID
-#define ANDROID 1
-#endif
-#ifndef __ANDROID__
-#define __ANDROID__ 1
-#endif
-#endif
+
 
 #ifndef CONST
 #define CONST const
@@ -2442,7 +2419,7 @@ static inline HRESULT CoInitializeEx(LPVOID pvReserved, DWORD dwCoInit) {
 static inline void CoUninitialize(void) {}
 
 // MSVC interface keyword extension for COM headers (DIMM.h)
-#ifndef interface
+#if !defined(interface) && !defined(__OBJC__)
 #define interface struct
 #endif
 
@@ -5119,3 +5096,15 @@ EXTERN_C inline const GUID CLSID_TF_ThreadMgr = { 0x529a9e6b, 0x6587, 0x4f23, { 
 
 // Suppress NDK -Werror=format-security across legacy client snprintf/sprintf calls
 #pragma clang diagnostic ignored "-Wformat-security"
+// FixTransformToLower
+#ifdef __cplusplus
+#include <algorithm>
+namespace std {
+template <class _InputIterator, class _OutputIterator>
+inline _OutputIterator transform(_InputIterator __first, _InputIterator __last, _OutputIterator __result, int (*__op)(int)) {
+    for (; __first != __last; ++__first, (void)++__result) *__result = __op(*__first);
+    return __result;
+}
+}
+#endif
+#undef __INSIDE_WINDOWS_H__
