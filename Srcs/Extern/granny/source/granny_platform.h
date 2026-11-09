@@ -127,7 +127,7 @@
 #define PLATFORM_PSP2 1
 #endif
 
-#if defined(GRANNY_IPHONE) || (defined(__APPLE__) && !defined(_MACOSX))
+#if !PLATFORM_ANDROID && (defined(GRANNY_IPHONE) || (defined(__APPLE__) && !defined(_MACOSX)))
 #undef PLATFORM_IPHONE
 #define PLATFORM_IPHONE 1
 #endif

@@ -200,7 +200,7 @@ else()
         winxx/win64/granny.cpp
     )
 
-    if(ANDROID)
+    if(ANDROID OR APPLE)
         # Exclude Windows winxx/win64 headers on Android to prevent CONTAINER_INTPTR size mismatches
         target_include_directories(${PROJECT_NAME} PUBLIC
             ${CMAKE_CURRENT_SOURCE_DIR}

@@ -3,8 +3,8 @@ project("Metin2Mobile")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char -fms-extensions -Wno-invalid-token-paste -Wno-register")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsigned-char -fms-extensions -Wno-invalid-token-paste")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char -fms-extensions -fno-autolink -Wno-invalid-token-paste -Wno-register")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsigned-char -fms-extensions -fno-autolink -Wno-invalid-token-paste")
 
 add_definitions(-DENABLE_OPENGL)
 add_definitions(-DENABLE_MOBILE_CONTROLS)
@@ -15,7 +15,7 @@ add_definitions(-DCRYPTOPP_DISABLE_ASM)
 if(ANDROID)
     add_definitions(-DANDROID -D__ANDROID__)
 elseif(APPLE)
-    add_definitions(-DANDROID -D__ANDROID__ -DGRANNY_IPHONE)
+    add_definitions(-DANDROID -D__ANDROID__)
 endif()
 
 # 1. Build Granny 3D from Extern/granny/source
