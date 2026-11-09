@@ -328,8 +328,29 @@ typedef granny_real32 granny_matrix_3x4[3][4];
 // This will fire with a negative subscript error if the type sizes are set incorrectly by
 // the compiler, and compile out if not.  Note that the preprocessor dancing here allows
 // the typedef name to be semi unique, which is required for compiling in certain targets.
+// FixGranny64Ptr
+#ifdef __LP64__
+#undef GRANNY_32BIT_PTR
+#define GRANNY_32BIT_PTR 0
+#undef GRANNY_64BIT_PTR
+#define GRANNY_64BIT_PTR 1
+#endif
 #define RR_STRING_JOIN(arg1, arg2)              RR_STRING_JOIN_DELAY(arg1, arg2)
+// FixGranny64Ptr
+#ifdef __LP64__
+#undef GRANNY_32BIT_PTR
+#define GRANNY_32BIT_PTR 0
+#undef GRANNY_64BIT_PTR
+#define GRANNY_64BIT_PTR 1
+#endif
 #define RR_STRING_JOIN_DELAY(arg1, arg2)        RR_STRING_JOIN_IMMEDIATE(arg1, arg2)
+// FixGranny64Ptr
+#ifdef __LP64__
+#undef GRANNY_32BIT_PTR
+#define GRANNY_32BIT_PTR 0
+#undef GRANNY_64BIT_PTR
+#define GRANNY_64BIT_PTR 1
+#endif
 #define RR_STRING_JOIN_IMMEDIATE(arg1, arg2)    arg1 ## arg2
 
 // RR_NUMBERNAME is a macro to make a name unique, so that you can use it to declare
