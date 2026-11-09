@@ -3,8 +3,8 @@ project("Metin2Mobile")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char -fms-extensions -fno-autolink -Wno-invalid-token-paste -Wno-register")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsigned-char -fms-extensions -fno-autolink -Wno-invalid-token-paste")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char -fms-extensions -fno-autolink -ferror-limit=0 -Wno-pragma-pack -Wno-invalid-token-paste -Wno-register")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsigned-char -fms-extensions -fno-autolink -ferror-limit=0 -Wno-pragma-pack -Wno-invalid-token-paste")
 
 add_definitions(-DENABLE_OPENGL)
 add_definitions(-DENABLE_MOBILE_CONTROLS)

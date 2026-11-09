@@ -12,19 +12,22 @@ jobs:
       - name: Configure CMake for iOS
         working-directory: Srcs/Client
         run: |
-          cmake -B build_ios -G Xcode \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+          cmake -B build_ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
 
-      - name: Compile iOS App
+      - name: Compile iOS App (Continue Through All Errors)
         working-directory: Srcs/Client
         run: |
-          cmake --build build_ios --config Release -- \
-            -sdk iphoneos \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+          set +e
+          cmake --build build_ios --config Release -- -sdk iphoneos -continueBuildingAfterErrors=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1
+          BUILD_STATUS=$?
+          if [ $BUILD_STATUS -ne 0 ]; then
+            echo '================ ALL COMPILER ERRORS (BEGINNING TO END) ================'
+            grep -E '(: error: |: fatal error: |Undefined symbols|ld: )' build.log | awk '!seen[$0]++'
+            echo '========================================================================'
+            tail -n 40 build.log
+            exit $BUILD_STATUS
+          fi
+          cat build.log
 
       - name: Package IPA
         working-directory: Srcs/Client
