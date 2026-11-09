@@ -1,0 +1,40 @@
+name: Build iPhone IPA
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure CMake for iOS
+        working-directory: Srcs/Client
+        run: |
+          cmake -B build_ios -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+
+      - name: Compile iOS App
+        working-directory: Srcs/Client
+        run: |
+          cmake --build build_ios --config Release -- \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package IPA
+        working-directory: Srcs/Client
+        run: |
+          mkdir -p Payload
+          cp -r build_ios/Release-iphoneos/metin2_mobile.app Payload/
+          zip -qry Metin2Mobile.ipa Payload
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Metin2Mobile-iOS-IPA
+          path: Srcs/Client/Metin2Mobile.ipa
