@@ -356,3 +356,4 @@ static NSString* const kPatchCachePrefKey=@"metin2_patch_cache_v1";
 - (UIInterfaceOrientationMask)application:(UIApplication*)application supportedInterfaceOrientationsForWindow:(UIWindow*)window { return UIInterfaceOrientationMaskLandscape; }
 @end
 int main(int argc,char* argv[]){ @autoreleasepool { return UIApplicationMain(argc,argv,nil,NSStringFromClass([Metin2AppDelegate class])); } }
+#endif
