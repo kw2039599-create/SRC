@@ -33,11 +33,11 @@ jobs:
         working-directory: Srcs/Client
         run: |
           mkdir -p Payload
-          cp -r build_ios/Release-iphoneos/WM2Mobile.app Payload/
-          zip -qry WM2Mobile.ipa Payload
+          cp -r build_ios/Release-iphoneos/M2WorldOnline.app Payload/
+          zip -qry M2WorldOnline.ipa Payload
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: WM2Mobile-iOS-IPA
-          path: Srcs/Client/WM2Mobile.ipa
+          name: M2WorldOnline-iOS-IPA
+          path: Srcs/Client/M2WorldOnline.ipa

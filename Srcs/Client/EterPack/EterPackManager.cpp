@@ -207,6 +207,8 @@ bool CEterPackManager::GetFromPack(CMappedFile & rMappedFile, const char * c_szF
 		if (pkCache)
 		{
 			rMappedFile.Link(pkCache->m_dwBufSize, pkCache->m_abBufData);
+			if (pData)
+				*pData = pkCache->m_abBufData;
 			return true;
 		}
 
@@ -232,8 +234,23 @@ void CEterPackManager::ArrangeMemoryMappedPack()
 {
 }
 
+#if defined(ANDROID) || defined(__ANDROID__) || defined(__APPLE__)
+static inline bool IsVirtualPackOnlyPath(const char* c_szFileName)
+{
+	if (!c_szFileName || !c_szFileName[0])
+		return true;
+	if ((c_szFileName[0] == 'd' || c_szFileName[0] == 'D') && c_szFileName[1] == ':')
+		return true;
+	return false;
+}
+#endif
+
 bool CEterPackManager::GetFromFile(CMappedFile & rMappedFile, const char * c_szFileName, LPCVOID * pData)
 {
+#if defined(ANDROID) || defined(__ANDROID__) || defined(__APPLE__)
+	if (IsVirtualPackOnlyPath(c_szFileName))
+		return false;
+#endif
 	return rMappedFile.Create(c_szFileName, pData, 0, 0) ? true : false;
 }
 
@@ -265,18 +282,20 @@ bool CEterPackManager::isExist(const char * c_szFileName)
 		if (isExistInPack(c_szFileName))
 			return true;
 
+#if defined(ANDROID) || defined(__ANDROID__) || defined(__APPLE__)
+		if (IsVirtualPackOnlyPath(c_szFileName))
+			return false;
+#endif
 		return _access(c_szFileName, 0) == 0 ? true : false;
 	}
 
-	//if(m_bTryRelativePath) {
-	//	if (strnicmp(c_szFileName, PATH_ABSOLUTE_YMIRWORK1, strlen(PATH_ABSOLUTE_YMIRWORK1)) == 0 || strnicmp(c_szFileName, PATH_ABSOLUTE_YMIRWORK2, strlen(PATH_ABSOLUTE_YMIRWORK2)) == 0) {
-	//		if(access(c_szFileName+strlen(PATH_ABSOLUTE_YMIRWORK1), 0) == 0)
-	//			return true;
-	//	}
-	//}
-
+#if defined(ANDROID) || defined(__ANDROID__) || defined(__APPLE__)
+	if (!IsVirtualPackOnlyPath(c_szFileName) && _access(c_szFileName, 0) == 0)
+		return true;
+#else
 	if (_access(c_szFileName, 0) == 0)
 		return true;
+#endif
 
 	return isExistInPack(c_szFileName);
 }

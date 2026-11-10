@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10.2)
-project("WM2Mobile")
+project("M2WorldOnline")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -536,11 +536,11 @@ set(METIN2_ALL_SOURCES
 if(APPLE)
     add_executable(metin2_mobile MACOSX_BUNDLE ${METIN2_ALL_SOURCES})
         set_target_properties(metin2_mobile PROPERTIES
-        OUTPUT_NAME "WM2Mobile"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.wm2.mobile"
-        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.wm2.mobile"
-        MACOSX_BUNDLE_BUNDLE_NAME "WM2 Mobile"
-        XCODE_ATTRIBUTE_INFOPLIST_KEY_CFBundleDisplayName "WM2 Mobile"
+        OUTPUT_NAME "M2WorldOnline"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.m2world.online"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.m2world.online"
+        MACOSX_BUNDLE_BUNDLE_NAME "M2World Online"
+        XCODE_ATTRIBUTE_INFOPLIST_KEY_CFBundleDisplayName "M2World Online"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.0"
         MACOSX_BUNDLE_BUNDLE_VERSION "1"
         XCODE_ATTRIBUTE_MARKETING_VERSION "1.0.0"

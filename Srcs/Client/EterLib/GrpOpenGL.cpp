@@ -794,6 +794,7 @@ namespace {
 
         DWORD lastTF = 0xDEADBEEFu;
         DWORD lastAlphaRef = 0xDEADBEEFu;
+        DWORD pendingDirtyFlags = 0xFFFFFFFFu;
         int lastState[31];
         int lastClipEn = -1;
         float cModelView[16], cWorld[16], cProj[16], cTexMat0[16], cTexMat1[16];
@@ -814,6 +815,8 @@ namespace {
             glAttachShader(prog, fShader);
             glLinkProgram(prog);
             glDeleteShader(fShader);
+			pendingDirtyFlags = 0xFFFFFFFFu;
+            for (int i = 0; i < 31; ++i) lastState[i] = -1;
 
             for (int i = 0; i < 31; ++i) lastState[i] = -1;
             memset(cModelView, 0, sizeof(cModelView));
@@ -949,6 +952,78 @@ namespace {
             s_curElementArrayBuffer = buf;
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buf);
         }
+    }
+
+    inline bool SyncHardwareVertexBuffer(IDirect3DVertexBuffer8* vb) {
+        if (!vb || !vb->pData || vb->length == 0)
+            return false;
+
+        if (vb->glVbo == 0)
+            glGenBuffers(1, &vb->glVbo);
+        if (vb->glVbo == 0)
+            return false;
+
+        BindArrayBufferCached(vb->glVbo);
+
+        if (vb->bDirty || !vb->bGpuInitialized) {
+            const GLenum glUsage = ((vb->usage & D3DUSAGE_DYNAMIC) != 0) ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW;
+            UINT off = (vb->dirtyOffset < vb->length) ? vb->dirtyOffset : 0;
+            UINT end = (vb->dirtyEnd <= vb->length && vb->dirtyEnd > off) ? vb->dirtyEnd : vb->length;
+            UINT subSize = end - off;
+
+            if (!vb->bGpuInitialized) {
+                glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)vb->length, vb->pData, glUsage);
+                vb->bGpuInitialized = true;
+            } else if (vb->bDiscardRequested || (off == 0 && subSize == vb->length)) {
+                glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)vb->length, NULL, GL_DYNAMIC_DRAW);
+                glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)off, (GLsizeiptr)subSize, (const BYTE*)vb->pData + off);
+                vb->usage |= D3DUSAGE_DYNAMIC;
+            } else {
+                glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)off, (GLsizeiptr)subSize, (const BYTE*)vb->pData + off);
+                vb->usage |= D3DUSAGE_DYNAMIC;
+            }
+
+            vb->bDirty = false;
+            vb->bDiscardRequested = false;
+            vb->dirtyOffset = vb->length;
+            vb->dirtyEnd = 0;
+        }
+        return true;
+    }
+
+    inline bool SyncHardwareIndexBuffer(IDirect3DIndexBuffer8* ib) {
+        if (!ib || !ib->pData || ib->length == 0)
+            return false;
+
+        if (ib->glIbo == 0)
+            glGenBuffers(1, &ib->glIbo);
+        if (ib->glIbo == 0)
+            return false;
+
+        BindElementArrayBufferCached(ib->glIbo);
+
+        if (ib->bDirty || !ib->bGpuInitialized) {
+            const GLenum glUsage = ((ib->usage & D3DUSAGE_DYNAMIC) != 0) ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW;
+            UINT off = (ib->dirtyOffset < ib->length) ? ib->dirtyOffset : 0;
+            UINT end = (ib->dirtyEnd <= ib->length && ib->dirtyEnd > off) ? ib->dirtyEnd : ib->length;
+            UINT subSize = end - off;
+
+            if (!ib->bGpuInitialized) {
+                glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)ib->length, ib->pData, glUsage);
+                ib->bGpuInitialized = true;
+            } else if (ib->bDiscardRequested || (off == 0 && subSize == ib->length)) {
+                glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)ib->length, NULL, glUsage);
+                glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, (GLintptr)off, (GLsizeiptr)subSize, (const BYTE*)ib->pData + off);
+            } else {
+                glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, (GLintptr)off, (GLsizeiptr)subSize, (const BYTE*)ib->pData + off);
+            }
+
+            ib->bDirty = false;
+            ib->bDiscardRequested = false;
+            ib->dirtyOffset = ib->length;
+            ib->dirtyEnd = 0;
+        }
+        return true;
     }
 
     void EnsureProgramInitialized() {
@@ -1147,12 +1222,23 @@ namespace {
         EProgramVariant variant = SelectProgramVariant(dev, shaderMode);
         GLProgramInstance* p = &s_progs[variant];
 
-        DWORD dirty = dev->m_DirtyFlags;
+        static UINT s_lastStride = 0xFFFFFFFFu;
+        if (dev->m_StreamStride != s_lastStride) {
+            s_lastStride = dev->m_StreamStride;
+            dev->m_DirtyFlags |= 4;
+        }
+
+        // Distribute newly dirtied device flags to ALL 6 program variants before clearing dev->m_DirtyFlags
+        if (dev->m_DirtyFlags != 0) {
+            for (int i = 0; i < PROG_COUNT; ++i) {
+                s_progs[i].pendingDirtyFlags |= dev->m_DirtyFlags;
+            }
+            dev->m_DirtyFlags = 0;
+        }
+
         if (s_curProg != p) {
             s_curProg = p;
             glUseProgram(p->prog);
-            dirty = 0xFFFFFFFFu;
-			DWORD pendingDirtyFlags; // Initialize to 0xFFFFFFFFu when compiled/linked
         }
 
         // Fast-check TextureFactor and AlphaRef first (frequently updated between particles/foliage)
@@ -1167,32 +1253,10 @@ namespace {
             glUniform1f(p->uAlphaRefLoc, (float)dev->m_AlphaRef / 255.0f);
         }
 
-        static UINT s_lastStride = 0xFFFFFFFFu;
-        if (dev->m_StreamStride != s_lastStride) {
-            s_lastStride = dev->m_StreamStride;
-            dirty |= 4;
-        }
-
+        DWORD dirty = p->pendingDirtyFlags;
         if (dirty == 0)
             return;
-        dev->m_DirtyFlags = 0;
-		// Distribute newly dirtied device flags to ALL active shader programs before clearing dev->m_DirtyFlags:
-if (dev->m_DirtyFlags != 0) {
-	for (int i = 0; i < PROG_COUNT; ++i) {
-		g_esPrograms[i].pendingDirtyFlags |= dev->m_DirtyFlags;
-	}
-	dev->m_DirtyFlags = 0;
-}
-
-if (s_curProgram != prog.program) {
-	glUseProgram(prog.program);
-	s_curProgram = prog.program;
-}
-
-DWORD dirty = prog.pendingDirtyFlags;
-if (dirty == 0)
-	return;
-prog.pendingDirtyFlags = 0;
+        p->pendingDirtyFlags = 0;
 
         if (dirty & 1) {
             GLMATRIX mv;
@@ -1463,21 +1527,17 @@ HRESULT IDirect3DDevice8::DrawIndexedPrimitive(D3DPRIMITIVETYPE Type, UINT MinIn
 
     SyncESUniforms(this);
 
-    const bool useHwVbo = SyncHardwareVertexBuffer(m_pStreamSource, s_curArrayBuffer);
-	const BYTE* basePtr = useHwVbo
-	? (const BYTE*)(uintptr_t)0
-	: (const BYTE*)m_pStreamSource->pData;
+    const bool useHwVbo = SyncHardwareVertexBuffer(m_pStreamSource);
+    const BYTE* basePtr = (useHwVbo ? (const BYTE*)(uintptr_t)0 : (const BYTE*)m_pStreamSource->pData) + vOffsetBytes;
+    if (!useHwVbo) {
+        BindArrayBufferCached(0);
+    }
+    BindESVertexAttributes(m_dwFVF, basePtr, m_StreamStride);
 
     ++GetAndroidQueryDrawCounter();
 
-    const bool useHwIbo = ((m_pIndexBuffer->usage & D3DUSAGE_DYNAMIC) == 0);
+    const bool useHwIbo = SyncHardwareIndexBuffer(m_pIndexBuffer);
     if (useHwIbo) {
-        if (!m_pIndexBuffer->glIbo) glGenBuffers(1, &m_pIndexBuffer->glIbo);
-        BindElementArrayBufferCached(m_pIndexBuffer->glIbo);
-        if (m_pIndexBuffer->bDirty) {
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, m_pIndexBuffer->length, m_pIndexBuffer->pData, GL_STATIC_DRAW);
-            m_pIndexBuffer->bDirty = false;
-        }
         glDrawElements(mode, count, GL_UNSIGNED_SHORT, (const void*)((size_t)StartIndex * sizeof(WORD)));
     } else {
         BindElementArrayBufferCached(0);
@@ -1509,10 +1569,12 @@ HRESULT IDirect3DDevice8::DrawPrimitive(D3DPRIMITIVETYPE Type, UINT StartVertex,
 
     SyncESUniforms(this);
 
-   const bool useHwIbo = SyncHardwareIndexBuffer(m_pIndices, s_curElementBuffer);
-	const void* indexOffsetOrPtr = useHwIbo
-	? (const void*)(uintptr_t)((StartIndex + m_BaseVertexIndex_Unused) * sizeof(WORD))
-	: (const void*)((const WORD*)m_pIndices->pData + StartIndex);
+    const bool useHwVbo = SyncHardwareVertexBuffer(m_pStreamSource);
+    const BYTE* basePtr = useHwVbo ? (const BYTE*)(uintptr_t)0 : (const BYTE*)m_pStreamSource->pData;
+    if (!useHwVbo) {
+        BindArrayBufferCached(0);
+    }
+    BindESVertexAttributes(m_dwFVF, basePtr, m_StreamStride);
 
     ++GetAndroidQueryDrawCounter();
     glDrawArrays(mode, (GLint)StartVertex, count);
