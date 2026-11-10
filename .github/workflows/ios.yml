@@ -39,5 +39,5 @@ jobs:
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Metin2Mobile-iOS-IPA
+          name: WM2Mobile-iOS-IPA
           path: Srcs/Client/WM2Mobile.ipa

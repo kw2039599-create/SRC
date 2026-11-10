@@ -1064,8 +1064,79 @@ inline GLQUATERNION* D3DXQuaternionRotationYawPitchRoll(GLQUATERNION* pOut, floa
 	float sy = sinf(y*0.5f), cy = cosf(y*0.5f), sp = sinf(p*0.5f), cp = cosf(p*0.5f), sr = sinf(r*0.5f), cr = cosf(r*0.5f);
 	pOut->x = cy*sp*cr + sy*cp*sr; pOut->y = sy*cp*cr - cy*sp*sr; pOut->z = cy*cp*sr - sy*sp*cr; pOut->w = cy*cp*cr + sy*sp*sr; return pOut;
 }
-inline GLQUATERNION* D3DXQuaternionRotationMatrix(GLQUATERNION* pOut, const GLMATRIX* pM) { pOut->x = pOut->y = pOut->z = 0.0f; pOut->w = 1.0f; return pOut; }
-inline GLQUATERNION* D3DXQuaternionSlerp(GLQUATERNION* pOut, const GLQUATERNION* pQ1, const GLQUATERNION* pQ2, float t) { pOut->x = pQ1->x + t*(pQ2->x - pQ1->x); pOut->y = pQ1->y + t*(pQ2->y - pQ1->y); pOut->z = pQ1->z + t*(pQ2->z - pQ1->z); pOut->w = pQ1->w + t*(pQ2->w - pQ1->w); return pOut; }
+inline GLQUATERNION* D3DXQuaternionRotationMatrix(GLQUATERNION* pOut, const D3DMATRIX* pM) {
+	if (!pOut) return NULL;
+	if (!pM) { pOut->x = 0.0f; pOut->y = 0.0f; pOut->z = 0.0f; pOut->w = 1.0f; return pOut; }
+
+	float trace = pM->_11 + pM->_22 + pM->_33;
+	if (trace > 0.0f) {
+		float s = sqrtf(trace + 1.0f) * 2.0f;
+		pOut->w = 0.25f * s;
+		pOut->x = (pM->_23 - pM->_32) / s;
+		pOut->y = (pM->_31 - pM->_13) / s;
+		pOut->z = (pM->_12 - pM->_21) / s;
+	} else if ((pM->_11 > pM->_22) && (pM->_11 > pM->_33)) {
+		float s = sqrtf(1.0f + pM->_11 - pM->_22 - pM->_33) * 2.0f;
+		pOut->w = (pM->_23 - pM->_32) / s;
+		pOut->x = 0.25f * s;
+		pOut->y = (pM->_12 + pM->_21) / s;
+		pOut->z = (pM->_13 + pM->_31) / s;
+	} else if (pM->_22 > pM->_33) {
+		float s = sqrtf(1.0f + pM->_22 - pM->_11 - pM->_33) * 2.0f;
+		pOut->w = (pM->_31 - pM->_13) / s;
+		pOut->x = (pM->_12 + pM->_21) / s;
+		pOut->y = 0.25f * s;
+		pOut->z = (pM->_23 + pM->_32) / s;
+	} else {
+		float s = sqrtf(1.0f + pM->_33 - pM->_11 - pM->_22) * 2.0f;
+		pOut->w = (pM->_12 - pM->_21) / s;
+		pOut->x = (pM->_13 + pM->_31) / s;
+		pOut->y = (pM->_23 + pM->_32) / s;
+		pOut->z = 0.25f * s;
+	}
+	float lenSq = pOut->x * pOut->x + pOut->y * pOut->y + pOut->z * pOut->z + pOut->w * pOut->w;
+	if (lenSq > 1e-8f) {
+		float invLen = 1.0f / sqrtf(lenSq);
+		pOut->x *= invLen; pOut->y *= invLen; pOut->z *= invLen; pOut->w *= invLen;
+	}
+	return pOut;
+}
+
+inline GLQUATERNION* D3DXQuaternionSlerp(GLQUATERNION* pOut, const GLQUATERNION* pQ1, const GLQUATERNION* pQ2, float t) {
+	if (!pOut) return NULL;
+	if (!pQ1 || !pQ2) { pOut->x = 0.0f; pOut->y = 0.0f; pOut->z = 0.0f; pOut->w = 1.0f; return pOut; }
+
+	float cosOmega = pQ1->x * pQ2->x + pQ1->y * pQ2->y + pQ1->z * pQ2->z + pQ1->w * pQ2->w;
+	float q2x = pQ2->x, q2y = pQ2->y, q2z = pQ2->z, q2w = pQ2->w;
+	if (cosOmega < 0.0f) {
+		cosOmega = -cosOmega;
+		q2x = -q2x; q2y = -q2y; q2z = -q2z; q2w = -q2w;
+	}
+
+	float k0, k1;
+	if (cosOmega > 0.9995f) {
+		k0 = 1.0f - t;
+		k1 = t;
+	} else {
+		float sinOmega = sqrtf(1.0f - cosOmega * cosOmega);
+		float omega = atan2f(sinOmega, cosOmega);
+		float invSinOmega = 1.0f / sinOmega;
+		k0 = sinf((1.0f - t) * omega) * invSinOmega;
+		k1 = sinf(t * omega) * invSinOmega;
+	}
+
+	pOut->x = pQ1->x * k0 + q2x * k1;
+	pOut->y = pQ1->y * k0 + q2y * k1;
+	pOut->z = pQ1->z * k0 + q2z * k1;
+	pOut->w = pQ1->w * k0 + q2w * k1;
+
+	float lenSq = pOut->x * pOut->x + pOut->y * pOut->y + pOut->z * pOut->z + pOut->w * pOut->w;
+	if (lenSq > 1e-8f) {
+		float invLen = 1.0f / sqrtf(lenSq);
+		pOut->x *= invLen; pOut->y *= invLen; pOut->z *= invLen; pOut->w *= invLen;
+	}
+	return pOut;
+}
 
 inline float D3DXPlaneDotCoord(const GLPLANE* pP, const GLVECTOR3* pV) { return pP->a * pV->x + pP->b * pV->y + pP->c * pV->z + pP->d; }
 inline float D3DXPlaneDotNormal(const GLPLANE* pP, const GLVECTOR3* pV) { return pP->a * pV->x + pP->b * pV->y + pP->c * pV->z; }
@@ -1206,9 +1277,14 @@ struct IDirect3DTexture8 : public IDirect3DBaseTexture8 {
 
 struct IDirect3DVertexBuffer8 {
 	ULONG m_refCount;
-	GLuint glVbo; UINT length; DWORD usage; DWORD lastLockFlags; bool bDirty; void* pData;
+	GLuint glVbo; UINT length; DWORD usage; DWORD lastLockFlags;
+	bool bDirty; bool bGpuInitialized; bool bDiscardRequested;
+	UINT dirtyOffset; UINT dirtyEnd;
+	void* pData;
 	IDirect3DVertexBuffer8(UINT len, DWORD dwUsage = 0)
-		: m_refCount(1), glVbo(0), length(len > 0 ? len : 4), usage(dwUsage), lastLockFlags(0), bDirty(true), pData(NULL) {
+		: m_refCount(1), glVbo(0), length(len > 0 ? len : 4), usage(dwUsage), lastLockFlags(0),
+		  bDirty(true), bGpuInitialized(false), bDiscardRequested(true),
+		  dirtyOffset(0), dirtyEnd(len > 0 ? len : 4), pData(NULL) {
 		pData = calloc(this->length, 1);
 	}
 	~IDirect3DVertexBuffer8();
@@ -1219,7 +1295,22 @@ struct IDirect3DVertexBuffer8 {
 			return E_OUTOFMEMORY;
 		}
 		lastLockFlags = Flags;
-		if ((Flags & D3DLOCK_READONLY) == 0) bDirty = true;
+		if ((Flags & D3DLOCK_READONLY) == 0) {
+			UINT safeOff = (Offset < length) ? Offset : 0;
+			UINT lockEnd = (Size > 0 && safeOff + Size <= length) ? (safeOff + Size) : length;
+			if ((Flags & D3DLOCK_DISCARD) != 0 || (Offset == 0 && Size == 0)) {
+				bDiscardRequested = true;
+				dirtyOffset = 0;
+				dirtyEnd = length;
+			} else if (!bDirty) {
+				dirtyOffset = safeOff;
+				dirtyEnd = lockEnd;
+			} else {
+				if (safeOff < dirtyOffset) dirtyOffset = safeOff;
+				if (lockEnd > dirtyEnd) dirtyEnd = lockEnd;
+			}
+			bDirty = true;
+		}
 		if (ppbData) *ppbData = (Offset < length) ? ((BYTE*)pData + Offset) : (BYTE*)pData;
 		return S_OK;
 	}
@@ -1236,9 +1327,14 @@ struct IDirect3DVertexBuffer8 {
 
 struct IDirect3DIndexBuffer8 {
 	ULONG m_refCount;
-	GLuint glIbo; UINT length; DWORD usage; DWORD lastLockFlags; bool bDirty; void* pData;
+	GLuint glIbo; UINT length; DWORD usage; DWORD lastLockFlags;
+	bool bDirty; bool bGpuInitialized; bool bDiscardRequested;
+	UINT dirtyOffset; UINT dirtyEnd;
+	void* pData;
 	IDirect3DIndexBuffer8(UINT len, DWORD dwUsage = 0)
-		: m_refCount(1), glIbo(0), length(len > 0 ? len : 4), usage(dwUsage), lastLockFlags(0), bDirty(true), pData(NULL) {
+		: m_refCount(1), glIbo(0), length(len > 0 ? len : 4), usage(dwUsage), lastLockFlags(0),
+		  bDirty(true), bGpuInitialized(false), bDiscardRequested(true),
+		  dirtyOffset(0), dirtyEnd(len > 0 ? len : 4), pData(NULL) {
 		pData = calloc(this->length, 1);
 	}
 	~IDirect3DIndexBuffer8();
@@ -1249,7 +1345,22 @@ struct IDirect3DIndexBuffer8 {
 			return E_OUTOFMEMORY;
 		}
 		lastLockFlags = Flags;
-		if ((Flags & D3DLOCK_READONLY) == 0) bDirty = true;
+		if ((Flags & D3DLOCK_READONLY) == 0) {
+			UINT safeOff = (Offset < length) ? Offset : 0;
+			UINT lockEnd = (Size > 0 && safeOff + Size <= length) ? (safeOff + Size) : length;
+			if ((Flags & D3DLOCK_DISCARD) != 0 || (Offset == 0 && Size == 0)) {
+				bDiscardRequested = true;
+				dirtyOffset = 0;
+				dirtyEnd = length;
+			} else if (!bDirty) {
+				dirtyOffset = safeOff;
+				dirtyEnd = lockEnd;
+			} else {
+				if (safeOff < dirtyOffset) dirtyOffset = safeOff;
+				if (lockEnd > dirtyEnd) dirtyEnd = lockEnd;
+			}
+			bDirty = true;
+		}
 		if (ppbData) *ppbData = (Offset < length) ? ((BYTE*)pData + Offset) : (BYTE*)pData;
 		return S_OK;
 	}
@@ -2775,6 +2886,58 @@ inline bool DecodeTGAorBMPFromMemory(const BYTE* data, UINT size, UINT& outW, UI
 #endif
 	return false;
 }
+inline bool FastGetImageDimensionsFromHeader(const BYTE* data, UINT size, UINT& outW, UINT& outH) {
+	if (!data || size < 18) return false;
+
+	// 1. DDS ('DDS ')
+	if (size >= 128 && data[0] == 'D' && data[1] == 'D' && data[2] == 'S' && data[3] == ' ') {
+		UINT h = ReadU32Unaligned(data + 12);
+		UINT w = ReadU32Unaligned(data + 16);
+		if (w > 0 && h > 0 && w <= 8192 && h <= 8192) { outW = w; outH = h; return true; }
+	}
+	// 2. BMP ('BM')
+	if (size >= 54 && data[0] == 'B' && data[1] == 'M') {
+		int w = ReadI32Unaligned(data + 18);
+		int h = ReadI32Unaligned(data + 22);
+		if (h < 0) h = -h;
+		if (w > 0 && h > 0 && w <= 8192 && h <= 8192) { outW = (UINT)w; outH = (UINT)h; return true; }
+	}
+	// 3. PNG (89 50 4E 47 0D 0A 1A 0A + IHDR)
+	if (size >= 24 && data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G') {
+		UINT w = ((UINT)data[16] << 24) | ((UINT)data[17] << 16) | ((UINT)data[18] << 8) | (UINT)data[19];
+		UINT h = ((UINT)data[20] << 24) | ((UINT)data[21] << 16) | ((UINT)data[22] << 8) | (UINT)data[23];
+		if (w > 0 && h > 0 && w <= 8192 && h <= 8192) { outW = w; outH = h; return true; }
+	}
+	// 4. TGA (Uncompressed or RLE True-Color)
+	BYTE colorMapType = data[1];
+	BYTE imageType = data[2];
+	WORD tw = ReadU16Unaligned(data + 12);
+	WORD th = ReadU16Unaligned(data + 14);
+	BYTE bpp = data[16];
+	if (colorMapType == 0 && (imageType == 2 || imageType == 10) && tw > 0 && th > 0 && tw <= 4096 && th <= 4096 && (bpp == 24 || bpp == 32)) {
+		outW = tw; outH = th; return true;
+	}
+	// 5. JPEG (FF D8 ... SOF marker)
+	if (size >= 4 && data[0] == 0xFF && data[1] == 0xD8) {
+		size_t pos = 2;
+		while (pos + 9 < size) {
+			if (data[pos] != 0xFF) { ++pos; continue; }
+			BYTE marker = data[pos + 1];
+			if (marker == 0xFF) { ++pos; continue; }
+			if (marker >= 0xC0 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC) {
+				UINT h = ((UINT)data[pos + 5] << 8) | (UINT)data[pos + 6];
+				UINT w = ((UINT)data[pos + 7] << 8) | (UINT)data[pos + 8];
+				if (w > 0 && h > 0 && w <= 8192 && h <= 8192) { outW = w; outH = h; return true; }
+				break;
+			}
+			UINT segLen = ((UINT)data[pos + 2] << 8) | (UINT)data[pos + 3];
+			if (segLen < 2) break;
+			pos += 2 + segLen;
+		}
+	}
+	return false;
+}
+
 inline HRESULT D3DXGetImageInfoFromFileInMemory(LPCVOID pSrcData, UINT SrcDataSize, D3DXIMAGE_INFO* p) {
 #ifndef ANDROID
 	if (pSrcData && SrcDataSize > 0 && p) {
@@ -2795,6 +2958,10 @@ inline HRESULT D3DXGetImageInfoFromFileInMemory(LPCVOID pSrcData, UINT SrcDataSi
 #else
 	if (pSrcData && SrcDataSize > 0 && p) {
 		UINT w = 0, h = 0;
+		if (FastGetImageDimensionsFromHeader((const BYTE*)pSrcData, SrcDataSize, w, h)) {
+			p->Width = w; p->Height = h; p->Depth = 1; p->MipLevels = 1; p->Format = D3DFMT_A8R8G8B8;
+			return S_OK;
+		}
 		std::vector<DWORD> dummy;
 		if (DecodeTGAorBMPFromMemory((const BYTE*)pSrcData, SrcDataSize, w, h, dummy)) {
 			p->Width = w; p->Height = h; p->Depth = 1; p->MipLevels = 1; p->Format = D3DFMT_A8R8G8B8;

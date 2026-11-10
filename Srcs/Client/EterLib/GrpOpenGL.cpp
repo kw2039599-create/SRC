@@ -1152,6 +1152,7 @@ namespace {
             s_curProg = p;
             glUseProgram(p->prog);
             dirty = 0xFFFFFFFFu;
+			DWORD pendingDirtyFlags; // Initialize to 0xFFFFFFFFu when compiled/linked
         }
 
         // Fast-check TextureFactor and AlphaRef first (frequently updated between particles/foliage)
@@ -1175,6 +1176,23 @@ namespace {
         if (dirty == 0)
             return;
         dev->m_DirtyFlags = 0;
+		// Distribute newly dirtied device flags to ALL active shader programs before clearing dev->m_DirtyFlags:
+if (dev->m_DirtyFlags != 0) {
+	for (int i = 0; i < PROG_COUNT; ++i) {
+		g_esPrograms[i].pendingDirtyFlags |= dev->m_DirtyFlags;
+	}
+	dev->m_DirtyFlags = 0;
+}
+
+if (s_curProgram != prog.program) {
+	glUseProgram(prog.program);
+	s_curProgram = prog.program;
+}
+
+DWORD dirty = prog.pendingDirtyFlags;
+if (dirty == 0)
+	return;
+prog.pendingDirtyFlags = 0;
 
         if (dirty & 1) {
             GLMATRIX mv;
@@ -1445,20 +1463,10 @@ HRESULT IDirect3DDevice8::DrawIndexedPrimitive(D3DPRIMITIVETYPE Type, UINT MinIn
 
     SyncESUniforms(this);
 
-    const bool useHwVbo = ((m_pStreamSource->usage & D3DUSAGE_DYNAMIC) == 0);
-    if (useHwVbo) {
-        if (!m_pStreamSource->glVbo) glGenBuffers(1, &m_pStreamSource->glVbo);
-        BindArrayBufferCached(m_pStreamSource->glVbo);
-        if (m_pStreamSource->bDirty) {
-            glBufferData(GL_ARRAY_BUFFER, m_pStreamSource->length, m_pStreamSource->pData, GL_STATIC_DRAW);
-            m_pStreamSource->bDirty = false;
-            if (s_lastAttrVbo == m_pStreamSource->glVbo) s_lastAttrVbo = 0;
-        }
-        BindESVertexAttributes(m_dwFVF, (const BYTE*)vOffsetBytes, m_StreamStride);
-    } else {
-        BindArrayBufferCached(0);
-        BindESVertexAttributes(m_dwFVF, (const BYTE*)m_pStreamSource->pData + vOffsetBytes, m_StreamStride);
-    }
+    const bool useHwVbo = SyncHardwareVertexBuffer(m_pStreamSource, s_curArrayBuffer);
+	const BYTE* basePtr = useHwVbo
+	? (const BYTE*)(uintptr_t)0
+	: (const BYTE*)m_pStreamSource->pData;
 
     ++GetAndroidQueryDrawCounter();
 
@@ -1501,20 +1509,10 @@ HRESULT IDirect3DDevice8::DrawPrimitive(D3DPRIMITIVETYPE Type, UINT StartVertex,
 
     SyncESUniforms(this);
 
-    const bool useHwVbo = ((m_pStreamSource->usage & D3DUSAGE_DYNAMIC) == 0);
-    if (useHwVbo) {
-        if (!m_pStreamSource->glVbo) glGenBuffers(1, &m_pStreamSource->glVbo);
-        BindArrayBufferCached(m_pStreamSource->glVbo);
-        if (m_pStreamSource->bDirty) {
-            glBufferData(GL_ARRAY_BUFFER, m_pStreamSource->length, m_pStreamSource->pData, GL_STATIC_DRAW);
-            m_pStreamSource->bDirty = false;
-            if (s_lastAttrVbo == m_pStreamSource->glVbo) s_lastAttrVbo = 0;
-        }
-        BindESVertexAttributes(m_dwFVF, (const BYTE*)0, m_StreamStride);
-    } else {
-        BindArrayBufferCached(0);
-        BindESVertexAttributes(m_dwFVF, (const BYTE*)m_pStreamSource->pData, m_StreamStride);
-    }
+   const bool useHwIbo = SyncHardwareIndexBuffer(m_pIndices, s_curElementBuffer);
+	const void* indexOffsetOrPtr = useHwIbo
+	? (const void*)(uintptr_t)((StartIndex + m_BaseVertexIndex_Unused) * sizeof(WORD))
+	: (const void*)((const WORD*)m_pIndices->pData + StartIndex);
 
     ++GetAndroidQueryDrawCounter();
     glDrawArrays(mode, (GLint)StartVertex, count);

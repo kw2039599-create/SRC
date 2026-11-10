@@ -33,7 +33,9 @@
 #include <iostream>
 #include <fstream>
 
+#if !defined(ANDROID) && !defined(__ANDROID__) && !defined(NDEBUG)
 #define ENABLE_CRC32_CHECK
+#endif
 
 // --- START OF OBFUSCATION SYSTEM ---
 
