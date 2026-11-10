@@ -3,16 +3,18 @@
 #include "Model.h"
 #include "Material.h"
 
+static char const* s_GrannyTexCoord0 = GrannyVertexTextureCoordinatesName "0";
+static char const* s_GrannyTexCoord1 = GrannyVertexTextureCoordinatesName "1";
 #if defined(__APPLE__) || defined(__ANDROID__)
 __attribute__((aligned(16)))
 #endif
 granny_data_type_definition GrannyPNT3322VertexType[5] =
 {
-	{GrannyReal32Member, GrannyVertexPositionName, 0, 3},
-	{GrannyReal32Member, GrannyVertexNormalName, 0, 3},
-	{GrannyReal32Member, GrannyVertexTextureCoordinatesName"0", 0, 2},
-	{GrannyReal32Member, GrannyVertexTextureCoordinatesName"1", 0, 2},
-	{GrannyEndMember}
+    {GrannyReal32Member, GrannyVertexPositionName, 0, 3},
+    {GrannyReal32Member, GrannyVertexNormalName, 0, 3},
+    {GrannyReal32Member, s_GrannyTexCoord0, 0, 2},
+    {GrannyReal32Member, s_GrannyTexCoord1, 0, 2},
+    {GrannyEndMember},
 };
 
 void CGrannyMesh::LoadIndices(void * dstBaseIndices)

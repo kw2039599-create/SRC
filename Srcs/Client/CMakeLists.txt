@@ -633,6 +633,7 @@ elseif(APPLE)
         "-framework CoreGraphics"
         "-framework ImageIO"
         "-framework AVFoundation"
+        "-Wl,-no_fixup_chains"
         z
         m
     )
