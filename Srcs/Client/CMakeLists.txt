@@ -535,14 +535,23 @@ set(METIN2_ALL_SOURCES
 
 if(APPLE)
     add_executable(metin2_mobile MACOSX_BUNDLE ${METIN2_ALL_SOURCES})
-    set_target_properties(metin2_mobile PROPERTIES
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.worldmetin2.mobile"
-        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.worldmetin2.mobile"
-        MACOSX_BUNDLE_BUNDLE_NAME "Metin2Mobile"
+        set_target_properties(metin2_mobile PROPERTIES
+        OUTPUT_NAME "WM2Mobile"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.wm2.mobile"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.wm2.mobile"
+        MACOSX_BUNDLE_BUNDLE_NAME "WM2 Mobile"
+        XCODE_ATTRIBUTE_INFOPLIST_KEY_CFBundleDisplayName "WM2 Mobile"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.0"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1"
+        XCODE_ATTRIBUTE_MARKETING_VERSION "1.0.0"
+        XCODE_ATTRIBUTE_CURRENT_PROJECT_VERSION "1"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         XCODE_ATTRIBUTE_INFOPLIST_KEY_UIFileSharingEnabled YES
         XCODE_ATTRIBUTE_INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace YES
         XCODE_ATTRIBUTE_INFOPLIST_KEY_UIRequiresFullScreen YES
+        XCODE_ATTRIBUTE_INFOPLIST_KEY_ITSAppUsesNonExemptEncryption NO
+        "XCODE_ATTRIBUTE_INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=iphone*]" "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        "XCODE_ATTRIBUTE_INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=ipad*]" "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     )
 else()
     add_library(metin2_mobile SHARED ${METIN2_ALL_SOURCES})
