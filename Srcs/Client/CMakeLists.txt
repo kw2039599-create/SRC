@@ -537,6 +537,7 @@ if(APPLE)
     add_executable(metin2_mobile MACOSX_BUNDLE ${METIN2_ALL_SOURCES})
     set_target_properties(metin2_mobile PROPERTIES
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.worldmetin2.mobile"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.worldmetin2.mobile"
         MACOSX_BUNDLE_BUNDLE_NAME "Metin2Mobile"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         XCODE_ATTRIBUTE_INFOPLIST_KEY_UIFileSharingEnabled YES

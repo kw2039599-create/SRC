@@ -1,2 +1,5 @@
-﻿  frustum.cpp
+﻿  StdAfx.cpp
+  frustum.cpp
+  sphere.cpp
+  spherepack.cpp
   SphereLib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\SphereLib\Release\SphereLib.lib

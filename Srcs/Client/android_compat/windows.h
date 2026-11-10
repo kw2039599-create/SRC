@@ -1626,6 +1626,12 @@ static inline BOOL GetWindowRect(HWND hWnd, LPRECT lpRect) { return GetClientRec
 #endif
 
 #ifdef __cplusplus
+#include <vector>
+#include <string>
+#include <map>
+#include <set>
+#include <list>
+#include <unordered_map>
 #include <algorithm>
 #include <type_traits>
 
@@ -5098,6 +5104,12 @@ EXTERN_C inline const GUID CLSID_TF_ThreadMgr = { 0x529a9e6b, 0x6587, 0x4f23, { 
 #pragma clang diagnostic ignored "-Wformat-security"
 // FixTransformToLower
 #ifdef __cplusplus
+#include <vector>
+#include <string>
+#include <map>
+#include <set>
+#include <list>
+#include <unordered_map>
 #include <algorithm>
 namespace std {
 template <class _InputIterator, class _OutputIterator>

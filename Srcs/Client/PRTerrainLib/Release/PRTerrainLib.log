@@ -1,2 +1,4 @@
-﻿  Terrain.cpp
+﻿  StdAfx.cpp
+  Terrain.cpp
+  TextureSet.cpp
   PRTerrainLib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\PRTerrainLib\Release\PRTerrainLib.lib

@@ -1,3 +1,165 @@
-﻿  AndroidMain.cpp
+﻿  StdAfx.cpp
+  AccountConnector.cpp
+  AffectFlagContainer.cpp
+  AndroidMain.cpp
+  CRenderTarget.cpp
+  CRenderTargetManager.cpp
+  CShieldCheckIntegrity.cpp
+  CameraProcedure.cpp
+  CheckLatestFiles.cpp
+  GameType.cpp
+  GuildMarkDownloader.cpp
+  GuildMarkUploader.cpp
+  InstanceBase.cpp
+  InstanceBaseBattle.cpp
+  InstanceBaseEffect.cpp
+  InstanceBaseEvent.cpp
+  InstanceBaseMotion.cpp
+  InstanceBaseMovement.cpp
+  InstanceBaseTransform.cpp
+  InsultChecker.cpp
+  Locale.cpp
+  MarkImage.cpp
+  MarkManager.cpp
+  MiniMode.cpp
+  MovieMan.cpp
+  NetworkActorManager.cpp
+  PostProcessingChain.cpp
+  PostProcessingEffect.cpp
+  ProcessCRC.cpp
+  ProcessScanner.cpp
+  PythonAcce.cpp
+  PythonApplication.cpp
+  PythonApplicationCamera.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\AndroidMain.cpp(2,9): warning C4603: '_XOPEN_SOURCE': macro is not defined or definition is different after precompiled header use
+  (compiling source file '/AndroidMain.cpp')
+      C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\AndroidMain.cpp(2,9):
+      Add macro to precompiled header instead of defining here
+      C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\AndroidMain.cpp(5,1):
+      use of precompiled header
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\AndroidMain.cpp(3,9): warning C4603: '_DARWIN_C_SOURCE': macro is not defined or definition is different after precompiled header use
+  (compiling source file '/AndroidMain.cpp')
+      C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\AndroidMain.cpp(3,9):
+      Add macro to precompiled header instead of defining here
+      C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\AndroidMain.cpp(5,1):
+      use of precompiled header
+  
+  PythonApplicationCursor.cpp
+  PythonApplicationEvent.cpp
+  PythonApplicationLogo.cpp
+  PythonApplicationModule.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\MarkManager.cpp(99,78): warning C4834: discarding return value of function with [[nodiscard]] attribute
+  (compiling source file '/MarkManager.cpp')
+  
+  PythonApplicationProcedure.cpp
+  PythonApplicationWebPage.cpp
+  PythonBackground.cpp
+  PythonBackgroundModule.cpp
+  PythonCharacterManager.cpp
+  PythonCharacterManagerModule.cpp
+  PythonCharacterModule.cpp
+  PythonChat.cpp
+  PythonChatModule.cpp
+  PythonCombatZone.cpp
+  PythonCommunity.cpp
+  PythonCubeRenewal.cpp
+  PythonEffectModule.cpp
+  PythonEventManager.cpp
+  PythonEventManagerModule.cpp
+  PythonExceptionSender.cpp
+  PythonExchange.cpp
+  PythonExchangeModule.cpp
+  PythonFlyModule.cpp
+  PythonGameEventManagerModule.cpp
+  PythonGuild.cpp
+  PythonIME.cpp
+  PythonIMEModule.cpp
+  PythonIkarusShop.cpp
+  PythonItem.cpp
+  PythonItemModule.cpp
+  PythonMail.cpp
+  PythonMessenger.cpp
+  PythonMiniMap.cpp
+  PythonMiniMapModule.cpp
+  PythonNPCLocationHelper.cpp
+  PythonNetworkDatagram.cpp
+  PythonNetworkDatagramModule.cpp
+  PythonNetworkStream.cpp
+  PythonNetworkStreamCommand.cpp
+  PythonNetworkStreamEvent.cpp
+  PythonNetworkStreamIkarusShop.cpp
+  PythonNetworkStreamModule.cpp
+  PythonNetworkStreamPhaseGame.cpp
+  PythonNetworkStreamPhaseGameActor.cpp
+  PythonNetworkStreamPhaseGameItem.cpp
+  PythonNetworkStreamPhaseHandShake.cpp
+  PythonNetworkStreamPhaseLoading.cpp
+  PythonNetworkStreamPhaseLogin.cpp
+  PythonNetworkStreamPhaseOffline.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\PythonItem.cpp(979,2): warning C4060: switch statement contains no 'case' or 'default' labels
+  (compiling source file '/PythonItem.cpp')
+  
+  PythonNetworkStreamPhaseSelect.cpp
+  PythonNonPlayer.cpp
+  PythonNonPlayerModule.cpp
+  PythonPackModule.cpp
+  PythonPlayer.cpp
+  PythonPlayerEventHandler.cpp
   PythonPlayerInput.cpp
-LINK : fatal error LNK1104: cannot open file 'C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\..\..\..\Client\WorldofMetin2.exe'
+  PythonPlayerInputKeyboard.cpp
+  PythonPlayerInputMouse.cpp
+  PythonPlayerModule.cpp
+  PythonPlayerSkill.cpp
+  PythonPrivateShopSearch.cpp
+  PythonProfilerModule.cpp
+  PythonQuest.cpp
+  PythonRenderTargetModule.cpp
+  PythonSafeBox.cpp
+  PythonShop.cpp
+  PythonSkill.cpp
+  PythonSkillPet.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\PythonMiniMap.cpp(1131,40): warning C5055: operator '*': deprecated between enumerations and floating-point types
+  (compiling source file '/PythonMiniMap.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\PythonMiniMap.cpp(1132,40): warning C5055: operator '*': deprecated between enumerations and floating-point types
+  (compiling source file '/PythonMiniMap.cpp')
+  
+  PythonSoundManagerModule.cpp
+  PythonSwitchbot.cpp
+  PythonSystem.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\PythonMiniMap.cpp(2274,7): warning C4101: 'rcHelperMarkClip': unreferenced local variable
+  (compiling source file '/PythonMiniMap.cpp')
+  
+  PythonSystemModule.cpp
+  PythonTextTail.cpp
+  PythonTextTailModule.cpp
+  PythonYutnoriManager.cpp
+  ServerStateChecker.cpp
+  ServerStateCheckerModule.cpp
+  UserInterface.cpp
+  VoiceChat.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\PythonNetworkStreamPhaseGame.cpp(2620,45): warning C4267: 'argument': conversion from 'size_t' to 'unsigned char', possible loss of data
+  (compiling source file '/PythonNetworkStreamPhaseGame.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\PythonNetworkStreamPhaseGame.cpp(2621,41): warning C4267: 'argument': conversion from 'size_t' to 'unsigned char', possible loss of data
+  (compiling source file '/PythonNetworkStreamPhaseGame.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\PythonNetworkStreamPhaseGame.cpp(2628,43): warning C4267: 'argument': conversion from 'size_t' to 'unsigned char', possible loss of data
+  (compiling source file '/PythonNetworkStreamPhaseGame.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\PythonNetworkStreamPhaseGame.cpp(5398,42): warning C4267: '=': conversion from 'size_t' to 'unsigned char', possible loss of data
+  (compiling source file '/PythonNetworkStreamPhaseGame.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\PythonNetworkStreamPhaseGame.cpp(6344,42): warning C4267: '=': conversion from 'size_t' to 'unsigned char', possible loss of data
+  (compiling source file '/PythonNetworkStreamPhaseGame.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\UserInterface\PythonPlayerModule.cpp(2820,8): warning C4101: 'sValue_Item_Weapon': unreferenced local variable
+  (compiling source file '/PythonPlayerModule.cpp')
+  
+  libjpeg-MT.lib(jerror.obj) : MSIL .netmodule or module compiled with /GL found; restarting link with /LTCG; add /LTCG to the link command line to improve linker performance
+  Generating code
+  Finished generating code
+  UserInterface.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\Client\WorldofMetin2.exe
+  copying launcher to debug working path...
+          1 file(s) copied.

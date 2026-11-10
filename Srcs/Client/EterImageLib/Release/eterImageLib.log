@@ -1,2 +1,5 @@
-﻿  DXTCImage.cpp
+﻿  StdAfx.cpp
+  DXTCImage.cpp
+  Image.cpp
+  TGAImage.cpp
   eterImageLib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterImageLib\Release\eterImageLib.lib

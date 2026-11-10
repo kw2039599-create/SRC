@@ -1,2 +1,119 @@
-﻿  GrpOpenGL.cpp
+﻿  StdAfx.cpp
+  AttributeData.cpp
+  AttributeInstance.cpp
+  BlockTexture.cpp
+  Camera.cpp
+  CollisionData.cpp
+  ColorTransitionHelper.cpp
+  CullingManager.cpp
+  Decal.cpp
+  DibBar.cpp
+  EnvironmentMap.cpp
+  FileLoaderThread.cpp
+  GrpBase.cpp
+  GrpCollisionObject.cpp
+  GrpColor.cpp
+  GrpColorInstance.cpp
+  GrpD3DXBuffer.cpp
+  GrpDIB.cpp
+  GrpDetector.cpp
+  GrpDevice.cpp
+  GrpExpandedImageInstance.cpp
+  GrpFontTexture.cpp
+  GrpImage.cpp
+  GrpImageInstance.cpp
+  GrpImageTexture.cpp
+  GrpIndexBuffer.cpp
+  GrpLightManager.cpp
+  GrpMarkInstance.cpp
+  GrpMath.cpp
+  GrpObjectInstance.cpp
+  GrpOpenGL.cpp
+  GrpPixelShader.cpp
+  GrpRatioInstance.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\DibBar.cpp(7,21): warning C4838: conversion from 'DWORD' to 'LONG' requires a narrowing conversion
+  (compiling source file '/DibBar.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\DibBar.cpp(7,32): warning C4838: conversion from 'DWORD' to 'LONG' requires a narrowing conversion
+  (compiling source file '/DibBar.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\DibBar.cpp(81,18): warning C4838: conversion from 'DWORD' to 'LONG' requires a narrowing conversion
+  (compiling source file '/DibBar.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\DibBar.cpp(81,26): warning C4838: conversion from 'DWORD' to 'LONG' requires a narrowing conversion
+  (compiling source file '/DibBar.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\DibBar.cpp(81,40): warning C4838: conversion from 'unsigned long' to 'LONG' requires a narrowing conversion
+  (compiling source file '/DibBar.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\DibBar.cpp(81,61): warning C4838: conversion from 'unsigned long' to 'LONG' requires a narrowing conversion
+  (compiling source file '/DibBar.cpp')
+  
+  GrpRenderTargetTexture.cpp
+  GrpScreen.cpp
+  GrpShadowTexture.cpp
+  GrpSubImage.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\GrpFontTexture.cpp(325,51): warning C4267: '=': conversion from 'size_t' to 'short', possible loss of data
+  (compiling source file '/GrpFontTexture.cpp')
+  
+  GrpText.cpp
+  GrpTextInstance.cpp
+  GrpTexture.cpp
+  GrpVertexBuffer.cpp
+  GrpVertexBufferDynamic.cpp
+  GrpVertexBufferStatic.cpp
+  GrpVertexShader.cpp
+  IME.cpp
+  Input.cpp
+  JpegFile.cpp
+  LensFlare.cpp
+  MSApplication.cpp
+  MSWindow.cpp
+  Mutex.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\GrpScreen.cpp(761,43): warning C4838: conversion from 'UINT' to 'LONG' requires a narrowing conversion
+  (compiling source file '/GrpScreen.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\GrpScreen.cpp(762,63): warning C4838: conversion from 'UINT' to 'LONG' requires a narrowing conversion
+  (compiling source file '/GrpScreen.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\GrpScreen.cpp(762,103): warning C4838: conversion from 'UINT' to 'LONG' requires a narrowing conversion
+  (compiling source file '/GrpScreen.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\GrpScreen.cpp(764,75): warning C4838: conversion from 'UINT' to 'LONG' requires a narrowing conversion
+  (compiling source file '/GrpScreen.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\GrpMarkInstance.cpp(77,31): warning C5055: operator '*': deprecated between enumerations and floating-point types
+  (compiling source file '/GrpMarkInstance.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\GrpMarkInstance.cpp(78,33): warning C5055: operator '*': deprecated between enumerations and floating-point types
+  (compiling source file '/GrpMarkInstance.cpp')
+  
+  NetAddress.cpp
+  NetDatagram.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\IME.cpp(309,2): warning C4996: 'GetVersionExA': was declared deprecated
+  (compiling source file '/IME.cpp')
+  
+  NetDatagramReceiver.cpp
+  NetDatagramSender.cpp
+  NetDevice.cpp
+  NetPacketHeaderMap.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\IME.cpp(1196,7): warning C4996: 'GetVersionExA': was declared deprecated
+  (compiling source file '/IME.cpp')
+  
+  NetStream.cpp
+  PathStack.cpp
+  ReferenceObject.cpp
+  Resource.cpp
+  ResourceManager.cpp
+  ScreenFilter.cpp
+  SkyBox.cpp
+  StateManager.cpp
+  TargaResource.cpp
+  TextBar.cpp
+  TextFileLoader.cpp
+  TextTag.cpp
+  Thread.cpp
+  Util.cpp
+  lineintersect_utils.cpp
+  parser.cpp
   eterlib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterLib\Release\eterlib.lib

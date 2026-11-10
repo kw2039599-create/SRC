@@ -1,8 +1,12 @@
-﻿  SpeedTreeForest.cpp
+﻿  StdAfx.cpp
+  BoundaryShapeManager.cpp
+  SpeedGrassRT.cpp
+  SpeedGrassWrapper.cpp
+  SpeedTreeForest.cpp
   SpeedTreeForestDirectX8.cpp
   SpeedTreeWrapper.cpp
 C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\SpeedTreeLib\VertexShaders.h(174,20): warning C4477: 'sprintf' : format string '%s' requires an argument of type 'char *', but variadic argument 1 has type 'LPVOID'
-  (compiling source file 'SpeedTreeForestDirectX8.cpp')
+  (compiling source file '../SpeedTreeLib/SpeedTreeForestDirectX8.cpp')
   
 C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\SpeedTreeLib\SpeedTreeForestDirectX8.cpp(593,8): warning C4101: 'afDirection': unreferenced local variable
 C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\SpeedTreeLib\SpeedTreeForestDirectX8.cpp(695,8): warning C4293: '<<': shift count negative or too big, undefined behavior
@@ -12,6 +16,6 @@ C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\SpeedTreeLib\Sp
 C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\SpeedTreeLib\SpeedTreeForest.cpp(231,33): warning C4244: '=': conversion from 'double' to 'float', possible loss of data
 C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\SpeedTreeLib\SpeedTreeForest.cpp(232,33): warning C4244: '=': conversion from 'double' to 'float', possible loss of data
 C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\SpeedTreeLib\VertexShaders.h(174,20): warning C4477: 'sprintf' : format string '%s' requires an argument of type 'char *', but variadic argument 1 has type 'LPVOID'
-  (compiling source file 'SpeedTreeWrapper.cpp')
+  (compiling source file '../SpeedTreeLib/SpeedTreeWrapper.cpp')
   
   SpeedTreeLib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\SpeedTreeLib\Release\SpeedTreeLib.lib

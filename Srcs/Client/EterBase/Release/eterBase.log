@@ -1,2 +1,53 @@
-﻿  Timer.cpp
+﻿  StdAfx.cpp
+  CPostIt.cpp
+  CRC32.cpp
+  Debug.cpp
+  FileBase.cpp
+  FileDir.cpp
+  FileLoader.cpp
+  MappedFile.cpp
+  Random.cpp
+  Stl.cpp
+  TempFile.cpp
+  Timer.cpp
+  Utils.cpp
+  cipher.cpp
+  error.cpp
+  grid.cpp
+  lzo.cpp
+  Base.cpp
+  Poly.cpp
+  SymTable.cpp
+  Symbol.cpp
+  tea.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Extern\include\cryptopp\asn.h(296,28): warning C5054: operator '|': deprecated between enumerations of different types
+  (compiling source file '/cipher.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Extern\include\cryptopp\asn.h(297,28): warning C5054: operator '|': deprecated between enumerations of different types
+  (compiling source file '/cipher.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Extern\include\cryptopp\asn.h(312,29): warning C5054: operator '|': deprecated between enumerations of different types
+  (compiling source file '/cipher.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Extern\include\cryptopp\asn.h(314,29): warning C5054: operator '|': deprecated between enumerations of different types
+  (compiling source file '/cipher.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Extern\include\cryptopp\asn.h(322,29): warning C5054: operator '|': deprecated between enumerations of different types
+  (compiling source file '/cipher.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Extern\include\cryptopp\asn.h(324,29): warning C5054: operator '|': deprecated between enumerations of different types
+  (compiling source file '/cipher.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Extern\include\cryptopp\asn.h(332,24): warning C5054: operator '|': deprecated between enumerations of different types
+  (compiling source file '/cipher.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Extern\include\cryptopp\asn.h(334,24): warning C5054: operator '|': deprecated between enumerations of different types
+  (compiling source file '/cipher.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Extern\include\cryptopp\asn.h(342,24): warning C5054: operator '|': deprecated between enumerations of different types
+  (compiling source file '/cipher.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Extern\include\cryptopp\asn.h(344,24): warning C5054: operator '|': deprecated between enumerations of different types
+  (compiling source file '/cipher.cpp')
+  
   eterBase.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterBase\Release\eterBase.lib

@@ -1,5 +1,14 @@
-﻿  PythonGraphic.cpp
+﻿  StdAfx.cpp
+  PythonGraphic.cpp
+  PythonGraphicImageModule.cpp
+  PythonGraphicModule.cpp
+  PythonGraphicTextModule.cpp
+  PythonGraphicThingModule.cpp
+  PythonGridSlotWindow.cpp
+  PythonSlotWindow.cpp
   PythonWindow.cpp
+  PythonWindowManager.cpp
+  PythonWindowManagerModule.cpp
 C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterPythonLib\PythonGraphic.cpp(386,5): warning C4838: conversion from 'int' to 'unsigned char' requires a narrowing conversion
   (compiling source file '/PythonGraphic.cpp')
   

@@ -1,12 +1,40 @@
-﻿  ModelInstanceModel.cpp
+﻿  StdAfx.cpp
+  LODController.cpp
+  Material.cpp
+  Mesh.cpp
+  Model.cpp
+  ModelInstance.cpp
+  ModelInstanceCollisionDetection.cpp
+  ModelInstanceModel.cpp
+  ModelInstanceMotion.cpp
+  ModelInstanceRender.cpp
   ModelInstanceUpdate.cpp
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ModelInstanceUpdate.cpp(31,59): warning C5055: operator '*': deprecated between enumerations and floating-point types
+  Motion.cpp
+  Thing.cpp
+  ThingInstance.cpp
+  Util.cpp
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\LODController.cpp(470,129): warning C5055: operator '+': deprecated between enumerations and floating-point types
+  (compiling source file '/LODController.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ModelInstanceMotion.cpp(14,18): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+  (compiling source file '/ModelInstanceMotion.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ModelInstanceMotion.cpp(59,18): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+  (compiling source file '/ModelInstanceMotion.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ModelInstanceMotion.cpp(129,18): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+  (compiling source file '/ModelInstanceMotion.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ModelInstanceUpdate.cpp(22,59): warning C5055: operator '*': deprecated between enumerations and floating-point types
   (compiling source file '/ModelInstanceUpdate.cpp')
   
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ModelInstanceUpdate.cpp(39,55): warning C4244: 'argument': conversion from 'double' to 'granny_real32', possible loss of data
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ModelInstanceUpdate.cpp(30,55): warning C4244: 'argument': conversion from 'double' to 'granny_real32', possible loss of data
   (compiling source file '/ModelInstanceUpdate.cpp')
   
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ModelInstanceUpdate.cpp(55,55): warning C4244: 'argument': conversion from 'double' to 'granny_real32', possible loss of data
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ModelInstanceUpdate.cpp(54,55): warning C4244: 'argument': conversion from 'double' to 'granny_real32', possible loss of data
   (compiling source file '/ModelInstanceUpdate.cpp')
+  
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\ThingInstance.cpp(878,54): warning C4244: '=': conversion from 'double' to 'float', possible loss of data
+  (compiling source file '/ThingInstance.cpp')
   
   eterGrnLib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterGrnLib\Release\eterGrnLib.lib
