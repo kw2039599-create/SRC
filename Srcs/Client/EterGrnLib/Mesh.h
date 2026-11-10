@@ -2,7 +2,10 @@
 
 #include "Material.h"
 
-extern granny_data_type_definition GrannyPNT3322VertexType[5];
+extern #if defined(__APPLE__) || defined(__ANDROID__)
+__attribute__((aligned(16)))
+#endif
+granny_data_type_definition GrannyPNT3322VertexType[5];
 
 struct granny_pnt3322_vertex
 {

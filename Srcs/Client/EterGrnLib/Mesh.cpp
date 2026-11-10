@@ -3,6 +3,9 @@
 #include "Model.h"
 #include "Material.h"
 
+#if defined(__APPLE__) || defined(__ANDROID__)
+__attribute__((aligned(16)))
+#endif
 granny_data_type_definition GrannyPNT3322VertexType[5] =
 {
 	{GrannyReal32Member, GrannyVertexPositionName, 0, 3},

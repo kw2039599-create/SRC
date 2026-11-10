@@ -2281,7 +2281,7 @@ const char* _Py_gitidentifier(void) { return "default"; }
 const char* _Py_gitversion(void) { return ""; }
 
 #undef PyUnicodeUCS2_FromFormat
-PyObject* PyUnicodeUCS2_FromFormat(const char* format, ...) {
+__attribute__((weak)) PyObject* PyUnicodeUCS2_FromFormat(const char* format, ...) {
     va_list vargs;
     va_start(vargs, format);
     PyObject* res = PyString_FromFormatV(format, vargs);
