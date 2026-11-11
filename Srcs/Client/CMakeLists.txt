@@ -56,6 +56,7 @@ endif()
 set(PY_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/python27_gen")
 file(MAKE_DIRECTORY "${PY_GEN_DIR}")
 
+if(NOT EXISTS "${PY_GEN_DIR}/Python27/Python.h")
 # Generate Android NDK pyconfig.h for Python 2.7
 file(WRITE "${PY_GEN_DIR}/pyconfig.h" "
 #ifndef Py_PYCONFIG_H
@@ -331,6 +332,8 @@ PyAPI_FUNC(PyObject *) Py_InitModule4(const char *name, PyMethodDef *methods, co
 }
 #endif
 ")
+
+endif()
 
 set(PYTHON_CORE_SOURCES
     ${PY_GEN_DIR}/config.c
