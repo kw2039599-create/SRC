@@ -600,7 +600,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
     SetLogLevel(1);
     InstallAndroidCrashHandler(); g_szCrashStage = "Init: OpenLogFile"; OpenLogFile(true);
     InstallAndroidCrashHandler();
-    Tracen("Metin2 Mobile: Log initialized [BUILD v4].");
+    Tracen("Metin2 Mobile: Log initialized [BUILD v5 - IOS FIX].");
 
     // 2. Initialize string table and locale.cfg
     ApplicationStringTable_Initialize(NULL);
