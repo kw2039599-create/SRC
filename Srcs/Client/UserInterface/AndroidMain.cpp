@@ -1480,62 +1480,331 @@ static float s_fLastPinchSpan = -1.0f;
 
 static bool s_bSoftKeyboardVisible = false;
 static DWORD s_dwLastKeyboardOpenMs = 0;
+static jobject s_pLiveEditText = nullptr;
+static std::u16string s_u16LastEditText;
+static volatile bool s_bResetLiveEditTextPending = false;
+
+static void EnsureAndroidLiveEditTextOnUiThread(JNIEnv* env) {
+#if !defined(__APPLE__)
+    if (!env) return;
+
+    if (!s_pLiveEditText) {
+        jclass atCls = env->FindClass("android/app/ActivityThread");
+        if (!atCls) { env->ExceptionClear(); return; }
+        jmethodID curAtMid = env->GetStaticMethodID(atCls, "currentActivityThread", "()Landroid/app/ActivityThread;");
+        jobject atObj = curAtMid ? env->CallStaticObjectMethod(atCls, curAtMid) : nullptr;
+        env->ExceptionClear();
+
+        jobject activityObj = nullptr;
+        if (atObj) {
+            jfieldID mActFid = env->GetFieldID(atCls, "mActivities", "Landroid/util/ArrayMap;");
+            env->ExceptionClear();
+            if (!mActFid) {
+                mActFid = env->GetFieldID(atCls, "mActivities", "Ljava/util/Map;");
+                env->ExceptionClear();
+            }
+            jobject mapObj = mActFid ? env->GetObjectField(atObj, mActFid) : nullptr;
+            env->ExceptionClear();
+            if (mapObj) {
+                jclass mapCls = env->FindClass("java/util/Map");
+                jmethodID valuesMid = env->GetMethodID(mapCls, "values", "()Ljava/util/Collection;");
+                jobject colObj = valuesMid ? env->CallObjectMethod(mapObj, valuesMid) : nullptr;
+                env->ExceptionClear();
+                if (colObj) {
+                    jclass colCls = env->FindClass("java/util/Collection");
+                    jmethodID toArrMid = env->GetMethodID(colCls, "toArray", "()[Ljava/lang/Object;");
+                    jobjectArray arr = toArrMid ? (jobjectArray)env->CallObjectMethod(colObj, toArrMid) : nullptr;
+                    env->ExceptionClear();
+                    if (arr) {
+                        jsize len = env->GetArrayLength(arr);
+                        for (jsize i = 0; i < len; ++i) {
+                            jobject rec = env->GetObjectArrayElement(arr, i);
+                            if (!rec) continue;
+                            jclass recCls = env->GetObjectClass(rec);
+                            jfieldID actFid = env->GetFieldID(recCls, "activity", "Landroid/app/Activity;");
+                            jfieldID pausedFid = env->GetFieldID(recCls, "paused", "Z");
+                            env->ExceptionClear();
+                            if (actFid) {
+                                jobject cand = env->GetObjectField(rec, actFid);
+                                jboolean isPaused = pausedFid ? env->GetBooleanField(rec, pausedFid) : JNI_FALSE;
+                                env->ExceptionClear();
+                                if (cand) {
+                                    if (!isPaused || !activityObj) {
+                                        if (activityObj) env->DeleteLocalRef(activityObj);
+                                        activityObj = cand;
+                                        if (!isPaused) {
+                                            env->DeleteLocalRef(recCls);
+                                            env->DeleteLocalRef(rec);
+                                            break;
+                                        }
+                                    } else {
+                                        env->DeleteLocalRef(cand);
+                                    }
+                                }
+                            }
+                            env->DeleteLocalRef(recCls);
+                            env->DeleteLocalRef(rec);
+                        }
+                        env->DeleteLocalRef(arr);
+                    }
+                    env->DeleteLocalRef(colCls);
+                    env->DeleteLocalRef(colObj);
+                }
+                env->DeleteLocalRef(mapCls);
+                env->DeleteLocalRef(mapObj);
+            }
+            env->DeleteLocalRef(atObj);
+        }
+        env->DeleteLocalRef(atCls);
+
+        if (activityObj) {
+            jclass actCls = env->FindClass("android/app/Activity");
+            jmethodID findMid = env->GetMethodID(actCls, "findViewById", "(I)Landroid/view/View;");
+            jobject contentView = findMid ? env->CallObjectMethod(activityObj, findMid, (jint)16908290) : nullptr; // android.R.id.content
+            env->ExceptionClear();
+
+            if (contentView) {
+                jclass etCls = env->FindClass("android/widget/EditText");
+                jmethodID etCtor = env->GetMethodID(etCls, "<init>", "(Landroid/content/Context;)V");
+                jobject etObj = etCtor ? env->NewObject(etCls, etCtor, activityObj) : nullptr;
+                env->ExceptionClear();
+
+                if (etObj) {
+                    // TYPE_CLASS_TEXT (1) | TYPE_TEXT_VARIATION_VISIBLE_PASSWORD (0x90) | TYPE_TEXT_FLAG_NO_SUGGESTIONS (0x80000) | TYPE_TEXT_FLAG_MULTI_LINE (0x20000)
+                    jmethodID setInputTypeMid = env->GetMethodID(etCls, "setInputType", "(I)V");
+                    if (setInputTypeMid) env->CallVoidMethod(etObj, setInputTypeMid, (jint)0x000A0091);
+                    env->ExceptionClear();
+
+                    // IME_FLAG_NO_EXTRACT_UI (0x10000000) | IME_FLAG_NO_FULLSCREEN (0x2000000) | IME_ACTION_DONE (6)
+                    jmethodID setImeOptMid = env->GetMethodID(etCls, "setImeOptions", "(I)V");
+                    if (setImeOptMid) env->CallVoidMethod(etObj, setImeOptMid, (jint)0x12000006);
+                    env->ExceptionClear();
+
+                    jmethodID setBgMid = env->GetMethodID(etCls, "setBackgroundColor", "(I)V");
+                    if (setBgMid) env->CallVoidMethod(etObj, setBgMid, (jint)0);
+                    jmethodID setTcMid = env->GetMethodID(etCls, "setTextColor", "(I)V");
+                    if (setTcMid) env->CallVoidMethod(etObj, setTcMid, (jint)0);
+                    jmethodID setCurMid = env->GetMethodID(etCls, "setCursorVisible", "(Z)V");
+                    if (setCurMid) env->CallVoidMethod(etObj, setCurMid, (jboolean)JNI_FALSE);
+                    jmethodID setFocMid = env->GetMethodID(etCls, "setFocusable", "(Z)V");
+                    if (setFocMid) env->CallVoidMethod(etObj, setFocMid, (jboolean)JNI_TRUE);
+                    jmethodID setFocTouchMid = env->GetMethodID(etCls, "setFocusableInTouchMode", "(Z)V");
+                    if (setFocTouchMid) env->CallVoidMethod(etObj, setFocTouchMid, (jboolean)JNI_TRUE);
+                    env->ExceptionClear();
+
+                    jclass lpCls = env->FindClass("android/view/ViewGroup$LayoutParams");
+                    jmethodID lpCtor = env->GetMethodID(lpCls, "<init>", "(II)V");
+                    jobject lpObj = lpCtor ? env->NewObject(lpCls, lpCtor, (jint)1, (jint)1) : nullptr;
+                    env->ExceptionClear();
+
+                    jclass vgCls = env->FindClass("android/view/ViewGroup");
+                    jmethodID addViewMid = env->GetMethodID(vgCls, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
+                    if (addViewMid && lpObj) {
+                        env->CallVoidMethod(contentView, addViewMid, etObj, lpObj);
+                        if (!env->ExceptionCheck()) {
+                            s_pLiveEditText = env->NewGlobalRef(etObj);
+                            s_bResetLiveEditTextPending = true;
+                        }
+                        env->ExceptionClear();
+                    }
+                    if (lpObj) env->DeleteLocalRef(lpObj);
+                    env->DeleteLocalRef(lpCls);
+                    env->DeleteLocalRef(vgCls);
+                    env->DeleteLocalRef(etObj);
+                }
+                env->DeleteLocalRef(etCls);
+                env->DeleteLocalRef(contentView);
+            }
+            env->DeleteLocalRef(actCls);
+            env->DeleteLocalRef(activityObj);
+        }
+    }
+
+    if (s_pLiveEditText) {
+        jclass etCls = env->FindClass("android/widget/EditText");
+        if (s_bResetLiveEditTextPending) {
+            s_bResetLiveEditTextPending = false;
+            jstring padStr = env->NewStringUTF("                                "); // 32 spaces so backspace works on existing text
+            jclass tvCls = env->FindClass("android/widget/TextView");
+            jmethodID setTextMid = env->GetMethodID(tvCls, "setText", "(Ljava/lang/CharSequence;)V");
+            if (setTextMid) env->CallVoidMethod(s_pLiveEditText, setTextMid, padStr);
+            env->ExceptionClear();
+            jmethodID setSelMid = env->GetMethodID(etCls, "setSelection", "(I)V");
+            if (setSelMid) env->CallVoidMethod(s_pLiveEditText, setSelMid, (jint)32);
+            env->ExceptionClear();
+            s_u16LastEditText.assign(32, u' ');
+            env->DeleteLocalRef(tvCls);
+            env->DeleteLocalRef(padStr);
+        }
+        jclass viewCls = env->FindClass("android/view/View");
+        jmethodID reqFocMid = env->GetMethodID(viewCls, "requestFocus", "()Z");
+        if (reqFocMid) env->CallBooleanMethod(s_pLiveEditText, reqFocMid);
+        env->ExceptionClear();
+        env->DeleteLocalRef(viewCls);
+        env->DeleteLocalRef(etCls);
+    }
+#endif
+}
+
+static void PasteUnicodeCharToMetin2IME(uint16_t ch) {
+    if (ch < 32) return;
+    unsigned char outCh = 0;
+    if (ch < 127) {
+        outCh = (unsigned char)ch;
+    } else {
+        static const uint16_t s_cp1256Map[128] = {
+            0x20AC,0x067E,0x201A,0x0192,0x201E,0x2026,0x2020,0x2021,0x02C6,0x2030,0x0679,0x2039,0x0152,0x0686,0x0698,0x0688,
+            0x06AF,0x2018,0x2019,0x201C,0x201D,0x2022,0x2013,0x2014,0x06A9,0x2122,0x0691,0x203A,0x0153,0x200C,0x200D,0x06BA,
+            0x00A0,0x060C,0x00A2,0x00A3,0x00A4,0x00A5,0x00A6,0x00A7,0x00A8,0x00A9,0x06BE,0x00AB,0x00AC,0x00AD,0x00AE,0x00AF,
+            0x00B0,0x00B1,0x00B2,0x00B3,0x00B4,0x00B5,0x00B6,0x00B7,0x00B8,0x00B9,0x061B,0x00BB,0x00BC,0x00BD,0x00BE,0x061F,
+            0x06C1,0x0621,0x0622,0x0623,0x0624,0x0625,0x0626,0x0627,0x0628,0x0629,0x062A,0x062B,0x062C,0x062D,0x062E,0x062F,
+            0x0630,0x0631,0x0632,0x0633,0x0634,0x0635,0x0636,0x00D7,0x0637,0x0638,0x0639,0x063A,0x0640,0x0641,0x0642,0x0643,
+            0x00E0,0x0644,0x00E2,0x0645,0x0646,0x0647,0x0648,0x00E7,0x00E8,0x00E9,0x00EA,0x00EB,0x0649,0x064A,0x00EE,0x00EF,
+            0x064B,0x064C,0x064D,0x064E,0x00F4,0x064F,0x0650,0x00F7,0x0651,0x00F9,0x0652,0x00FB,0x00FC,0x200E,0x200F,0x06D2
+        };
+        for (int idx = 0; idx < 128; ++idx) {
+            if (s_cp1256Map[idx] == ch) {
+                outCh = (unsigned char)(0x80 + idx);
+                break;
+            }
+        }
+    }
+    if (outCh != 0) {
+        char cmd[64];
+        snprintf(cmd, sizeof(cmd), "import ime\nime.PasteString('\\x%02x')\n", (unsigned int)outCh);
+        PyRun_SimpleString(cmd);
+    }
+}
+
+void AndroidToggleSoftKeyboard(bool show);
+
+static bool PollAndroidLiveEditText(JNIEnv* env) {
+#if !defined(__APPLE__)
+    if (!env || !s_bSoftKeyboardVisible || !s_pLiveEditText)
+        return false;
+
+    static jmethodID s_getTextMid = nullptr;
+    static jmethodID s_toStringMid = nullptr;
+    if (!s_getTextMid) {
+        jclass tvCls = env->FindClass("android/widget/TextView");
+        s_getTextMid = env->GetMethodID(tvCls, "getText", "()Ljava/lang/CharSequence;");
+        env->DeleteLocalRef(tvCls);
+        jclass objCls = env->FindClass("java/lang/Object");
+        s_toStringMid = env->GetMethodID(objCls, "toString", "()Ljava/lang/String;");
+        env->DeleteLocalRef(objCls);
+    }
+    if (!s_getTextMid || !s_toStringMid)
+        return false;
+
+    jobject csObj = env->CallObjectMethod(s_pLiveEditText, s_getTextMid);
+    if (env->ExceptionCheck() || !csObj) {
+        env->ExceptionClear();
+        return false;
+    }
+    jstring jstr = (jstring)env->CallObjectMethod(csObj, s_toStringMid);
+    env->DeleteLocalRef(csObj);
+    if (env->ExceptionCheck() || !jstr) {
+        env->ExceptionClear();
+        return false;
+    }
+
+    jsize len = env->GetStringLength(jstr);
+    const jchar* chars = env->GetStringChars(jstr, nullptr);
+    std::u16string rawStr;
+    if (chars && len > 0) {
+        rawStr.assign(chars, chars + len);
+    }
+    if (chars) {
+        env->ReleaseStringChars(jstr, chars);
+    }
+    env->DeleteLocalRef(jstr);
+
+    if (rawStr == s_u16LastEditText)
+        return false;
+
+    bool pressedEnter = false;
+    std::u16string cleanStr;
+    cleanStr.reserve(rawStr.size());
+    for (char16_t c : rawStr) {
+        if (c == u'\n' || c == u'\r') {
+            pressedEnter = true;
+        } else {
+            cleanStr.push_back(c);
+        }
+    }
+
+    size_t prefixLen = 0;
+    size_t minLen = std::min(s_u16LastEditText.size(), cleanStr.size());
+    while (prefixLen < minLen && s_u16LastEditText[prefixLen] == cleanStr[prefixLen]) {
+        ++prefixLen;
+    }
+
+    size_t numBackspaces = s_u16LastEditText.size() - prefixLen;
+    for (size_t i = 0; i < numBackspaces; ++i) {
+        PyRun_SimpleString("import ime\nime.PasteBackspace()\n");
+    }
+    for (size_t i = prefixLen; i < cleanStr.size(); ++i) {
+        PasteUnicodeCharToMetin2IME((uint16_t)cleanStr[i]);
+    }
+
+    s_u16LastEditText = rawStr;
+    if (cleanStr.size() < 8 || cleanStr.size() > 160) {
+        s_bResetLiveEditTextPending = true;
+    }
+
+    UI::CWindowManager::Instance().RunIMEUpdate();
+
+    if (pressedEnter) {
+        s_bResetLiveEditTextPending = true;
+        UI::CWindow* pBefore = UI::CWindowManager::Instance().GetActivateWindow();
+        UI::CWindowManager::Instance().RunIMEReturnEvent();
+        UI::CWindow* pAfter = UI::CWindowManager::Instance().GetActivateWindow();
+        if (!pAfter || pAfter == pBefore) {
+            AndroidToggleSoftKeyboard(false);
+        }
+    }
+    return true;
+#else
+    return false;
+#endif
+}
 
 void AndroidToggleSoftKeyboard(bool show) {
     if (show) {
         s_dwLastKeyboardOpenMs = ELTimer_GetMSec();
+    } else {
+        s_bResetLiveEditTextPending = true;
     }
     s_bSoftKeyboardVisible = show;
 
-    // Show or hide the global TOP_MOST live text input bar above the keyboard
+    // Dynamic ThinBoard TOP_MOST preview showing ONLY the text inside the input
     PyRun_SimpleString(show ?
         "try:\n"
-        "    import ui, wndMgr, ime\n"
+        "    import ui, wndMgr\n"
         "    if not hasattr(ui, '_g_mobileKbBar') or ui._g_mobileKbBar is None:\n"
-        "        class _MobileKbPreview(ui.Window):\n"
+        "        class _MobileKbPreview(ui.ThinBoard):\n"
         "            def __init__(self):\n"
-        "                ui.Window.__init__(self, 'TOP_MOST')\n"
-        "                sw = wndMgr.GetScreenWidth()\n"
-        "                self.SetSize(500, 42)\n"
-        "                self.SetPosition((sw - 500) / 2, 8)\n"
+        "                ui.ThinBoard.__init__(self, 'TOP_MOST')\n"
+        "                self.AddFlag('not_pick')\n"
         "                self.txt = ui.TextLine()\n"
         "                self.txt.SetParent(self)\n"
-        "                self.txt.SetPosition(210, 12)\n"
         "                self.txt.SetHorizontalAlignCenter()\n"
+        "                self.txt.SetVerticalAlignCenter()\n"
         "                self.txt.SetOutline()\n"
         "                self.txt.SetPackedFontColor(0xFFFFFFFF)\n"
         "                self.txt.AddFlag('not_pick')\n"
         "                self.txt.Show()\n"
-        "                self.doneTxt = ui.TextLine()\n"
-        "                self.doneTxt.SetParent(self)\n"
-        "                self.doneTxt.SetPosition(456, 12)\n"
-        "                self.doneTxt.SetHorizontalAlignCenter()\n"
-        "                self.doneTxt.SetOutline()\n"
-        "                self.doneTxt.SetPackedFontColor(0xFF6ED2FF)\n"
-        "                self.doneTxt.SetText('تم')\n"
-        "                self.doneTxt.AddFlag('not_pick')\n"
-        "                self.doneTxt.Show()\n"
+        "                self.SetPreviewText('', 0)\n"
         "            def SetPreviewText(self, val, isSecret):\n"
+        "                disp = ('*' * len(val)) if isSecret else (val if val else '')\n"
+        "                self.txt.SetText(disp)\n"
+        "                tw, th = self.txt.GetTextSize()\n"
+        "                bw = max(48, tw + 24)\n"
+        "                bh = max(30, th + 14)\n"
         "                sw = wndMgr.GetScreenWidth()\n"
-        "                self.SetPosition((sw - 500) / 2, 8)\n"
-        "                disp = ('*' * len(val)) if isSecret else val\n"
-        "                self.txt.SetText((disp if disp else '') + ' |')\n"
-        "            def OnMouseLeftButtonDown(self):\n"
-        "                lx, ly = self.GetMouseLocalPosition()\n"
-        "                if lx >= 412:\n"
-        "                    ime.PasteReturn()\n"
-        "                return True\n"
-        "            def OnRender(self):\n"
-        "                import grp\n"
-        "                x, y = self.GetGlobalPosition()\n"
-        "                w, h = self.GetWidth(), self.GetHeight()\n"
-        "                grp.SetColor(0xF20A101C)\n"
-        "                grp.RenderBar(x, y, w, h)\n"
-        "                grp.SetColor(0xFF1D3D5E)\n"
-        "                grp.RenderBar(x + w - 84, y + 4, 80, h - 8)\n"
-        "                grp.SetColor(0xFF6ED2FF)\n"
-        "                grp.RenderBox(x, y, w, h)\n"
-        "                grp.RenderBox(x + w - 84, y + 4, 80, h - 8)\n"
+        "                self.SetSize(bw, bh)\n"
+        "                self.SetPosition((sw - bw) / 2, 10)\n"
+        "                self.txt.SetPosition(bw / 2, bh / 2)\n"
         "        ui._g_mobileKbBar = _MobileKbPreview()\n"
         "    ui._g_mobileKbBar.Show()\n"
         "    ui._g_mobileKbBar.SetTop()\n"
@@ -1569,21 +1838,48 @@ void AndroidToggleSoftKeyboard(bool show) {
         jobject immObj = env->CallObjectMethod(appObj, getSysMid, immStr);
         if (immObj) {
             jclass immCls = env->GetObjectClass(immObj);
-            jmethodID visHMid = env->GetMethodID(immCls, "getInputMethodWindowVisibleHeight", "()I");
-            env->ExceptionClear();
-            bool shouldToggle = true;
-            if (visHMid) {
-                jint kbH = env->CallIntMethod(immObj, visHMid);
-                if (!env->ExceptionCheck()) {
-                    bool isCurrentlyOpen = (kbH > 0);
-                    shouldToggle = (isCurrentlyOpen != show);
+            bool handledDirectly = false;
+            if (s_pLiveEditText) {
+                if (show) {
+                    jmethodID showMid = env->GetMethodID(immCls, "showSoftInput", "(Landroid/view/View;I)Z");
+                    if (showMid) {
+                        handledDirectly = (env->CallBooleanMethod(immObj, showMid, s_pLiveEditText, (jint)0) == JNI_TRUE);
+                        env->ExceptionClear();
+                    }
+                } else {
+                    jclass viewCls = env->FindClass("android/view/View");
+                    jmethodID tokMid = env->GetMethodID(viewCls, "getWindowToken", "()Landroid/os/IBinder;");
+                    jobject token = tokMid ? env->CallObjectMethod(s_pLiveEditText, tokMid) : nullptr;
+                    env->ExceptionClear();
+                    if (token) {
+                        jmethodID hideMid = env->GetMethodID(immCls, "hideSoftInputFromWindow", "(Landroid/os/IBinder;I)Z");
+                        if (hideMid) {
+                            env->CallBooleanMethod(immObj, hideMid, token, (jint)0);
+                            handledDirectly = true;
+                        }
+                        env->ExceptionClear();
+                        env->DeleteLocalRef(token);
+                    }
+                    env->DeleteLocalRef(viewCls);
                 }
-                env->ExceptionClear();
             }
-            if (shouldToggle) {
-                jmethodID toggleMid = env->GetMethodID(immCls, "toggleSoftInput", "(II)V");
-                if (toggleMid) {
-                    env->CallVoidMethod(immObj, toggleMid, show ? 2 : 0, 0);
+            if (!handledDirectly) {
+                jmethodID visHMid = env->GetMethodID(immCls, "getInputMethodWindowVisibleHeight", "()I");
+                env->ExceptionClear();
+                bool shouldToggle = true;
+                if (visHMid) {
+                    jint kbH = env->CallIntMethod(immObj, visHMid);
+                    if (!env->ExceptionCheck()) {
+                        bool isCurrentlyOpen = (kbH > 0);
+                        shouldToggle = (isCurrentlyOpen != show);
+                    }
+                    env->ExceptionClear();
+                }
+                if (shouldToggle) {
+                    jmethodID toggleMid = env->GetMethodID(immCls, "toggleSoftInput", "(II)V");
+                    if (toggleMid) {
+                        env->CallVoidMethod(immObj, toggleMid, show ? 2 : 0, 0);
+                    }
                 }
             }
             env->DeleteLocalRef(immCls);
@@ -2264,8 +2560,13 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
             }
         }
 #endif
+		if (PollAndroidLiveEditText(env)) {
+            pthread_mutex_lock(&s_inputQueueMutex);
+            s_keyTail = s_keyHead;
+            pthread_mutex_unlock(&s_inputQueueMutex);
+        }
 
-		while (true) {
+        while (true) {
             pthread_mutex_lock(&s_inputQueueMutex);
             if (s_keyTail == s_keyHead) {
                 pthread_mutex_unlock(&s_inputQueueMutex);
@@ -2534,6 +2835,7 @@ static inline int MapPhysYToLogical(float y) {
 JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_touchEvent(JNIEnv* env, jobject obj, jint action, jfloat x, jfloat y) {
     int pid = (action >> 8) & 0x3;
     int masked = (int)(action & 0xFF);
+    if (masked == 0) EnsureAndroidLiveEditTextOnUiThread(env);
     int lx = MapPhysXToLogical(x);
     int ly = MapPhysYToLogical(y);
     pthread_mutex_lock(&s_inputQueueMutex);
@@ -2551,6 +2853,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_touchEvent(JNIEnv* env, 
 JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_multiTouchEvent(JNIEnv* env, jobject obj, jint pointerId, jint action, jfloat x, jfloat y) {
     int pid = (int)(pointerId & 3);
     int masked = (int)(action & 0xFF);
+    if (masked == 0) EnsureAndroidLiveEditTextOnUiThread(env);
     int lx = MapPhysXToLogical(x);
     int ly = MapPhysYToLogical(y);
     pthread_mutex_lock(&s_inputQueueMutex);
