@@ -18,6 +18,19 @@ def make_png(w, h):
         return struct.pack(~_GT_I~, len(d)) + t + d + struct.pack(~_GT_I~, zlib.crc32(t + d) _AMP_ 0xffffffff)
     ihdr = struct.pack(~_GT_IIBBBBB~, w, h, 8, 2, 0, 0, 0)
     return b~\x89PNG\r\n\x1a\n~ + chk(b~IHDR~, ihdr) + chk(b~IDAT~, zlib.compress(raw, 9)) + chk(b~IEND~, b~~)
+import json
+def make_png(w, h):
+    raw = b''
+    for y in range(h):
+        row = bytearray([0])
+        for x in range(w):
+            bdr = (min(x, y, w - 1 - x, h - 1 - y) in range(w // 16))
+            row.extend((218, 165, 32) if bdr else (19, 27, 40))
+        raw += bytes(row)
+    def chk(t, d):
+        return struct.pack('!I', len(d)) + t + d + struct.pack('!I', zlib.crc32(t + d))
+    ihdr = struct.pack('!IIBBBBB', w, h, 8, 2, 0, 0, 0)
+    return b'\x89PNG\r\n\x1a\n' + chk(b'IHDR', ihdr) + chk(b'IDAT', zlib.compress(raw, 9)) + chk(b'IEND', b'')
 def prepare_bundle():
     os.makedirs('Assets.xcassets/AppIcon.appiconset', exist_ok=True)
     icons = [('icon120.png',120,'iphone','60x60','2x'),('icon180.png',180,'iphone','60x60','3x'),('icon152.png',152,'ipad','76x76','2x'),('icon167.png',167,'ipad','83.5x83.5','2x'),('icon1024.png',1024,'ios-marketing','1024x1024','1x')]
