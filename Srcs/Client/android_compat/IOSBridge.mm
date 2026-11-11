@@ -236,6 +236,21 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
     [self presentViewController:al animated:YES completion:nil];
 }
 
+- (void)glkView:(GLKView*)view drawInRect:(CGRect)rect {
+    [EAGLContext setCurrentContext:self.context];
+    if (!_engineInitialized) {
+        CGFloat scale = [[UIScreen mainScreen] nativeScale];
+        int physW = (int)(view.bounds.size.width * scale + 0.5);
+        int physH = (int)(view.bounds.size.height * scale + 0.5);
+        if (physW > 0 && physH > 0) {
+            _engineInitialized = true;
+            Java_com_metin2_client_NativeLib_init(nullptr, nullptr, nullptr, physW, physH);
+        }
+        return;
+    }
+    Java_com_metin2_client_NativeLib_render(nullptr, nullptr);
+}
+
 - (int)slotForTouch:(UITouch*)touch allocate:(bool)alloc {
     for (int i = 0; i < 4; ++i) {
         if (_touchSlots[i] == touch) return i;

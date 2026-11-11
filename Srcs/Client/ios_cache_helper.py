@@ -1,6 +1,8 @@
-import hashlib, json, os, sys
+import hashlib, json, os, shutil, sys
 DB = 'build_ios/file_mtimes.json'
 mode = sys.argv[1]
+if mode == 'restore':
+    shutil.rmtree('build_ios/Release-iphoneos/M2WorldOnline.app', ignore_errors=True)
 old = json.load(open(DB)) if os.path.exists(DB) else {}
 cur = {}
 for root, dirs, files in os.walk('..'):
