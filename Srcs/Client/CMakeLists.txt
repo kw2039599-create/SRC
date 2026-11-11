@@ -13,11 +13,11 @@ add_definitions(-DBUILDING_GRANNY_STATIC=1)
 add_definitions(-DCRYPTOPP_DISABLE_ASM -D_LIBCPP_ENABLE_CXX17_REMOVED_FEATURES=1 -D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION=1)
 
 if(ANDROID)
-    add_definitions(-DANDROID -D__ANDROID__)
+    add_definitions(-DANDROID)
 elseif(APPLE)
     set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/android_compat)
-    add_definitions(-DANDROID -D__ANDROID__)
+    add_definitions(-DANDROID)
 endif()
 
 # 1. Build Granny 3D from Extern/granny/source

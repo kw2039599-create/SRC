@@ -43,7 +43,8 @@ if mode == 'restore':
     shutil.rmtree('build_ios/Release-iphoneos/M2WorldOnline.app', ignore_errors=True)
     if old_epoch != CACHE_EPOCH:
         print(f'[ios_cache_helper] Cache epoch updated ({old_epoch} -> {CACHE_EPOCH}). Performing clean rebuild of build_ios...')
-        shutil.rmtree('build_ios', ignore_errors=True)
+        shutil.rmtree('build_ios/build/world_mobile.build', ignore_errors=True)
+        shutil.rmtree('build_ios/build/XCBuildData', ignore_errors=True)
     elif old_hdr_hash != cur_hdr_hash:
         print('[ios_cache_helper] Header/CMakeLists change detected! Clearing world_mobile object files...')
         shutil.rmtree('build_ios/build/world_mobile.build', ignore_errors=True)
