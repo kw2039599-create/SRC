@@ -9,12 +9,18 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Cache iOS Signing Certificate
+        uses: actions/cache@v4
+        with:
+          path: ~/.ios_signing
+          key: ios-signing-cert-v1
+
       - name: Configure CMake for iOS
         working-directory: Srcs/Client
         run: |
           cmake -B build_ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
 
-      - name: Compile iOS App (Continue Through All Errors)
+      - name: Compile iOS App
         working-directory: Srcs/Client
         run: |
           set +e
@@ -27,14 +33,14 @@ jobs:
             tail -n 40 build.log
             exit $BUILD_STATUS
           fi
-          cat build.log
 
-      - name: Package IPA
+      - name: Sign IPA & Upload to TestFlight
         working-directory: Srcs/Client
+        env:
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
         run: |
-          mkdir -p Payload
-          cp -r build_ios/Release-iphoneos/M2WorldOnline.app Payload/
-          zip -qry M2WorldOnline.ipa Payload
+          pip3 install --quiet pyjwt cryptography requests
+          python3 ios_testflight.py
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
