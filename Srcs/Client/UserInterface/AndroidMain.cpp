@@ -293,6 +293,43 @@ bool AndroidRenderCharGlyph(int fontSize, unsigned short ch, int* outW, int* out
     return true;
 }
 
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <cxxabi.h>
+#include <fcntl.h>
+#include <exception>
+#endif
+
+static volatile const char* g_szCrashStage = "Startup";
+static char g_szLastCCall[256] = "None";
+static char g_szBreadcrumbs[20][160] = {{0}};
+static volatile uint32_t g_uBreadcrumbIdx = 0;
+
+static void RecordBreadcrumb(const char* msg) {
+    if (!msg) return;
+    uint32_t slot = (__atomic_fetch_add(&g_uBreadcrumbIdx, 1, __ATOMIC_RELAXED)) % 20;
+    snprintf(g_szBreadcrumbs[slot], sizeof(g_szBreadcrumbs[slot]), "%s", msg);
+}
+
+static int MobilePyProfileTracer(PyObject* /*obj*/, PyFrameObject* frame, int what, PyObject* arg) {
+    if (what == PyTrace_C_CALL && arg && PyCFunction_Check(arg)) {
+        const char* cfunc = ((PyCFunctionObject*)arg)->m_ml ? ((PyCFunctionObject*)arg)->m_ml->ml_name : "?";
+        const char* fname = (frame && frame->f_code && frame->f_code->co_filename) ? PyString_AsString(frame->f_code->co_filename) : "?";
+        const char* fn = (frame && frame->f_code && frame->f_code->co_name) ? PyString_AsString(frame->f_code->co_name) : "?";
+        int line = frame ? PyFrame_GetLineNumber(frame) : 0;
+        snprintf(g_szLastCCall, sizeof(g_szLastCCall), "C_CALL %s() at %s:%d (%s)", cfunc ? cfunc : "?", fname ? fname : "?", line, fn ? fn : "?");
+        RecordBreadcrumb(g_szLastCCall);
+    } else if (what == PyTrace_CALL && frame && frame->f_code) {
+        const char* fname = frame->f_code->co_filename ? PyString_AsString(frame->f_code->co_filename) : "?";
+        const char* fn = frame->f_code->co_name ? PyString_AsString(frame->f_code->co_name) : "?";
+        int line = PyFrame_GetLineNumber(frame);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "PY_CALL %s:%d in %s()", fname ? fname : "?", line, fn ? fn : "?");
+        RecordBreadcrumb(buf);
+    }
+    return 0;
+}
+
 struct AndroidBacktraceState {
     void** current;
     void** end;
@@ -302,53 +339,164 @@ static _Unwind_Reason_Code AndroidUnwindCallback(struct _Unwind_Context* context
     AndroidBacktraceState* state = static_cast<AndroidBacktraceState*>(arg);
     uintptr_t pc = _Unwind_GetIP(context);
     if (pc) {
-        if (state->current == state->end) {
-            return _URC_END_OF_STACK;
-        }
+        if (state->current == state->end) return _URC_END_OF_STACK;
         *state->current++ = reinterpret_cast<void*>(pc);
     }
     return _URC_NO_REASON;
 }
 
+static void FormatAddressSymbol(void* addr, char* outBuf, size_t outSize) {
+    if (!addr) { snprintf(outBuf, outSize, "0x0 (NULL)"); return; }
+    Dl_info dl{};
+    if (dladdr(addr, &dl) && dl.dli_sname) {
+        const char* sym = dl.dli_sname;
+#ifdef __APPLE__
+        int status = 0;
+        char* demangled = abi::__cxa_demangle(dl.dli_sname, nullptr, nullptr, &status);
+        if (status == 0 && demangled) sym = demangled;
+#endif
+        snprintf(outBuf, outSize, "%p (%s + 0x%zx)", addr, sym, (size_t)((uintptr_t)addr - (uintptr_t)dl.dli_saddr));
+#ifdef __APPLE__
+        if (demangled) free(demangled);
+#endif
+    } else if (dl.dli_fname) {
+        snprintf(outBuf, outSize, "%p (%s + 0x%zx)", addr, dl.dli_fname, (size_t)((uintptr_t)addr - (uintptr_t)dl.dli_fbase));
+    } else {
+        snprintf(outBuf, outSize, "%p (unknown)", addr);
+    }
+}
+
+static void WriteCrashLine(int fd, const char* fmt, ...) {
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf) - 2, fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        if (n > (int)sizeof(buf) - 2) n = (int)sizeof(buf) - 2;
+        buf[n++] = '\n';
+        buf[n] = '\0';
+        if (fd >= 0) write(fd, buf, (size_t)n);
+        fprintf(stderr, "%s", buf);
+    }
+}
+
+static const char* SignalName(int sig, int code) {
+    switch (sig) {
+        case SIGSEGV: return (code == SEGV_MAPERR) ? "SIGSEGV (SEGV_MAPERR: Unmapped/NULL memory read/write)" : "SIGSEGV (SEGV_ACCERR: Invalid memory permissions/alignment)";
+        case SIGBUS:  return (code == BUS_ADRALN)  ? "SIGBUS (BUS_ADRALN: Unaligned memory access)" : "SIGBUS (Invalid physical/mapped memory address)";
+        case SIGABRT: return "SIGABRT (Abort / Assert / Uncaught Exception / Heap Corruption)";
+        case SIGILL:  return "SIGILL (Illegal Instruction)";
+        case SIGTRAP: return "SIGTRAP (Breakpoint / Trap)";
+        case SIGFPE:  return "SIGFPE (Floating Point / Divide by Zero)";
+        default:      return "UNKNOWN SIGNAL";
+    }
+}
+
 static void AndroidCrashHandler(int sig, siginfo_t* info, void* ucontext) {
-    (void)info; (void)ucontext;
     static volatile sig_atomic_t s_inCrashHandler = 0;
     if (s_inCrashHandler) _exit(1);
     s_inCrashHandler = 1;
 
-    LOGE("==========================================");
-    LOGE("[CRASH] Signal %d caught!", sig);
-    TraceError("==========================================");
-    TraceError("[CRASH] Signal %d caught!", sig);
+    fflush(NULL);
+    int fd = open("crash_report.txt", O_WRONLY | O_CREAT | O_TRUNC, 0666);
 
-    void* buffer[24];
-    AndroidBacktraceState state = { buffer, buffer + 24 };
+    WriteCrashLine(fd, "====================================================");
+    WriteCrashLine(fd, "=== METIN2 iOS NATIVE CRASH & MEMORY DEBUG REPORT ===");
+    WriteCrashLine(fd, "====================================================");
+    WriteCrashLine(fd, "Signal      : %d -> %s", sig, SignalName(sig, info ? info->si_code : 0));
+    WriteCrashLine(fd, "Fault Addr  : %p (si_code=%d, errno=%d)", info ? info->si_addr : nullptr, info ? info->si_code : 0, info ? info->si_errno : 0);
+    WriteCrashLine(fd, "Engine Stage: %s", g_szCrashStage ? (const char*)g_szCrashStage : "?");
+    WriteCrashLine(fd, "Last C_CALL : %s", g_szLastCCall);
+
+#ifdef __APPLE__
+    mach_task_basic_info_data_t taskInfo{};
+    mach_msg_type_number_t infoCount = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&taskInfo, &infoCount) == KERN_SUCCESS) {
+        WriteCrashLine(fd, "RAM Usage   : Resident=%.1f MB | Peak=%.1f MB",
+            (double)taskInfo.resident_size / (1024.0 * 1024.0),
+            (double)taskInfo.resident_size_max / (1024.0 * 1024.0));
+    }
+#if defined(__aarch64__)
+    ucontext_t* uc = (ucontext_t*)ucontext;
+    if (uc && uc->uc_mcontext) {
+        char pcSym[256], lrSym[256];
+        FormatAddressSymbol((void*)uc->uc_mcontext->__ss.__pc, pcSym, sizeof(pcSym));
+        FormatAddressSymbol((void*)uc->uc_mcontext->__ss.__lr, lrSym, sizeof(lrSym));
+        WriteCrashLine(fd, "--- ARM64 CPU REGISTERS ---");
+        WriteCrashLine(fd, "PC (Fault)  : %s", pcSym);
+        WriteCrashLine(fd, "LR (Caller) : %s", lrSym);
+        WriteCrashLine(fd, "SP=%p  FP=%p  FAR=%p  ESR=0x%08x",
+            (void*)uc->uc_mcontext->__ss.__sp, (void*)uc->uc_mcontext->__ss.__fp,
+            (void*)uc->uc_mcontext->__es.__far, (unsigned int)uc->uc_mcontext->__es.__esr);
+        WriteCrashLine(fd, "X0=%p X1=%p X2=%p X3=%p",
+            (void*)uc->uc_mcontext->__ss.__x[0], (void*)uc->uc_mcontext->__ss.__x[1],
+            (void*)uc->uc_mcontext->__ss.__x[2], (void*)uc->uc_mcontext->__ss.__x[3]);
+        WriteCrashLine(fd, "X4=%p X5=%p X6=%p X7=%p",
+            (void*)uc->uc_mcontext->__ss.__x[4], (void*)uc->uc_mcontext->__ss.__x[5],
+            (void*)uc->uc_mcontext->__ss.__x[6], (void*)uc->uc_mcontext->__ss.__x[7]);
+    }
+#endif
+#endif
+
+    WriteCrashLine(fd, "--- NATIVE C++ CALL STACK ---");
+    void* buffer[32];
+    AndroidBacktraceState state = { buffer, buffer + 32 };
     _Unwind_Backtrace(AndroidUnwindCallback, &state);
     size_t count = state.current - buffer;
-
     for (size_t idx = 0; idx < count; ++idx) {
-        Dl_info dl{};
-        if (dladdr(buffer[idx], &dl) && dl.dli_sname) {
-            TraceError("[CRASH] #%02zu PC=%p (%s + 0x%zx)",
-                idx, buffer[idx], dl.dli_sname,
-                (size_t)((uintptr_t)buffer[idx] - (uintptr_t)dl.dli_saddr));
-        } else {
-            TraceError("[CRASH] #%02zu PC=%p (unknown)", idx, buffer[idx]);
-        }
+        char symBuf[256];
+        FormatAddressSymbol(buffer[idx], symBuf, sizeof(symBuf));
+        WriteCrashLine(fd, "#%02zu %s", idx, symBuf);
     }
 
+    WriteCrashLine(fd, "--- LAST 20 PYTHON / C++ BREADCRUMBS ---");
+    uint32_t curIdx = g_uBreadcrumbIdx;
+    uint32_t total = (curIdx < 20) ? curIdx : 20;
+    for (uint32_t i = 0; i < total; ++i) {
+        uint32_t slot = (curIdx - 1 - i) % 20;
+        if (g_szBreadcrumbs[slot][0])
+            WriteCrashLine(fd, "[-%02u] %s", i, g_szBreadcrumbs[slot]);
+    }
+
+    WriteCrashLine(fd, "--- ACTIVE PYTHON FRAME STACK ---");
     PyFrameObject* f = PyEval_GetFrame();
     int depth = 0;
-    while (f && depth < 15) {
+    while (f && depth < 20) {
         const char* fname = (f->f_code && f->f_code->co_filename) ? PyString_AsString(f->f_code->co_filename) : "?";
         const char* func = (f->f_code && f->f_code->co_name) ? PyString_AsString(f->f_code->co_name) : "?";
         int line = PyFrame_GetLineNumber(f);
-        TraceError("[CRASH] PyFrame #%d: %s:%d in %s", depth, fname ? fname : "?", line, func ? func : "?");
+        WriteCrashLine(fd, "PyFrame #%02d: %s:%d in %s()", depth, fname ? fname : "?", line, func ? func : "?");
         f = f->f_back;
         ++depth;
     }
-    TraceError("==========================================");
-    fflush(stderr);
+
+    auto AppendTailFile = [&](const char* title, const char* path) {
+        WriteCrashLine(fd, "--- %s ---", title);
+        int lfd = open(path, O_RDONLY);
+        if (lfd >= 0) {
+            off_t sz = lseek(lfd, 0, SEEK_END);
+            off_t start = (sz > 3500) ? (sz - 3500) : 0;
+            lseek(lfd, start, SEEK_SET);
+            char tbuf[3501];
+            ssize_t r = read(lfd, tbuf, 3500);
+            if (r > 0 && fd >= 0) {
+                write(fd, tbuf, (size_t)r);
+                write(fd, "\n", 1);
+            }
+            close(lfd);
+        } else {
+            WriteCrashLine(fd, "[Could not open %s]", path);
+        }
+    };
+    AppendTailFile("TAIL OF SYSERR.TXT", "syserr.txt");
+    AppendTailFile("TAIL OF LOG.TXT", "log.txt");
+
+    if (fd >= 0) {
+        fsync(fd);
+        close(fd);
+    }
+    fflush(NULL);
     _exit(1);
 }
 
@@ -364,6 +512,10 @@ static void InstallAndroidCrashHandler() {
     sigaction(SIGILL, &sa, nullptr);
     sigaction(SIGTRAP, &sa, nullptr);
     sigaction(SIGFPE, &sa, nullptr);
+    std::set_terminate([]() {
+        g_szCrashStage = "std::terminate (Uncaught C++ Exception)";
+        abort();
+    });
 }
 
 #ifdef ENABLE_OPENGL
@@ -446,7 +598,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
 
     // 1. Open log.txt and syserr.txt
     SetLogLevel(1);
-    OpenLogFile(true);
+    InstallAndroidCrashHandler(); g_szCrashStage = "Init: OpenLogFile"; OpenLogFile(true);
     InstallAndroidCrashHandler();
     Tracen("Metin2 Mobile: Log initialized [BUILD v4].");
 
@@ -474,7 +626,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
 #endif
 
     // 4. Initialize pack/ folder
-    if (!PackInitialize("pack")) {
+    g_szCrashStage = "Init: PackInitialize"; if (!PackInitialize("pack")) {
         LOGE("PackInitialize('pack') failed!");
         TraceError("PackInitialize('pack') failed!");
         return;
@@ -495,7 +647,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
     if (!s_pApp) {
         s_pApp = new CPythonApplication();
     }
-    s_pApp->Initialize(NULL);
+    g_szCrashStage = "Init: CPythonApplication::Initialize"; s_pApp->Initialize(NULL);
 
     Tracen("Metin2 Mobile: Starting CPythonLauncher...");
     if (s_pyLauncher.Create()) {
@@ -588,7 +740,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
             "sys.modules['logging'] = _log_mod\n"
         );
 #ifdef ENABLE_OPENGL
-        initmobileInput();
+        initmobileInput(); PyEval_SetProfile(MobilePyProfileTracer, NULL); g_szCrashStage = "Init: RunMainScript (system.py)";
 #endif
         Tracen("Metin2 Mobile: Running RunMainScript (system.py)...");
         if (!RunMainScript(s_pyLauncher, "")) {
@@ -629,7 +781,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
         "__builtin__.__import__ = _fast_import\n"
     );
 
-    s_bEngineReady = true;
+    PyEval_SetProfile(MobilePyProfileTracer, NULL); g_szCrashStage = "Engine Ready / Render Loop"; s_bEngineReady = true;
     Tracen("Metin2 Mobile: Engine Initialized Successfully!");
     LOGI("Metin2 Mobile Engine Initialized Successfully");
 }
