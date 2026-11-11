@@ -39,7 +39,7 @@ jobs:
         env:
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
         run: |
-          pip3 install --quiet pyjwt cryptography requests
+          pip3 install --break-system-packages --quiet pyjwt cryptography requests
           python3 ios_testflight.py
 
       - name: Upload IPA Artifact

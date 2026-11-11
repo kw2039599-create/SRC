@@ -1,24 +1,11 @@
 import base64, json, os, plistlib, shutil, subprocess, sys, time, zlib, struct
 import jwt, requests
-KEY_ID = ~22DQZB7VR9~
-ISSUER_ID = ~9409b0ba-08b8-4acb-b6e1-55409b555de4~
-TEAM_ID = ~6A593PU2AF~
-BUNDLE_ID = ~com.m2world.online~
-APP_NAME = ~M2World Online~
-APP_PATH = ~build_ios/Release-iphoneos/M2WorldOnline.app~
-def make_png(w, h):
-    raw = b~~
-    for y in range(h):
-        row = bytearray([0])
-        for x in range(w):
-            bdr = (x _LT_ w//16 or x _GT_= w - w//16 or y _LT_ h//16 or y _GT_= h - h//16)
-            row.extend((218, 165, 32) if bdr else (19, 27, 40))
-        raw += bytes(row)
-    def chk(t, d):
-        return struct.pack(~_GT_I~, len(d)) + t + d + struct.pack(~_GT_I~, zlib.crc32(t + d) _AMP_ 0xffffffff)
-    ihdr = struct.pack(~_GT_IIBBBBB~, w, h, 8, 2, 0, 0, 0)
-    return b~\x89PNG\r\n\x1a\n~ + chk(b~IHDR~, ihdr) + chk(b~IDAT~, zlib.compress(raw, 9)) + chk(b~IEND~, b~~)
-import json
+KEY_ID = '22DQZB7VR9'
+ISSUER_ID = '9409b0ba-08b8-4acb-b6e1-55409b555de4'
+TEAM_ID = '6A593PU2AF'
+BUNDLE_ID = 'com.m2world.online'
+APP_NAME = 'M2World Online'
+APP_PATH = 'build_ios/Release-iphoneos/M2WorldOnline.app'
 def make_png(w, h):
     raw = b''
     for y in range(h):
@@ -33,7 +20,7 @@ def make_png(w, h):
     return b'\x89PNG\r\n\x1a\n' + chk(b'IHDR', ihdr) + chk(b'IDAT', zlib.compress(raw, 9)) + chk(b'IEND', b'')
 def prepare_bundle():
     os.makedirs('Assets.xcassets/AppIcon.appiconset', exist_ok=True)
-    icons = [('icon120.png',120,'iphone','60x60','2x'),('icon180.png',180,'iphone','60x60','3x'),('icon152.png',152,'ipad','76x76','2x'),('icon167.png',167,'ipad','83.5x83.5','2x'),('icon1024.png',1024,'ios-marketing','1024x1024','1x')]
+    icons = [('icon40.png',40,'iphone','20x20','2x'),('icon60.png',60,'iphone','20x20','3x'),('icon58.png',58,'iphone','29x29','2x'),('icon87.png',87,'iphone','29x29','3x'),('icon80.png',80,'iphone','40x40','2x'),('icon120a.png',120,'iphone','40x40','3x'),('icon120.png',120,'iphone','60x60','2x'),('icon180.png',180,'iphone','60x60','3x'),('icon76.png',76,'ipad','76x76','1x'),('icon152.png',152,'ipad','76x76','2x'),('icon167.png',167,'ipad','83.5x83.5','2x'),('icon1024.png',1024,'ios-marketing','1024x1024','1x')]
     imgs = []
     for fn, sz, idiom, size_s, scale in icons:
         open(f'Assets.xcassets/AppIcon.appiconset/{fn}', 'wb').write(make_png(sz, sz))
@@ -58,8 +45,8 @@ def prepare_bundle():
     pl['ITSAppUsesNonExemptEncryption'] = False
     pl['UIDeviceFamily'] = [1, 2]
     orient = ['UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight', 'UIInterfaceOrientationPortrait', 'UIInterfaceOrientationPortraitUpsideDown']
-    pl['UISupportedInterfaceOrientations'] = orient
-    pl['UISupportedInterfaceOrientations' + 'ipad'] = orient
+    pl['UISupportedInterfaceOrientations'] = orient[:2]
+    pl['UISupportedInterfaceOrientations' + chr(126) + 'ipad'] = orient
     plistlib.dump(pl, open(ip_path, 'wb'))
     subprocess.check_call(['plutil', '-convert', 'binary1', ip_path])
 def get_p8():
@@ -81,7 +68,8 @@ def sign_and_upload(p8):
     if not bid:
         cr = requests.post(f'{base}/bundleIds', headers=hdr, json={'data': {'type': 'bundleIds', 'attributes': {'identifier': BUNDLE_ID, 'name': 'M2World Online', 'platform': 'IOS'}}}).json()
         bid = cr['data']['id']
-    cdir = os.path.expanduser(''/.ios_signing')
+        print('Registered Bundle ID:', BUNDLE_ID)
+    cdir = os.environ['HOME'] + '/.ios_signing'
     os.makedirs(cdir, exist_ok=True)
     kfile, cfile, idfile = f'{cdir}/dist.key', f'{cdir}/dist.cer', f'{cdir}/cert.id'
     cid = open(idfile).read().strip() if os.path.exists(idfile) else None
@@ -92,12 +80,13 @@ def sign_and_upload(p8):
         subprocess.check_call(['openssl', 'req', '-new', '-key', kfile, '-out', f'{cdir}/dist.csr', '-subj', '/CN=M2World Online/O=M2World/C=US'])
         csr = ''.join(ln for ln in open(f'{cdir}/dist.csr').read().splitlines() if not ln.startswith('-----'))
         cr = requests.post(f'{base}/certificates', headers=hdr, json={'data': {'type': 'certificates', 'attributes': {'certificateType': 'IOS_DISTRIBUTION', 'csrContent': csr}}})
-        if cr.status_code >= 400:
-            ex = requests.get(f'{base}/certificates?filter[certificateType]=IOS_DISTRIBUTION', headers=hdr).json().get('data', [])
-            if ex:
-                old_id = ex[0]['id']
-                requests.delete(f'{base}/certificates/{old_id}', headers=hdr)
-                cr = requests.post(f'{base}/certificates', headers=hdr, json={'data': {'type': 'certificates', 'attributes': {'certificateType': 'IOS_DISTRIBUTION', 'csrContent': csr}}})
+        if cr.status_code != 201:
+            ex = requests.get(f'{base}/certificates', headers=hdr).json().get('data', [])
+            for item in ex:
+                if 'DISTRIBUTION' in item['attributes'].get('certificateType', ''):
+                    oid = item['id']
+                    requests.delete(f'{base}/certificates/{oid}', headers=hdr)
+            cr = requests.post(f'{base}/certificates', headers=hdr, json={'data': {'type': 'certificates', 'attributes': {'certificateType': 'IOS_DISTRIBUTION', 'csrContent': csr}}})
         cdata = cr.json()['data']
         cid = cdata['id']
         open(cfile, 'wb').write(base64.b64decode(cdata['attributes']['certificateContent']))
@@ -130,7 +119,7 @@ def sign_and_upload(p8):
     if not apps:
         print('=== ACTION REQUIRED: Go to https://appstoreconnect.apple.com/apps -> Add App -> Select com.m2world.online ===')
         return
-    adir = os.path.expanduser(''/.appstoreconnect/private' + '_keys')
+    adir = os.environ['HOME'] + '/.appstoreconnect/private' + '_keys'
     os.makedirs(adir, exist_ok=True)
     open(f'{adir}/AuthKey_{KEY_ID}.p8', 'w').write(p8)
     subprocess.check_call(['xcrun', 'altool', '--upload-app', '--type', 'ios', '-f', 'M2WorldOnline.ipa', '--apiKey', KEY_ID, '--apiIssuer', ISSUER_ID])
