@@ -4,7 +4,7 @@ on:
 
 jobs:
   build-ios:
-    runs-on: macos-15-intel
+    runs-on: macos-15
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -15,24 +15,36 @@ jobs:
           path: ~/.ios_signing
           key: ios-signing-cert-v1
 
-      - name: Configure CMake for iOS
-        working-directory: Srcs/Client
-        run: |
-          cmake -B build_ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+      - name: Cache iOS Build Objects
+        uses: actions/cache@v4
+        with:
+          path: Srcs/Client/build_ios
+          key: ios-build-cache-${{ github.run_id }}
+          restore-keys: |
+            ios-build-cache-
 
-      - name: Compile iOS App
+      - name: Configure & Compile iOS App
         working-directory: Srcs/Client
         run: |
+          python3 ios_cache_helper.py restore
+          if [ ! -f build_ios/CMakeCache.txt ]; then
+            cmake -B build_ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+          fi
           set +e
-          cmake --build build_ios --config Release -- -sdk iphoneos -IDEBuildingContinueBuildingAfterErrors=YES -PBXBuildsContinueAfterErrors=YES -continueBuildingAfterErrors=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1
+          cmake --build build_ios --config Release -- -sdk iphoneos -jobs 8 -IDEBuildingContinueBuildingAfterErrors=YES -PBXBuildsContinueAfterErrors=YES -continueBuildingAfterErrors=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1
           BUILD_STATUS=$?
           if [ $BUILD_STATUS -ne 0 ]; then
-            echo '================ ALL COMPILER ERRORS (BEGINNING TO END) ================'
+            rm -rf build_ios
+            cmake -B build_ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+            cmake --build build_ios --config Release -- -sdk iphoneos -jobs 8 -IDEBuildingContinueBuildingAfterErrors=YES -PBXBuildsContinueAfterErrors=YES -continueBuildingAfterErrors=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1
+            BUILD_STATUS=$?
+          fi
+          if [ $BUILD_STATUS -ne 0 ]; then
             grep -E '(: error: |: fatal error: |Undefined symbols|ld: )' build.log | awk '!seen[$0]++'
-            echo '========================================================================'
             tail -n 40 build.log
             exit $BUILD_STATUS
           fi
+          python3 ios_cache_helper.py save
 
       - name: Sign IPA & Upload to TestFlight
         working-directory: Srcs/Client

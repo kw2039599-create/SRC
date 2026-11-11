@@ -15,6 +15,7 @@ add_definitions(-DCRYPTOPP_DISABLE_ASM -D_LIBCPP_ENABLE_CXX17_REMOVED_FEATURES=1
 if(ANDROID)
     add_definitions(-DANDROID -D__ANDROID__)
 elseif(APPLE)
+    set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/android_compat)
     add_definitions(-DANDROID)
 endif()
@@ -501,6 +502,7 @@ file(GLOB USER_INTERFACE_SOURCES
 list(FILTER USER_INTERFACE_SOURCES EXCLUDE REGEX ".*(Copy|old|bak)$")
 
 if(APPLE)
+    set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     list(APPEND USER_INTERFACE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/android_compat/IOSBridge.mm")
 endif()
 
@@ -534,6 +536,7 @@ set(METIN2_ALL_SOURCES
 )
 
 if(APPLE)
+    set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     add_executable(world_mobile MACOSX_BUNDLE ${METIN2_ALL_SOURCES})
         set_target_properties(world_mobile PROPERTIES
         OUTPUT_NAME "M2WorldOnline"
@@ -634,6 +637,7 @@ if(ANDROID)
     )
     target_link_options(world_mobile PRIVATE "-Wl,-error-limit=0" "-Wl,--export-dynamic")
 elseif(APPLE)
+    set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     target_link_libraries(world_mobile
         granny2_static
         cryptopp_static
@@ -651,5 +655,6 @@ elseif(APPLE)
     )
 endif()
 if(APPLE)
+    set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     target_compile_definitions(world_mobile PRIVATE __ANDROID__=1)
 endif()

@@ -26,7 +26,7 @@ def prepare_bundle():
         open(f'Assets.xcassets/AppIcon.appiconset/{fn}', 'wb').write(make_png(sz, sz))
         imgs.append({'filename': fn, 'idiom': idiom, 'size': size_s, 'scale': scale})
     open('Assets.xcassets/AppIcon.appiconset/Contents.json', 'w').write(json.dumps({'images': imgs, 'info': {'version': 1, 'author': 'xcode'}}))
-    subprocess.check_call(['xcrun', 'actool', 'Assets.xcassets', '--compile', APP_PATH, '--platform', 'iphoneos', '--minimum-deployment-target', '14.0', '--app-icon', 'AppIcon', '--output-partial-info-plist', 'partial_icons.plist'])
+    subprocess.check_call(['xcrun', 'actool', 'Assets.xcassets', '--compile', APP_PATH, '--platform', 'iphoneos', '--minimum-deployment-target', '15.0', '--app-icon', 'AppIcon', '--output-partial-info-plist', 'partial_icons.plist'])
     sb = '<?xml version="1.0" encoding="UTF-8"?><document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="21507" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM"><device id="retina6_12" orientation="landscape" appearance="light"/><dependencies><plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="21505"/><capability name="Safe area layout guides" minToolsVersion="9.0"/><capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/></dependencies><scenes><scene sceneID="EHf-IW-A2E"><objects><viewController id="01J-lp-oVM" sceneMemberID="viewController"><view key="view" contentMode="scaleToFill" id="Ze5-6b-2t3"><rect key="frame" x="0.0" y="0.0" width="852" height="393"/><autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/><viewLayoutGuide key="safeArea" id="6Tk-OE-BBY"/><color key="backgroundColor" red="0.043" green="0.059" blue="0.090" alpha="1" colorSpace="custom" customColorSpace="sRGB"/></view></viewController><placeholder placeholderIdentifier="IBFirstResponder" id="iYj-Kq-Ea1" userLabel="First Responder" sceneMemberID="firstResponder"/></objects></scene></scenes></document>'
     open('LaunchScreen.storyboard', 'w').write(sb)
     subprocess.check_call(['xcrun', 'ibtool', '--compile', f'{APP_PATH}/LaunchScreen.storyboardc', 'LaunchScreen.storyboard'])
@@ -52,7 +52,7 @@ def prepare_bundle():
         pl['DTXcode'] = '2600'
         pl['DTXcodeBuild'] = '17A324'
         bp = f'{APP_PATH}/M2WorldOnline'
-        subprocess.check_call(['xcrun', 'vtool', '-set-build-version', 'ios', '14.0', '26.0', '-tool', 'ld', '1221.4', '-replace', '-output', bp, bp])
+        subprocess.check_call(['xcrun', 'vtool', '-set-build-version', 'ios', '15.0', '26.0', '-tool', 'ld', '1221.4', '-replace', '-output', bp, bp])
     orient = ['UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight', 'UIInterfaceOrientationPortrait', 'UIInterfaceOrientationPortraitUpsideDown']
     pl['UISupportedInterfaceOrientations'] = orient[:2]
     pl['UISupportedInterfaceOrientations' + chr(126) + 'ipad'] = orient
