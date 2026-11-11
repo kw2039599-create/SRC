@@ -534,8 +534,8 @@ set(METIN2_ALL_SOURCES
 )
 
 if(APPLE)
-    add_executable(metin2_mobile MACOSX_BUNDLE ${METIN2_ALL_SOURCES})
-        set_target_properties(metin2_mobile PROPERTIES
+    add_executable(world_mobile MACOSX_BUNDLE ${METIN2_ALL_SOURCES})
+        set_target_properties(world_mobile PROPERTIES
         OUTPUT_NAME "M2WorldOnline"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.m2world.online"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.m2world.online"
@@ -554,10 +554,13 @@ if(APPLE)
         "XCODE_ATTRIBUTE_INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=ipad*]" "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     )
 else()
-    add_library(metin2_mobile SHARED ${METIN2_ALL_SOURCES})
+    add_library(world_mobile SHARED ${METIN2_ALL_SOURCES})
 endif()
 
-target_include_directories(metin2_mobile PRIVATE
+if(ANDROID)
+    set_target_properties(world_mobile PROPERTIES OUTPUT_NAME "metin2_mobile")
+endif()
+target_include_directories(world_mobile PRIVATE
     "${PY_GEN_DIR}"
     "${PY_GEN_DIR}/Python27"
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -609,7 +612,7 @@ if(ANDROID OR APPLE)
         file(WRITE "${DUMMY_LIB_DIR}/${WIN_LIB}" "")
     endforeach()
 
-    target_link_directories(metin2_mobile PRIVATE "${DUMMY_LIB_DIR}")
+    target_link_directories(world_mobile PRIVATE "${DUMMY_LIB_DIR}")
 endif()
 
 if(ANDROID)
@@ -618,7 +621,7 @@ if(ANDROID)
     find_library(gles3-lib GLESv3)
     find_library(egl-lib EGL)
 
-    target_link_libraries(metin2_mobile
+    target_link_libraries(world_mobile
         granny2_static
         cryptopp_static
         python27_static
@@ -629,9 +632,9 @@ if(ANDROID)
         z
         m
     )
-    target_link_options(metin2_mobile PRIVATE "-Wl,-error-limit=0" "-Wl,--export-dynamic")
+    target_link_options(world_mobile PRIVATE "-Wl,-error-limit=0" "-Wl,--export-dynamic")
 elseif(APPLE)
-    target_link_libraries(metin2_mobile
+    target_link_libraries(world_mobile
         granny2_static
         cryptopp_static
         python27_static
@@ -648,5 +651,5 @@ elseif(APPLE)
     )
 endif()
 if(APPLE)
-    target_compile_definitions(metin2_mobile PRIVATE __ANDROID__=1)
+    target_compile_definitions(world_mobile PRIVATE __ANDROID__=1)
 endif()

@@ -64,7 +64,11 @@ extern "C" {
 #include <cstdarg>
 #include <dlfcn.h>
 #include <signal.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h>
+#else
 #include <ucontext.h>
+#endif
 #include <unwind.h>
 #include <Python27/frameobject.h>
 
