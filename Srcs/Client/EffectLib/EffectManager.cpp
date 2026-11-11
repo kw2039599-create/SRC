@@ -215,7 +215,9 @@ void CEffectManager::CreateEffectInstance(DWORD dwInstanceIndex, DWORD dwID)
 	CEffectData * pEffect;
 	if (!GetEffectData(dwID, &pEffect))
 	{
+#ifndef __ANDROID__
 		Tracef("CEffectManager::CreateEffectInstance - NO DATA :%d\n", dwID);
+#endif
 		return;
 	}
 
@@ -257,7 +259,9 @@ void CEffectManager::CreateUnsafeEffectInstance(DWORD dwEffectDataID, CEffectIns
 	CEffectData * pEffect{nullptr}; //@fixme030
 	if (!GetEffectData(dwEffectDataID, &pEffect))
 	{
+#ifndef __ANDROID__
 		Tracef("CEffectManager::CreateUnsafeEffectInstance - NO DATA :%d\n", dwEffectDataID);
+#endif
 		return;
 	}
 
@@ -443,7 +447,9 @@ void CEffectManager::CreateEffectInstanceWithScale(DWORD dwInstanceIndex, DWORD 
 	CEffectData* pEffect;
 	if (!GetEffectData(dwID, &pEffect))
 	{
+#ifndef __ANDROID__
 		Tracef("CEffectManager::CreateEffectInstance - NO DATA :%d\n", dwID);
+#endif
 		return;
 	}
 

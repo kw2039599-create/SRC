@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <chrono>
 
-int radomzPosition = (rand() % 5) + 1;
+int radomzPosition = 1;
 
 float z = 0.025f;
 float zMultiplier = 15.0f;
@@ -380,24 +380,28 @@ void CMapOutdoor::SetShadowTextureSize(WORD size)
 
 void CMapOutdoor::LoadDepthTerrainTexture(const char* textureName, IDirect3DTexture9** texture)
 {
-	if (!texture || *texture != nullptr)
+	if (!texture || *texture != nullptr || !textureName)
 		return;
 
 	CMappedFile	mappedFile;
-	LPCVOID		c_pvMap;
+	LPCVOID		c_pvMap = nullptr;
 
-	if (CEterPackManager::Instance().Get(mappedFile, textureName, &c_pvMap))
+	bool bFound = CEterPackManager::Instance().Get(mappedFile, textureName, &c_pvMap);
+#ifdef __ANDROID__
+	if (!bFound)
 	{
-		std::string strName(textureName);
-		D3DFORMAT targetFormat = D3DFMT_FROM_FILE;
-
-		// Compress uncompressed .jpg/.png terrain helper maps on load to save 75%+ RAM & VRAM
-		if (strName.find(".jpg") != std::string::npos)
-			targetFormat = D3DFMT_DXT1;
-		else if (strName.find(".png") != std::string::npos)
-			targetFormat = D3DFMT_DXT5;
-
-		// Cap 2K/4K terrain normal/roughness maps to 1024x1024 to prevent 32-bit RAM exhaustion
+		std::string lowerPath(textureName);
+		for (size_t i = 0; i < lowerPath.size(); ++i)
+		{
+			if (lowerPath[i] == '\\') lowerPath[i] = '/';
+			else lowerPath[i] = (char)tolower((unsigned char)lowerPath[i]);
+		}
+		bFound = CEterPackManager::Instance().Get(mappedFile, lowerPath.c_str(), &c_pvMap);
+	}
+#endif
+	if (bFound && c_pvMap)
+	{
+#ifdef __ANDROID__
 		if (FAILED(D3DXCreateTextureFromFileInMemoryEx(
 			ms_lpd3dDevice,
 			c_pvMap,
@@ -406,7 +410,7 @@ void CMapOutdoor::LoadDepthTerrainTexture(const char* textureName, IDirect3DText
 			1024,
 			D3DX_DEFAULT,
 			0,
-			targetFormat,
+			D3DFMT_FROM_FILE,
 			D3DPOOL_MANAGED,
 			D3DX_FILTER_LINEAR,
 			D3DX_FILTER_LINEAR,
@@ -414,8 +418,8 @@ void CMapOutdoor::LoadDepthTerrainTexture(const char* textureName, IDirect3DText
 			nullptr,
 			nullptr,
 			texture)))
+#endif
 		{
-			// Fallback to default loader if the texture format requires exact dimensions
 			if (FAILED(D3DXCreateTextureFromFileInMemory(ms_lpd3dDevice, static_cast<const char*>(c_pvMap), mappedFile.Size(), texture)))
 			{
 				TraceError("Texture not loaded: %s", textureName);
@@ -515,22 +519,23 @@ void CMapOutdoor::CreateCharacterShadowTexture()
 		return;
 	}
 
-	// Base helper textures + Water foam (Loaded in BOTH Mode 3 and Mode 4)
 	// Base helper textures + Water & Puddle files (Loaded in BOTH Mode 3 and Mode 4)
-	if (loadTerrainTexture)
-	{
-		LoadDepthTerrainTexture("d:/ymir work/terrainmaps/temp/shadowhelper.png", &Frustum::Instance().shadowTexture);
-		LoadDepthTerrainTexture("d:/ymir work/terrainmaps/temp/shadowhelperblack.png", &Frustum::Instance().shadowTextureBlack);
-		LoadDepthTerrainTexture("d:/ymir work/terrainmaps/temp/spheremap.jpg", &Frustum::Instance().specularTexture);
+	LoadDepthTerrainTexture("d:/ymir work/terrainmaps/temp/shadowhelper.png", &Frustum::Instance().shadowTexture);
+	LoadDepthTerrainTexture("d:/ymir work/terrainmaps/temp/shadowhelperblack.png", &Frustum::Instance().shadowTextureBlack);
+	LoadDepthTerrainTexture("d:/ymir work/terrainmaps/temp/spheremap.jpg", &Frustum::Instance().specularTexture);
 
-		// Required for Mode 3 flat terrain + Mode 3 & 4 puddles and water foam
-		LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/normalmaps/empty.dds", &Frustum::Instance().emptyNormalMap);
-		LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/normalmaps/brown_mud_03_nor_gl_2k.dds", &Frustum::Instance().brown_mud_03_diff_2k);
-		LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/normalmaps/dry_ground_01_nor_gl_2k.dds", &Frustum::Instance().dry_ground_01_diff_4k);
-		LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/foam.jpg", &Frustum::Instance().foam);
-
-		loadTerrainTexture = false;
-	}
+	// Required for Mode 3 flat terrain + Mode 3 & 4 puddles and water foam
+	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/normalmaps/empty.dds", &Frustum::Instance().emptyNormalMap);
+	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/normalmaps/brown_mud_03_nor_gl_2k.dds", &Frustum::Instance().brown_mud_03_diff_2k);
+	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/normalmaps/dry_ground_01_nor_gl_2k.dds", &Frustum::Instance().dry_ground_01_diff_4k);
+	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/foam.jpg", &Frustum::Instance().foam);
+#ifdef __ANDROID__
+	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/specular/ground_0007_roughness_2k.dds", &Frustum::Instance().waterSandSpecularTexture);
+	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/specular/ground_0019_color_2k.dds", &Frustum::Instance().waterLeavesSpecularTexture);
+	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/specular/ground_0030_color_specular.dds", &Frustum::Instance().iceSpecularTexture);
+	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/specular/Ground050_2K-JPG_Roughness.dds", &Frustum::Instance().sandSpecularTexture);
+#endif
+	loadTerrainTexture = false;
 
 #ifndef __ANDROID__
 	// High-quality ground normal/specular maps, tree bark & grass (ONLY loaded in Graphics Mode 4)
@@ -671,8 +676,11 @@ void CMapOutdoor::CreateCharacterShadowTexture()
 	// Water and Puddle Reflection Render Targets (Active for BOTH Mode 3 and Mode 4)
 	if (!Frustum::Instance().m_lpWaterReflectionTexture)
 	{
+#ifdef __ANDROID__
+		m_waterReflectionTexSize = 2048;
+#else
 		m_waterReflectionTexSize = 1024;
-
+#endif
 		if (FAILED(ms_lpd3dDevice->CreateTexture(m_waterReflectionTexSize, m_waterReflectionTexSize, 1, D3DUSAGE_RENDERTARGET,
 			D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &Frustum::Instance().m_lpWaterReflectionTexture, NULL)))
 		{
@@ -693,7 +701,11 @@ void CMapOutdoor::CreateCharacterShadowTexture()
 
 	if (!Frustum::Instance().m_lpPuddleReflectionTexture)
 	{
+#ifdef __ANDROID__
+		m_waterPuddleReflectionTexSize = 2048;
+#else
 		m_waterPuddleReflectionTexSize = 1024;
+#endif
 
 		if (FAILED(ms_lpd3dDevice->CreateTexture(m_waterPuddleReflectionTexSize, m_waterPuddleReflectionTexSize, 1, D3DUSAGE_RENDERTARGET,
 			D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &Frustum::Instance().m_lpPuddleReflectionTexture, NULL)))

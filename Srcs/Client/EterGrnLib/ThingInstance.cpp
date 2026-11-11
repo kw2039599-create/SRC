@@ -231,6 +231,7 @@ bool CGraphicThingInstance::CheckMotionThingIndex(DWORD dwMotionKey)
 	return true;
 }
 
+#ifdef __ANDROID__
 static inline CGraphicThing* __AcquireLazyMotionThing(std::map<DWORD, CGraphicThing::TRef *>::iterator itor)
 {
 	uintptr_t uRaw = reinterpret_cast<uintptr_t>(itor->second);
@@ -248,6 +249,7 @@ static inline CGraphicThing* __AcquireLazyMotionThing(std::map<DWORD, CGraphicTh
 
 	return itor->second->GetPointer();
 }
+#endif
 
 bool CGraphicThingInstance::GetMotionThingPointer(DWORD dwKey, CGraphicThing ** ppMotion)
 {
@@ -255,7 +257,11 @@ bool CGraphicThingInstance::GetMotionThingPointer(DWORD dwKey, CGraphicThing ** 
 	if (m_roMotionThingMap.end() == itor)
 		return false;
 
+#ifdef __ANDROID__
 	*ppMotion = __AcquireLazyMotionThing(itor);
+#else
+	*ppMotion = itor->second->GetPointer();
+#endif
 	return (*ppMotion != NULL);
 }
 
@@ -477,7 +483,11 @@ bool CGraphicThingInstance::SetMotion(DWORD dwMotionKey, float blendTime, int lo
 	if (m_roMotionThingMap.end() == itor)
 		return false;
 
+#ifdef __ANDROID__
 	CGraphicThing * pMotionThing = __AcquireLazyMotionThing(itor);
+#else
+	CGraphicThing * pMotionThing = itor->second->GetPointer();
+#endif
 	if (!pMotionThing)
 		return false;
 
@@ -500,7 +510,11 @@ bool CGraphicThingInstance::ChangeMotion(DWORD dwMotionKey, int loopCount, float
 	if (m_roMotionThingMap.end() == itor)
 		return false;
 
+#ifdef __ANDROID__
 	CGraphicThing * pMotionThing = __AcquireLazyMotionThing(itor);
+#else
+	CGraphicThing * pMotionThing = itor->second->GetPointer();
+#endif
 	if (!pMotionThing)
 		return false;
 
@@ -552,9 +566,14 @@ void CGraphicThingInstance::RegisterMotionThing(DWORD dwMotionKey, CGraphicThing
 	if (!pMotionThing || CheckMotionThingIndex(dwMotionKey))
 		return;
 
-	// Store tagged raw pointer (bit 0 = 1) so the .gr2 resource is only loaded from EterPack when actually played
+#ifdef __ANDROID__
 	CGraphicThing::TRef * pTaggedLazyPtr = reinterpret_cast<CGraphicThing::TRef *>(reinterpret_cast<uintptr_t>(pMotionThing) | 1);
 	m_roMotionThingMap.emplace(dwMotionKey, pTaggedLazyPtr);
+#else
+	CGraphicThing::TRef * pMotionRef = new CGraphicThing::TRef;
+	pMotionRef->SetPointer(pMotionThing);
+	m_roMotionThingMap.insert(std::map<DWORD, CGraphicThing::TRef *>::value_type(dwMotionKey, pMotionRef));
+#endif
 }
 
 void CGraphicThingInstance::ResetLocalTime()
@@ -709,6 +728,80 @@ void CGraphicThingInstance::UpdateTransform(D3DXMATRIX * pMatrix, float fSeconds
 	pModelInstance->UpdateTransform(pMatrix, fSecondsElapsed);
 }
 
+#ifdef __ANDROID__
+#include <unordered_map>
+#include "../SphereLib/Frustum.h"
+
+static inline bool IsAndroidActorInCameraFrustum(const CGraphicThingInstance* pkInst, float fPadRadius = 550.0f, bool bForDeform = false)
+{
+	CCamera* pCam = CCameraManager::Instance().GetCurrentCamera();
+	if (!pCam)
+		return true;
+
+	const D3DXVECTOR3& v3Eye = pCam->GetEye();
+	const D3DXVECTOR3& v3Target = pCam->GetTarget();
+	const D3DXVECTOR3& v3Pos = pkInst->GetPosition();
+
+	const float tdx = v3Pos.x - v3Target.x;
+	const float tdy = v3Pos.y - v3Target.y;
+	const float targetDistSq = tdx * tdx + tdy * tdy;
+
+	// If deforming while shadows are enabled (graphicsLevel > 0), keep all actors within shadow range
+	// active even when behind the camera so their long shadows stretch into the screen view
+	const float safeTargetRadius = (bForDeform && Frustum::Instance().graphicsLevel > 0) ? 3000.0f : 700.0f;
+	if (targetDistSq <= (safeTargetRadius * safeTargetRadius))
+		return true;
+
+	static D3DXVECTOR3 s_lastEye(0.0f, 0.0f, 0.0f);
+	static D3DXVECTOR3 s_lastTarget(0.0f, 0.0f, 0.0f);
+	static D3DXVECTOR3 s_F(0.0f, 1.0f, 0.0f);
+	static D3DXVECTOR3 s_R(1.0f, 0.0f, 0.0f);
+	static D3DXVECTOR3 s_U(0.0f, 0.0f, 1.0f);
+
+	if (v3Eye != s_lastEye || v3Target != s_lastTarget)
+	{
+		s_lastEye = v3Eye;
+		s_lastTarget = v3Target;
+		float fx = v3Target.x - v3Eye.x;
+		float fy = v3Target.y - v3Eye.y;
+		float fz = v3Target.z - v3Eye.z;
+		float flen = sqrtf(fx * fx + fy * fy + fz * fz);
+		if (flen > 1e-3f) { fx /= flen; fy /= flen; fz /= flen; }
+		s_F = D3DXVECTOR3(fx, fy, fz);
+
+		float rlen = sqrtf(fy * fy + fx * fx);
+		if (rlen > 1e-3f)
+			s_R = D3DXVECTOR3(fy / rlen, -fx / rlen, 0.0f);
+		else
+			s_R = D3DXVECTOR3(1.0f, 0.0f, 0.0f);
+
+		s_U = D3DXVECTOR3(
+			s_R.y * s_F.z,
+			-s_R.x * s_F.z,
+			s_R.x * s_F.y - s_R.y * s_F.x);
+	}
+
+	const float vx = v3Pos.x - v3Eye.x;
+	const float vy = v3Pos.y - v3Eye.y;
+	const float vz = (v3Pos.z + 90.0f) - v3Eye.z;
+
+	// Only cull if behind the camera eye (NO maximum distance cap!)
+	const float zCam = vx * s_F.x + vy * s_F.y + vz * s_F.z;
+	if (zCam < -fPadRadius)
+		return false;
+
+	const float xCam = fabsf(vx * s_R.x + vy * s_R.y);
+	if (xCam > (zCam * 1.35f + fPadRadius))
+		return false;
+
+	const float yCam = fabsf(vx * s_U.x + vy * s_U.y + vz * s_U.z);
+	if (yCam > (zCam * 0.95f + fPadRadius))
+		return false;
+
+	return true;
+}
+#endif
+
 #ifdef ENABLE_ACCE_COSTUME_SYSTEM
 void CGraphicThingInstance::RecalcAccePositionMatrixFromBoneMatrix()
 {
@@ -719,23 +812,31 @@ void CGraphicThingInstance::RecalcAccePositionMatrixFromBoneMatrix()
 	if (!pModelInstance)
 		return;
 
-	static const CGrannyModelInstance* s_pLastModelInst = nullptr;
-	static int s_iCachedSpineBoneIdx = 0;
-	if (pModelInstance != s_pLastModelInst)
+#ifdef __ANDROID__
+	static std::unordered_map<const CGrannyModel*, int> s_acceBoneCache;
+	int iBoneIndex = 0;
+	const CGrannyModel* pModel = const_cast<CGrannyModelInstance*>(pModelInstance)->GetModel();
+	auto it = s_acceBoneCache.find(pModel);
+	if (it != s_acceBoneCache.end())
 	{
-		s_iCachedSpineBoneIdx = 0;
-		if (pModelInstance->GetBoneIndexByName("Bip01 Spine2", &s_iCachedSpineBoneIdx))
-			s_pLastModelInst = pModelInstance;
+		iBoneIndex = it->second;
 	}
+	else if (pModelInstance->GetBoneIndexByName("Bip01 Spine2", &iBoneIndex))
+	{
+		s_acceBoneCache[pModel] = iBoneIndex;
+	}
+#else
+	int iBoneIndex = 0;
+	pModelInstance->GetBoneIndexByName("Bip01 Spine2", &iBoneIndex);
+#endif
 
-	auto cmatBoneMatrix = reinterpret_cast<const D3DXMATRIX*>(pModelInstance->GetBoneMatrixPointer(s_iCachedSpineBoneIdx));
+	const D3DXMATRIX* cmatBoneMatrix = reinterpret_cast<const D3DXMATRIX*>(pModelInstance->GetBoneMatrixPointer(iBoneIndex));
 	if (cmatBoneMatrix)
 	{
 		const float fCenterX = m_bAttachedAcceRace ? cmatBoneMatrix->_41 : (cmatBoneMatrix->_41 - 18.0f);
 		const float fCenterY = m_bAttachedAcceRace ? cmatBoneMatrix->_42 : -40.0f;
 		const float fCenterZ = cmatBoneMatrix->_43;
 
-		// Direct scale-around-center matrix construction (replaces D3DXMatrixTransformation)
 		D3DXMatrixIdentity(&m_matScale);
 		m_matScale._11 = m_v3ScaleAcce.x;
 		m_matScale._22 = m_v3ScaleAcce.y;
@@ -778,7 +879,6 @@ void CGraphicThingInstance::DeformAll()
 
 void CGraphicThingInstance::DeformNoSkin()
 {
-
 	m_bUpdated = true;
 	for (std::vector<CGrannyLODController*>::size_type i = 0; i != m_LODControllerVector.size(); i++)
 	{
@@ -786,25 +886,31 @@ void CGraphicThingInstance::DeformNoSkin()
 		if (!pkLOD->isModelInstance())
 			continue;
 
-
 		if (m_modelThingSetVector.size() == 1)
 			pkLOD->DeformNoSkin(&m_matAbsoluteTrans);
-
+#ifdef ENABLE_ACCE_COSTUME_SYSTEM
 		else if (i == CRaceData::PART_ACCE)
 		{
 			RecalcAccePositionMatrixFromBoneMatrix();
 			pkLOD->DeformNoSkin(&m_matAbsoluteTrans);
 			continue;
 		}
-
+#endif
 		else
-
 			pkLOD->DeformNoSkin(&m_worldMatrix);
 	}
 }
 
 void CGraphicThingInstance::OnDeform()
 {
+#ifdef __ANDROID__
+	if (m_bUpdated && (m_modelThingSetVector.size() > 1 || !m_roMotionThingMap.empty()))
+	{
+		const bool bKeepForShadow = (Frustum::Instance().graphicsLevel > 0);
+		if ((!bKeepForShadow && !isShow()) || !IsAndroidActorInCameraFrustum(this, 550.0f, true))
+			return;
+	}
+#endif
 	m_bUpdated = true;
 	for (std::vector<CGrannyLODController*>::size_type i = 0; i != m_LODControllerVector.size(); i++)
 	{
@@ -812,19 +918,17 @@ void CGraphicThingInstance::OnDeform()
 		if (!pkLOD->isModelInstance())
 			continue;
 
-
 		if (m_modelThingSetVector.size() == 1)
 			pkLOD->Deform(&m_matAbsoluteTrans);
-
+#ifdef ENABLE_ACCE_COSTUME_SYSTEM
 		else if (i == CRaceData::PART_ACCE)
 		{
 			RecalcAccePositionMatrixFromBoneMatrix();
 			pkLOD->Deform(&m_matAbsoluteTrans);
 			continue;
 		}
-
+#endif
 		else
-
 			pkLOD->Deform(&m_worldMatrix);
 	}
 }
@@ -845,6 +949,10 @@ void CGraphicThingInstance::__SetLocalTime(float fLocalTime)
 
 void CGraphicThingInstance::UpdateLODLevel()
 {
+#ifdef __ANDROID__
+	// Android registers a single LOD level per model (RegisterLODThing), so per-frame LOD distance sqrtf is a no-op
+	return;
+#else
 	if (!isShow())
 		return;
 
@@ -859,18 +967,15 @@ void CGraphicThingInstance::UpdateLODLevel()
 	const D3DXVECTOR3 & c_rv3CameraPosition = pcurCamera->GetEye();
 	const D3DXVECTOR3 & c_v3Position = GetPosition();
 
-	const float dxCenter = c_rv3TargetPosition.x - c_v3Position.x;
-	const float dyCenter = c_rv3TargetPosition.y - c_v3Position.y;
-	const float dxCam = c_rv3CameraPosition.x - c_v3Position.x;
-	const float dyCam = c_rv3CameraPosition.y - c_v3Position.y;
-	const float dzCam = c_rv3CameraPosition.z - c_v3Position.z;
-
 	CGrannyLODController::FUpdateLODLevel update;
-	update.fDistanceFromCenter = sqrtf(dxCenter * dxCenter + dyCenter * dyCenter);
-	update.fDistanceFromCamera = sqrtf(dxCam * dxCam + dyCam * dyCam + dzCam * dzCam);
+	update.fDistanceFromCenter = sqrtf((c_rv3TargetPosition.x - c_v3Position.x) * (c_rv3TargetPosition.x - c_v3Position.x) +
+		(c_rv3TargetPosition.y - c_v3Position.y) * (c_rv3TargetPosition.y - c_v3Position.y));
+	update.fDistanceFromCamera = sqrtf((c_rv3CameraPosition.x - c_v3Position.x) * (c_rv3CameraPosition.x - c_v3Position.x) +
+		(c_rv3CameraPosition.y - c_v3Position.y) * (c_rv3CameraPosition.y - c_v3Position.y) +
+		(c_rv3CameraPosition.z - c_v3Position.z) * (c_rv3CameraPosition.z - c_v3Position.z));
 
-	for (size_t i = 0, n = m_LODControllerVector.size(); i < n; ++i)
-		update(m_LODControllerVector[i]);
+	std::for_each(m_LODControllerVector.begin(), m_LODControllerVector.end(), update);
+#endif
 }
 
 void CGraphicThingInstance::UpdateTime()
@@ -945,6 +1050,11 @@ void CGraphicThingInstance::RenderWithOneTexture()
 	if (!m_bUpdated)
 		return;
 
+#ifdef __ANDROID__
+	if ((m_modelThingSetVector.size() > 1 || !m_roMotionThingMap.empty()) && !IsAndroidActorInCameraFrustum(this, 360.0f))
+		return;
+#endif
+
 	CGrannyLODController::FRenderWithOneTexture render;
 	std::for_each(m_LODControllerVector.begin(), m_LODControllerVector.end(), render);
 }
@@ -954,6 +1064,11 @@ void CGraphicThingInstance::BlendRenderWithOneTexture()
 	//assert(m_bUpdated);
 	if (!m_bUpdated)
 		return;
+
+#ifdef __ANDROID__
+	if ((m_modelThingSetVector.size() > 1 || !m_roMotionThingMap.empty()) && !IsAndroidActorInCameraFrustum(this, 360.0f))
+		return;
+#endif
 
 	CGrannyLODController::FBlendRenderWithOneTexture blendRender;
 	std::for_each(m_LODControllerVector.begin(), m_LODControllerVector.end(), blendRender);
@@ -965,6 +1080,11 @@ void CGraphicThingInstance::RenderWithTwoTexture()
 	if (!m_bUpdated)
 		return;
 
+#ifdef __ANDROID__
+	if ((m_modelThingSetVector.size() > 1 || !m_roMotionThingMap.empty()) && !IsAndroidActorInCameraFrustum(this, 360.0f))
+		return;
+#endif
+
 	CGrannyLODController::FRenderWithTwoTexture render;
 	std::for_each(m_LODControllerVector.begin(), m_LODControllerVector.end(), render);
 }
@@ -974,6 +1094,11 @@ void CGraphicThingInstance::BlendRenderWithTwoTexture()
 	//assert(m_bUpdated);
 	if (!m_bUpdated)
 		return;
+
+#ifdef __ANDROID__
+	if ((m_modelThingSetVector.size() > 1 || !m_roMotionThingMap.empty()) && !IsAndroidActorInCameraFrustum(this, 360.0f))
+		return;
+#endif
 
 	CGrannyLODController::FRenderWithTwoTexture blendRender;
 	std::for_each(m_LODControllerVector.begin(), m_LODControllerVector.end(), blendRender);
@@ -1058,6 +1183,7 @@ void CGraphicThingInstance::OnClear()
 {
 	stl_wipe(m_LODControllerVector);
 
+#ifdef __ANDROID__
 	for (std::map<DWORD, CGraphicThing::TRef *>::iterator it = m_roMotionThingMap.begin(); it != m_roMotionThingMap.end(); ++it)
 	{
 		uintptr_t uRaw = reinterpret_cast<uintptr_t>(it->second);
@@ -1065,6 +1191,9 @@ void CGraphicThingInstance::OnClear()
 			delete it->second;
 	}
 	m_roMotionThingMap.clear();
+#else
+	stl_wipe_second(m_roMotionThingMap);
+#endif
 
 	for (DWORD d = 0; d < m_modelThingSetVector.size(); ++d)
 		m_modelThingSetVector[d].Clear();

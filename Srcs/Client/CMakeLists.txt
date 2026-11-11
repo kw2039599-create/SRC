@@ -1,22 +1,25 @@
 cmake_minimum_required(VERSION 3.10.2)
-project("M2WorldOnline")
+project("Metin2Mobile")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char -fms-extensions -fno-autolink -ferror-limit=0 -Wno-pragma-pack -Wno-invalid-token-paste -Wno-register")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsigned-char -fms-extensions -fno-autolink -ferror-limit=0 -Wno-pragma-pack -Wno-invalid-token-paste")
+# Force full -O3 + ARM64 NEON optimization with -fno-strict-aliasing for D3D DWORD/float casts
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector -fsigned-char -fms-extensions -fno-autolink -Wno-invalid-token-paste")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector -fsigned-char -fms-extensions -fno-autolink -Wno-invalid-token-paste -Wno-register")
+set(CMAKE_C_FLAGS_DEBUG "-O3 -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_DEBUG "-O3 -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector" CACHE STRING "" FORCE)
+add_compile_options(-O3 -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector)
 
 add_definitions(-DENABLE_OPENGL)
 add_definitions(-DENABLE_MOBILE_CONTROLS)
 add_definitions(-DLOCALE_SERVICE_EUROPE)
 add_definitions(-DBUILDING_GRANNY_STATIC=1)
-add_definitions(-DCRYPTOPP_DISABLE_ASM -D_LIBCPP_ENABLE_CXX17_REMOVED_FEATURES=1 -D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION=1)
+add_definitions(-DCRYPTOPP_DISABLE_ASM)
 
 if(ANDROID)
     add_definitions(-DANDROID -D__ANDROID__)
 elseif(APPLE)
-    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/android_compat)
-    add_definitions(-DANDROID)
+    add_definitions(-DANDROID -D__ANDROID__)
 endif()
 
 # 1. Build Granny 3D from Extern/granny/source
@@ -84,13 +87,6 @@ file(WRITE "${PY_GEN_DIR}/pyconfig.h" "
 #define HAVE_UTIME_H 1
 #define HAVE_PTHREAD_H 1
 #define HAVE_DLFCN_H 1
-#define HAVE_WCHAR_H 1
-// FixiOSSystem
-#ifdef __APPLE__
-#include <stdlib.h>
-#undef system
-#define system(cmd) (-1)
-#endif
 
 #define _REENTRANT 1
 #define WITH_THREAD 1
@@ -467,7 +463,7 @@ target_include_directories(python27_static PRIVATE
     "${PYTHON_SRC_DIR}/Modules"
 )
 target_compile_definitions(python27_static PRIVATE Py_BUILD_CORE PLATFORM="android")
-target_compile_options(python27_static PRIVATE -w -fwrapv -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-function-pointer-types)
+target_compile_options(python27_static PRIVATE -w -fwrapv)
 
 if(ANDROID)
     # Include Android NDK sources for cpu-features.h
@@ -535,23 +531,13 @@ set(METIN2_ALL_SOURCES
 
 if(APPLE)
     add_executable(metin2_mobile MACOSX_BUNDLE ${METIN2_ALL_SOURCES})
-        set_target_properties(metin2_mobile PROPERTIES
-        OUTPUT_NAME "M2WorldOnline"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.m2world.online"
-        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.m2world.online"
-        MACOSX_BUNDLE_BUNDLE_NAME "M2World Online"
-        XCODE_ATTRIBUTE_INFOPLIST_KEY_CFBundleDisplayName "M2World Online"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.0"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1"
-        XCODE_ATTRIBUTE_MARKETING_VERSION "1.0.0"
-        XCODE_ATTRIBUTE_CURRENT_PROJECT_VERSION "1"
+    set_target_properties(metin2_mobile PROPERTIES
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.worldmetin2.mobile"
+        MACOSX_BUNDLE_BUNDLE_NAME "Metin2Mobile"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         XCODE_ATTRIBUTE_INFOPLIST_KEY_UIFileSharingEnabled YES
         XCODE_ATTRIBUTE_INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace YES
         XCODE_ATTRIBUTE_INFOPLIST_KEY_UIRequiresFullScreen YES
-        XCODE_ATTRIBUTE_INFOPLIST_KEY_ITSAppUsesNonExemptEncryption NO
-        "XCODE_ATTRIBUTE_INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=iphone*]" "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        "XCODE_ATTRIBUTE_INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=ipad*]" "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     )
 else()
     add_library(metin2_mobile SHARED ${METIN2_ALL_SOURCES})
@@ -642,11 +628,7 @@ elseif(APPLE)
         "-framework CoreGraphics"
         "-framework ImageIO"
         "-framework AVFoundation"
-        "-Wl,-no_fixup_chains"
         z
         m
     )
-endif()
-if(APPLE)
-    target_compile_definitions(metin2_mobile PRIVATE __ANDROID__=1)
 endif()

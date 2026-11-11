@@ -16,6 +16,60 @@
 #ifdef __ANDROID__
 extern "C" int g_AndroidPhysWidth;
 extern "C" int g_AndroidPhysHeight;
+
+#define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
+
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+#include <time.h>
+
+enum EMobileRenderBucket {
+    RBUCK_SHADOW_DEPTH = 0,
+    RBUCK_REFL_FBO     = 1,
+    RBUCK_TERRAIN      = 2,
+    RBUCK_MAP_OBJECTS  = 3,
+    RBUCK_WATER        = 4,
+    RBUCK_ACTORS_GR2   = 5,
+    RBUCK_EFFECTS_3D   = 6,
+    RBUCK_UI_TEXT      = 7,
+    RBUCK_COUNT        = 8
+};
+
+struct SMobileGLFrameStats {
+    uint32_t drawCalls[RBUCK_COUNT];
+    uint32_t tris[RBUCK_COUNT];
+    uint64_t cpuTimeNs[RBUCK_COUNT];
+    uint32_t vboUploads;
+    uint32_t vboUploadBytes;
+    uint32_t texBinds;
+    uint32_t progSwitches;
+    uint32_t fboSwitches;
+};
+
+extern "C" SMobileGLFrameStats g_mobileGLStats = {};
+
+static inline uint64_t GetPerfTimeNs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static inline int ClassifyDrawBucket(const IDirect3DDevice8* dev, bool isUPDraw) {
+    const int sm = dev->m_ActivePixelShaderType;
+    if (dev->m_pCurrentRenderTargetTex != NULL)
+        return (sm == 1) ? RBUCK_SHADOW_DEPTH : RBUCK_REFL_FBO;
+    if (sm == 1) return RBUCK_SHADOW_DEPTH;
+    if (sm == 2 || sm == 3) return RBUCK_TERRAIN;
+    if (sm == 4 || sm == 7) return RBUCK_MAP_OBJECTS;
+    if (sm == 5) return RBUCK_WATER;
+    if (!isUPDraw) return RBUCK_ACTORS_GR2;
+    if (dev->m_RenderStates[D3DRS_ZENABLE] == 0 ||
+        ((dev->m_dwFVF & 0x00E) == D3DFVF_XYZRHW) ||
+        fabsf(dev->m_matProj._34) < 1e-4f) {
+        return RBUCK_UI_TEXT;
+    }
+    return RBUCK_EFFECTS_3D;
+}
+#endif
 #endif
 
 namespace {
@@ -461,6 +515,7 @@ namespace {
         "uniform int uHasTexture5;\n" \
         "uniform int uHasTexture6;\n" \
         "uniform int uHasTexture7;\n" \
+        "uniform int uColorOp1;\n" \
         "uniform vec4 uTexFactor;\n" \
         "uniform int uAlphaTest;\n" \
         "uniform float uAlphaRef;\n" \
@@ -580,18 +635,18 @@ namespace {
         "  }\n" \
         "  if (uShaderMode == 2) {\n" \
         "    float uvDiv = (uPsUVScale > 0.05) ? uPsUVScale : 1.0;\n" \
-        "    vec2 tiledUV = vTexCoord0 / uvDiv;\n" \
-        "    vec4 Color = (uHasTexture0 != 0) ? texture(uTexture0, tiledUV) : vec4(1.0);\n" \
         "    float calcA = (uHasTexture1 != 0) ? texture(uTexture1, vTexCoord1).a : 1.0;\n" \
         "    float maskA = (uPsAlphaOverride > 0.5) ? 1.0 : ((uvDiv != 1.0) ? clamp(calcA * 1.5, 0.0, 1.0) : calcA);\n" \
         TERRAIN_DISCARD_STMT \
+        "    vec2 tiledUV = vTexCoord0 / uvDiv;\n" \
+        "    vec4 Color = (uHasTexture0 != 0) ? texture(uTexture0, tiledUV) : vec4(1.0);\n" \
         "    if (uvDiv != 1.0) {\n" \
         "      vec3 NM = ComputeProceduralNM(uTexture0, Color.rgb, tiledUV, 1024.0, 0.15) * 2.0 - 1.0;\n" \
         "      vec3 L = normalize(-uPsSunDir);\n" \
         "      float diffL = clamp(dot(NM, L), 0.0, 1.0);\n" \
         "      Color.rgb *= (0.85 + 0.25 * diffL);\n" \
         "    }\n" \
-        "    float isPuddle = IsWithinPuddle(vTexCoord0, vWorldNormal);\n" \
+        "    float isPuddle = (uPsPuddleThreshold < 0.999 && maskA > 0.05) ? IsWithinPuddle(vTexCoord0, vWorldNormal) : 0.0;\n" \
         "    if (isPuddle > 0.001) {\n" \
         "      vec2 ndc = (vScreenPos.xy / max(vScreenPos.w, 0.001));\n" \
         "      vec2 reflection = 0.5 * (1.0 - ndc);\n" \
@@ -599,8 +654,10 @@ namespace {
         "      float tOff = uPsTime * 0.3 * 0.0001975;\n" \
         "      vec3 nm1 = (uHasTexture5 != 0) ? texture(uTexture5, foamUV + vec2(-tOff, 0.0)).rgb : vec3(0.5, 0.5, 1.0);\n" \
         "      vec3 nm2 = (uHasTexture6 != 0) ? texture(uTexture6, foamUV + vec2( tOff, 0.0)).rgb : nm1;\n" \
+        "      if (dot(nm1, nm1) < 0.01) nm1 = vec3(0.5, 0.5, 1.0);\n" \
+        "      if (dot(nm2, nm2) < 0.01) nm2 = nm1;\n" \
         "      vec3 blendedNormal = normalize((nm1 * 2.0 - 1.0) + (nm2 * 2.0 - 1.0));\n" \
-        "      vec2 perturbedUV = reflection + (blendedNormal.xy * 0.5) * 0.025;\n" \
+        "      vec2 perturbedUV = reflection + (blendedNormal.xy * 0.5) * 0.0035;\n" \
         "      vec3 seg = uPsCharPos - uPsPrevCharPos;\n" \
         "      float segLen = max(0.001, length(seg));\n" \
         "      float t = clamp(dot(vWorldPos - uPsPrevCharPos, seg) / (segLen * segLen), 0.0, 1.0);\n" \
@@ -610,13 +667,13 @@ namespace {
         "      float inRange2 = clamp(1.0 - (distFromPath / 300.0), 0.0, 1.0);\n" \
         "      float waveFreq = 0.2 * 3.1416 / 1.7;\n" \
         "      float waveEffect = (uPsCharMoved > 0.1)\n" \
-        "        ? (0.04 * inRange2 * sin(distFromPath * (waveFreq / 3.0) - uPsTime * (0.02 / 1.5)))\n" \
-        "        : (0.02 * inRange1 * sin((distFromPath / 1.2) * (waveFreq / 2.0) - uPsTime * (0.02 / 3.0)));\n" \
+        "        ? (0.006 * inRange2 * sin(distFromPath * (waveFreq / 3.0) - uPsTime * (0.02 / 1.5)))\n" \
+        "        : (0.003 * inRange1 * sin((distFromPath / 1.2) * (waveFreq / 2.0) - uPsTime * (0.02 / 3.0)));\n" \
         "      float reflInfluence = clamp(1.0 - (distFromPath / 20000.0), 0.0, 1.0);\n" \
-        "      vec2 finalReflUV = clamp(perturbedUV + vec2(waveEffect), 0.01, 0.99);\n" \
+        "      vec2 finalReflUV = clamp(perturbedUV + vec2(waveEffect), 0.002, 0.998);\n" \
         "      vec3 reflCol = (uHasTexture7 != 0) ? texture(uTexture7, finalReflUV).rgb : mix(vec3(0.45, 0.50, 0.58), uFogColor.rgb, 0.5);\n" \
         "      if (dot(reflCol, reflCol) < 0.005) reflCol = mix(vec3(0.45, 0.50, 0.58), uFogColor.rgb, 0.5);\n" \
-        "      Color.rgb = mix(Color.rgb, reflCol * 1.2, isPuddle * reflInfluence);\n" \
+        "      Color.rgb = mix(Color.rgb, reflCol * 1.15, isPuddle * reflInfluence);\n" \
         "    }\n" \
         "    if (uFogRange.y > uFogRange.x) {\n" \
         "      float fogFactor = clamp((distance(uPsCameraPos, vWorldPos) - uFogRange.x) / (uFogRange.y - uFogRange.x), 0.0, 1.0);\n" \
@@ -645,9 +702,7 @@ namespace {
         "    vec4 Color = (uHasTexture0 != 0) ? texture(uTexture0, vTexCoord0) : vec4(1.0);\n" \
         "    float outA = Color.a * uPsAlphaVal;\n" \
         OBJ_DISCARD_STMT \
-        "    float nmRes = (uShaderMode == 7) ? 512.0 : 2048.0;\n" \
-        "    vec3 NM = ComputeProceduralNM(uTexture0, Color.rgb, vTexCoord0, nmRes, 0.05);\n" \
-        "    vec3 N = normalize(vWorldNormal * NM);\n" \
+        "    vec3 N = normalize(vWorldNormal);\n" \
         "    vec3 L = normalize(-uPsSunDir);\n" \
         "    float lightIntensity = clamp(dot(N, L), 0.0, 1.0);\n" \
         "    float diffMul = (uShaderMode == 7) ? 0.6 : 0.7;\n" \
@@ -663,7 +718,9 @@ namespace {
         "      float shFactor = clamp(smoothstep(0.1, 0.5, finalShadow), 0.0, 1.0);\n" \
         "      specInt *= mix(5.5, 0.1, shFactor);\n" \
         "      lightResult += specInt * 0.65 * uPsMatSpecular * uPsSpecularLight;\n" \
-        "    } else if (uHasTexture1 != 0 && Color.a < 0.999 && Color.a > 0.001) {\n" \
+        "    }\n" \
+        "    Color.rgb *= lightResult;\n" \
+        "    if (uShaderMode == 4 && uColorOp1 == 18 && uAlphaTest == 0 && uHasTexture1 != 0 && Color.a < 0.99 && Color.a > 0.01) {\n" \
         "      vec3 dNdx = dFdx(N);\n" \
         "      vec3 dNdy = dFdy(N);\n" \
         "      float specAA = 1.0 / (1.0 + (dot(dNdx, dNdx) + dot(dNdy, dNdy)) * 10.0);\n" \
@@ -672,9 +729,9 @@ namespace {
         "      vec2 specUV = fract(reflVec.xy * 0.5 + 0.5 + uPsSpecTrans.xy * 0.5);\n" \
         "      vec4 specTex = texture(uTexture1, specUV);\n" \
         "      float specInt = clamp(dot(N, V), 0.0, 1.0);\n" \
-        "      float spPow = (uPsMatSpecPower > 0.01) ? uPsMatSpecPower : uTexFactor.a;\n" \
-        "      float specFactor = pow(specInt, 0.1) * specTex.a * spPow * specAA;\n" \
-        "      Color.rgb += specTex.rgb * specFactor * 3.0 * Color.a;\n" \
+        "      float spPow = clamp((uPsMatSpecPower > 0.01) ? uPsMatSpecPower : uTexFactor.a, 0.0, 1.0);\n" \
+        "      float specFactor = pow(specInt, 0.25) * specTex.a * spPow * specAA;\n" \
+        "      Color.rgb = clamp(Color.rgb + specTex.rgb * specFactor * Color.a, 0.0, 1.0);\n" \
         "    }\n" \
         "    Color.rgb *= lightResult;\n" \
         "    if (uFogRange.y > uFogRange.x) {\n" \
@@ -692,16 +749,23 @@ namespace {
         "  vec2 animUV2 = foamUV + vec2( tOff, 0.0);\n" \
         "  vec3 nm1 = (uHasTexture4 != 0) ? texture(uTexture4, animUV1).rgb : vec3(0.5, 0.5, 1.0);\n" \
         "  vec3 nm2 = (uHasTexture5 != 0) ? texture(uTexture5, animUV2).rgb : nm1;\n" \
+        "  if (dot(nm1, nm1) < 0.01) nm1 = vec3(0.5, 0.5, 1.0);\n" \
+        "  if (dot(nm2, nm2) < 0.01) nm2 = nm1;\n" \
         "  vec3 blendedNormal = normalize((nm1 * 2.0 - 1.0) + (nm2 * 2.0 - 1.0));\n" \
         "  float waterDiffPerturb = smoothstep(0.0, 1.0, vColor.a) * 0.8 + 0.2;\n" \
-        "  vec2 perturbedUV = clamp(uv + (blendedNormal.xy * 0.5) * (0.01 * waterDiffPerturb), 0.01, 0.99);\n" \
-        "  vec2 perturbedUVFoam = animUV1 + (blendedNormal.xy * 0.5) * (0.4 * waterDiffPerturb);\n" \
-        "  vec4 reflCol = (uHasTexture3 != 0) ? texture(uTexture3, perturbedUV) : ((uHasTexture0 != 0) ? texture(uTexture0, perturbedUVFoam) : vec4(0.3, 0.45, 0.55, 1.0));\n" \
-        "  if (dot(reflCol.rgb, reflCol.rgb) < 0.005 && uHasTexture0 != 0) reflCol = texture(uTexture0, perturbedUVFoam);\n" \
-        "  vec4 foamCol = (uHasTexture6 != 0) ? texture(uTexture6, perturbedUVFoam) : vec4(1.0);\n" \
-        "  foamCol.a = 1.4 * waterDiffPerturb;\n" \
+        "  vec2 perturbedUV = clamp(uv + (blendedNormal.xy * 0.5) * (0.004 * waterDiffPerturb), 0.002, 0.998);\n" \
+        "  vec2 perturbedUVFoam = animUV1 + (blendedNormal.xy * 0.5) * (0.25 * waterDiffPerturb);\n" \
+        "  vec2 waterBaseUV = vTexCoord1 + (blendedNormal.xy * 0.5) * 0.035;\n" \
+        "  vec4 waterTexCol = (uHasTexture0 != 0) ? texture(uTexture0, waterBaseUV) : vec4(0.22, 0.42, 0.55, 1.0);\n" \
+        "  vec4 reflCol = (uHasTexture3 != 0) ? texture(uTexture3, perturbedUV) : waterTexCol;\n" \
+        "  if (uHasTexture3 != 0 && uHasTexture0 != 0) {\n" \
+        "    float hasValidRefl = step(0.005, dot(reflCol.rgb, reflCol.rgb));\n" \
+        "    reflCol.rgb = mix(waterTexCol.rgb, mix(waterTexCol.rgb, reflCol.rgb, 0.68), hasValidRefl);\n" \
+        "  }\n" \
+        "  vec4 foamCol = (uHasTexture6 != 0) ? texture(uTexture6, perturbedUVFoam) : waterTexCol;\n" \
+        "  foamCol.a = 1.2 * waterDiffPerturb;\n" \
         "  vec3 N = vec3(0.0, 0.0, 1.0);\n" \
-        "  vec3 N2 = normalize(blendedNormal);\n" \
+        "  vec3 N2 = normalize(vec3(blendedNormal.xy * 0.35, max(abs(blendedNormal.z), 0.85)));\n" \
         "  vec3 L = normalize(-uPsSunDir);\n" \
         "  float lightIntensity = clamp(dot(N, L), 0.0, 1.0);\n" \
         "  vec3 viewDir = normalize(uPsCameraPos - vWorldPos);\n" \
@@ -713,11 +777,11 @@ namespace {
         "  lightResult *= (1.0 - finalShadow);\n" \
         "  reflCol.rgb *= lightResult;\n" \
         "  float fogFactor = (uFogRange.y > uFogRange.x) ? clamp((distance(uPsCameraPos, vWorldPos) - uFogRange.x) / (uFogRange.y - uFogRange.x), 0.0, 1.0) : 0.0;\n" \
-        "  vec4 baseColor = mix(reflCol * 1.2, uFogColor, fogFactor);\n" \
-        "  baseColor.rgb *= (1.2 + 2.1 * lightIntensity);\n" \
-        "  baseColor.a = 0.7;\n" \
+        "  vec4 baseColor = mix(reflCol * 1.15, uFogColor, fogFactor);\n" \
+        "  baseColor.rgb *= (1.1 + 1.8 * lightIntensity);\n" \
+        "  baseColor.a = 0.78;\n" \
         "  float foamBlendFactor = clamp(1.1 - vColor.a, 0.0, 1.0);\n" \
-        "  baseColor.rgb = mix(baseColor.rgb, foamCol.rgb, clamp(foamCol.a * foamBlendFactor * uPsWaterOpacity, 0.0, 0.85));\n" \
+        "  baseColor.rgb = mix(baseColor.rgb, foamCol.rgb, clamp(foamCol.a * foamBlendFactor * uPsWaterOpacity, 0.0, 0.75));\n" \
         "  vec4 finalColor = mix(baseColor, uFogColor, fogFactor);\n" \
         "  float waterDiffuse = (vColor.a >= 0.999) ? 1.0 : min(vColor.a * 6.0, 1.0);\n" \
         "  FragColor = vec4(finalColor.rgb, clamp(finalColor.a * waterDiffuse, 0.0, 0.92));\n" \
@@ -955,8 +1019,22 @@ namespace {
     }
 
     inline bool SyncHardwareVertexBuffer(IDirect3DVertexBuffer8* vb) {
-        if (!vb || !vb->pData || vb->length == 0)
+        if (!vb || !vb->pData || vb->length == 0 || (vb->usage & D3DUSAGE_DYNAMIC) != 0)
             return false;
+
+        // If a buffer was already uploaded once and is locked again on a subsequent frame,
+        // it is a per-frame CPU-deformed mesh (not a static mesh). Promote it to D3DUSAGE_DYNAMIC
+        // so we don't stall the mobile GL driver ghosting 4.5 MB/frame via glBufferSubData.
+        if (vb->bGpuInitialized && vb->bDirty) {
+            vb->usage |= D3DUSAGE_DYNAMIC;
+            if (vb->glVbo != 0) {
+                NotifyAndroidGLBufferDeleted(vb->glVbo, 0);
+                glDeleteBuffers(1, &vb->glVbo);
+                vb->glVbo = 0;
+            }
+            vb->bDirty = false;
+            return false;
+        }
 
         if (vb->glVbo == 0)
             glGenBuffers(1, &vb->glVbo);
@@ -965,34 +1043,22 @@ namespace {
 
         BindArrayBufferCached(vb->glVbo);
 
-        if (vb->bDirty || !vb->bGpuInitialized) {
-            const GLenum glUsage = ((vb->usage & D3DUSAGE_DYNAMIC) != 0) ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW;
-            UINT off = (vb->dirtyOffset < vb->length) ? vb->dirtyOffset : 0;
-            UINT end = (vb->dirtyEnd <= vb->length && vb->dirtyEnd > off) ? vb->dirtyEnd : vb->length;
-            UINT subSize = end - off;
-
-            if (!vb->bGpuInitialized) {
-                glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)vb->length, vb->pData, glUsage);
-                vb->bGpuInitialized = true;
-            } else if (vb->bDiscardRequested || (off == 0 && subSize == vb->length)) {
-                glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)vb->length, NULL, GL_DYNAMIC_DRAW);
-                glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)off, (GLsizeiptr)subSize, (const BYTE*)vb->pData + off);
-                vb->usage |= D3DUSAGE_DYNAMIC;
-            } else {
-                glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)off, (GLsizeiptr)subSize, (const BYTE*)vb->pData + off);
-                vb->usage |= D3DUSAGE_DYNAMIC;
-            }
-
+        if (!vb->bGpuInitialized) {
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)vb->length, vb->pData, GL_STATIC_DRAW);
+            vb->bGpuInitialized = true;
             vb->bDirty = false;
-            vb->bDiscardRequested = false;
             vb->dirtyOffset = vb->length;
             vb->dirtyEnd = 0;
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+            ++g_mobileGLStats.vboUploads;
+            g_mobileGLStats.vboUploadBytes += vb->length;
+#endif
         }
         return true;
     }
 
     inline bool SyncHardwareIndexBuffer(IDirect3DIndexBuffer8* ib) {
-        if (!ib || !ib->pData || ib->length == 0)
+        if (!ib || !ib->pData || ib->length == 0 || (ib->usage & D3DUSAGE_DYNAMIC) != 0)
             return false;
 
         if (ib->glIbo == 0)
@@ -1003,27 +1069,100 @@ namespace {
         BindElementArrayBufferCached(ib->glIbo);
 
         if (ib->bDirty || !ib->bGpuInitialized) {
-            const GLenum glUsage = ((ib->usage & D3DUSAGE_DYNAMIC) != 0) ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW;
             UINT off = (ib->dirtyOffset < ib->length) ? ib->dirtyOffset : 0;
             UINT end = (ib->dirtyEnd <= ib->length && ib->dirtyEnd > off) ? ib->dirtyEnd : ib->length;
             UINT subSize = end - off;
 
             if (!ib->bGpuInitialized) {
-                glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)ib->length, ib->pData, glUsage);
+                glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)ib->length, ib->pData, GL_STATIC_DRAW);
                 ib->bGpuInitialized = true;
-            } else if (ib->bDiscardRequested || (off == 0 && subSize == ib->length)) {
-                glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)ib->length, NULL, glUsage);
-                glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, (GLintptr)off, (GLsizeiptr)subSize, (const BYTE*)ib->pData + off);
             } else {
                 glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, (GLintptr)off, (GLsizeiptr)subSize, (const BYTE*)ib->pData + off);
             }
 
             ib->bDirty = false;
-            ib->bDiscardRequested = false;
             ib->dirtyOffset = ib->length;
             ib->dirtyEnd = 0;
         }
         return true;
+    }
+
+    static GLuint s_upVbo = 0;
+    static size_t s_upVboCapacity = 0;
+    static size_t s_upVboOffset = 0;
+
+    static GLuint s_upIbo = 0;
+    static size_t s_upIboCapacity = 0;
+    static size_t s_upIboOffset = 0;
+
+    inline const BYTE* StreamUPVerticesToHwVbo(const void* pData, size_t byteCount) {
+        if (s_upVbo == 0) {
+            glGenBuffers(1, &s_upVbo);
+            s_upVboCapacity = 1024 * 1024; // 1 MB streaming ring buffer
+            BindArrayBufferCached(s_upVbo);
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)s_upVboCapacity, NULL, GL_STREAM_DRAW);
+            s_upVboOffset = 0;
+        } else {
+            BindArrayBufferCached(s_upVbo);
+        }
+
+        size_t alignedBytes = (byteCount + 15u) & ~15u;
+        GLbitfield access = GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT;
+        if (alignedBytes > s_upVboCapacity) {
+            s_upVboCapacity = alignedBytes * 2;
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)s_upVboCapacity, NULL, GL_STREAM_DRAW);
+            s_upVboOffset = 0;
+        } else if (s_upVboOffset + alignedBytes > s_upVboCapacity) {
+            s_upVboOffset = 0;
+            access |= GL_MAP_INVALIDATE_BUFFER_BIT;
+        }
+
+        void* mapped = glMapBufferRange(GL_ARRAY_BUFFER, (GLintptr)s_upVboOffset, (GLsizeiptr)byteCount, access);
+        if (mapped) {
+            memcpy(mapped, pData, byteCount);
+            glUnmapBuffer(GL_ARRAY_BUFFER);
+        } else {
+            glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)s_upVboOffset, (GLsizeiptr)byteCount, pData);
+        }
+
+        const BYTE* gpuOffsetPtr = (const BYTE*)(uintptr_t)s_upVboOffset;
+        s_upVboOffset += alignedBytes;
+        return gpuOffsetPtr;
+    }
+
+    inline const void* StreamUPIndicesToHwIbo(const void* pIdx, size_t byteCount) {
+        if (s_upIbo == 0) {
+            glGenBuffers(1, &s_upIbo);
+            s_upIboCapacity = 256 * 1024; // 256 KB streaming index ring buffer
+            BindElementArrayBufferCached(s_upIbo);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)s_upIboCapacity, NULL, GL_STREAM_DRAW);
+            s_upIboOffset = 0;
+        } else {
+            BindElementArrayBufferCached(s_upIbo);
+        }
+
+        size_t alignedBytes = (byteCount + 15u) & ~15u;
+        GLbitfield access = GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT;
+        if (alignedBytes > s_upIboCapacity) {
+            s_upIboCapacity = alignedBytes * 2;
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)s_upIboCapacity, NULL, GL_STREAM_DRAW);
+            s_upIboOffset = 0;
+        } else if (s_upIboOffset + alignedBytes > s_upIboCapacity) {
+            s_upIboOffset = 0;
+            access |= GL_MAP_INVALIDATE_BUFFER_BIT;
+        }
+
+        void* mapped = glMapBufferRange(GL_ELEMENT_ARRAY_BUFFER, (GLintptr)s_upIboOffset, (GLsizeiptr)byteCount, access);
+        if (mapped) {
+            memcpy(mapped, pIdx, byteCount);
+            glUnmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
+        } else {
+            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, (GLintptr)s_upIboOffset, (GLsizeiptr)byteCount, pIdx);
+        }
+
+        const void* gpuOffsetPtr = (const void*)(uintptr_t)s_upIboOffset;
+        s_upIboOffset += alignedBytes;
+        return gpuOffsetPtr;
     }
 
     void EnsureProgramInitialized() {
@@ -1239,6 +1378,9 @@ namespace {
         if (s_curProg != p) {
             s_curProg = p;
             glUseProgram(p->prog);
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+            ++g_mobileGLStats.progSwitches;
+#endif
         }
 
         // Fast-check TextureFactor and AlphaRef first (frequently updated between particles/foliage)
@@ -1482,6 +1624,9 @@ HRESULT IDirect3DDevice8::SetRenderTarget(LPDIRECT3DSURFACE8 pRenderTarget, LPDI
             (g_AndroidPhysWidth > 0) ? g_AndroidPhysWidth : m_ScreenViewport.Width,
             (g_AndroidPhysHeight > 0) ? g_AndroidPhysHeight : m_ScreenViewport.Height);
     }
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+    ++g_mobileGLStats.fboSwitches;
+#endif
     m_DirtyFlags |= 4;
     return S_OK;
 }
@@ -1525,6 +1670,11 @@ HRESULT IDirect3DDevice8::DrawIndexedPrimitive(D3DPRIMITIVETYPE Type, UINT MinIn
     if (((size_t)StartIndex + (size_t)count) * sizeof(WORD) > (size_t)m_pIndexBuffer->length)
         return S_OK;
 
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+    const uint64_t t0 = GetPerfTimeNs();
+    const int bucket = ClassifyDrawBucket(this, false);
+#endif
+
     SyncESUniforms(this);
 
     const bool useHwVbo = SyncHardwareVertexBuffer(m_pStreamSource);
@@ -1545,6 +1695,11 @@ HRESULT IDirect3DDevice8::DrawIndexedPrimitive(D3DPRIMITIVETYPE Type, UINT MinIn
         glDrawElements(mode, count, GL_UNSIGNED_SHORT, idxPtr);
     }
 
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+    g_mobileGLStats.drawCalls[bucket]++;
+    g_mobileGLStats.tris[bucket] += PrimitiveCount;
+    g_mobileGLStats.cpuTimeNs[bucket] += (GetPerfTimeNs() - t0);
+#endif
     return S_OK;
 }
 
@@ -1567,6 +1722,11 @@ HRESULT IDirect3DDevice8::DrawPrimitive(D3DPRIMITIVETYPE Type, UINT StartVertex,
     if ((size_t)(StartVertex + count) * (size_t)m_StreamStride > (size_t)m_pStreamSource->length)
         return S_OK;
 
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+    const uint64_t t0 = GetPerfTimeNs();
+    const int bucket = ClassifyDrawBucket(this, false);
+#endif
+
     SyncESUniforms(this);
 
     const bool useHwVbo = SyncHardwareVertexBuffer(m_pStreamSource);
@@ -1578,6 +1738,12 @@ HRESULT IDirect3DDevice8::DrawPrimitive(D3DPRIMITIVETYPE Type, UINT StartVertex,
 
     ++GetAndroidQueryDrawCounter();
     glDrawArrays(mode, (GLint)StartVertex, count);
+
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+    g_mobileGLStats.drawCalls[bucket]++;
+    g_mobileGLStats.tris[bucket] += PrimitiveCount;
+    g_mobileGLStats.cpuTimeNs[bucket] += (GetPerfTimeNs() - t0);
+#endif
     return S_OK;
 }
 
@@ -1596,11 +1762,23 @@ HRESULT IDirect3DDevice8::DrawPrimitiveUP(D3DPRIMITIVETYPE Type, UINT PrimitiveC
     case D3DPT_TRIANGLEFAN: mode = GL_TRIANGLE_FAN; count = (GLsizei)PrimitiveCount + 2; break;
     default: return S_OK;
     }
+
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+    const uint64_t t0 = GetPerfTimeNs();
+    const int bucket = ClassifyDrawBucket(this, true);
+#endif
+
     m_StreamStride = Stride;
     SyncESUniforms(this);
     BindArrayBufferCached(0);
     BindESVertexAttributes(m_dwFVF, (const BYTE*)pData, Stride);
     glDrawArrays(mode, 0, count);
+
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+    g_mobileGLStats.drawCalls[bucket]++;
+    g_mobileGLStats.tris[bucket] += PrimitiveCount;
+    g_mobileGLStats.cpuTimeNs[bucket] += (GetPerfTimeNs() - t0);
+#endif
     return S_OK;
 }
 
@@ -1619,12 +1797,24 @@ HRESULT IDirect3DDevice8::DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE Type, UINT, UI
     case D3DPT_TRIANGLEFAN: mode = GL_TRIANGLE_FAN; count = (GLsizei)PrimitiveCount + 2; break;
     default: return S_OK;
     }
+
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+    const uint64_t t0 = GetPerfTimeNs();
+    const int bucket = ClassifyDrawBucket(this, true);
+#endif
+
     m_StreamStride = Stride;
     SyncESUniforms(this);
     BindArrayBufferCached(0);
     BindElementArrayBufferCached(0);
     BindESVertexAttributes(m_dwFVF, (const BYTE*)pData, Stride);
     glDrawElements(mode, count, (IdxFmt == D3DFMT_INDEX16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT), pIdx);
+
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+    g_mobileGLStats.drawCalls[bucket]++;
+    g_mobileGLStats.tris[bucket] += PrimitiveCount;
+    g_mobileGLStats.cpuTimeNs[bucket] += (GetPerfTimeNs() - t0);
+#endif
     return S_OK;
 }
 
@@ -1649,6 +1839,7 @@ HRESULT IDirect3DDevice8::Present(const RECT* pSourceRect, const RECT* pDestRect
 
 HRESULT IDirect3DDevice8::SetTexture(DWORD Stage, LPDIRECT3DBaseTexture8 pTexture) {
     if (Stage >= 16) return S_OK;
+    if (pTexture && (IDirect3DTexture8*)pTexture == m_pCurrentRenderTargetTex) pTexture = NULL;
     LPDIRECT3DBaseTexture8 prevTex = m_pBoundTextures[Stage];
     if (prevTex != pTexture) {
         m_pBoundTextures[Stage] = pTexture;
@@ -1669,6 +1860,9 @@ HRESULT IDirect3DDevice8::SetTexture(DWORD Stage, LPDIRECT3DBaseTexture8 pTextur
         return S_OK;
 
     m_BoundGLTexId[Stage] = newGlId;
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+    ++g_mobileGLStats.texBinds;
+#endif
     glActiveTexture(GL_TEXTURE0 + Stage);
     glBindTexture(GL_TEXTURE_2D, newGlId);
     if (tex) {

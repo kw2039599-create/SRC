@@ -20,67 +20,119 @@ class CParticleSystemInstance : public CEffectElementBaseInstance
 		static CDynamicPool<CParticleSystemInstance>	ms_kPool;
 
 	public:
+#ifdef __ANDROID__
+		struct SAndroidBatchParticleVertex
+		{
+			D3DXVECTOR3 pos;
+			DWORD color;
+			TTextureCoordinate tex;
+		};
+
+		static inline void AppendQuadToAndroidBatch(std::vector<SAndroidBatchParticleVertex>& rBatch, const TPTVertex* m, DWORD color)
+		{
+			const size_t base = rBatch.size();
+			rBatch.resize(base + 6);
+			SAndroidBatchParticleVertex* dst = &rBatch[base];
+			dst[0] = { m[0].position, color, m[0].texCoord };
+			dst[1] = { m[1].position, color, m[1].texCoord };
+			dst[2] = { m[2].position, color, m[2].texCoord };
+			dst[3] = { m[2].position, color, m[2].texCoord };
+			dst[4] = { m[1].position, color, m[1].texCoord };
+			dst[5] = { m[3].position, color, m[3].texCoord };
+		}
+#endif
+
 		template <typename T>
 		inline void ForEachParticleRendering(T && FunObj)
 		{
 			DWORD dwFrameIndex;
 #ifdef __ANDROID__
-			if (m_pParticleProperty->m_byBillboardType < BILLBOARD_TYPE_2FACE)
+			const D3DXMATRIX* pLocalMat = m_pParticleProperty->m_bAttachFlag ? mc_pmatLocal : NULL;
+			const BYTE byBillboard = m_pParticleProperty->m_byBillboardType;
+			static std::vector<SAndroidBatchParticleVertex> s_batchVtx;
+
+			STATEMANAGER.SaveRenderState(D3DRS_LIGHTING, FALSE);
+			STATEMANAGER.SaveRenderState(D3DRS_COLORVERTEX, TRUE);
+			STATEMANAGER.SaveTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+			STATEMANAGER.SaveTextureStageState(0, D3DTSS_COLORARG2, D3DTA_TEXTURE);
+			STATEMANAGER.SaveTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
+			STATEMANAGER.SaveTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_TEXTURE);
+#ifdef DIRECTX9
+			STATEMANAGER.SaveFVF(D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1);
+#else
+			STATEMANAGER.SetVertexShader(D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1);
+#endif
+
+			for (dwFrameIndex = 0; dwFrameIndex < m_kVct_pkImgInst.size(); ++dwFrameIndex)
 			{
-				const D3DXMATRIX* pLocalMat = m_pParticleProperty->m_bAttachFlag ? mc_pmatLocal : NULL;
-				static std::vector<TPTVertex> s_batchVtx;
-				for (dwFrameIndex = 0; dwFrameIndex < m_kVct_pkImgInst.size(); dwFrameIndex++)
+				TParticleInstanceList& rList = m_ParticleInstanceListVector[dwFrameIndex];
+				if (rList.empty())
+					continue;
+
+				STATEMANAGER.SetTexture(0, m_kVct_pkImgInst[dwFrameIndex]->GetTextureReference().GetD3DTexture());
+				s_batchVtx.clear();
+				if (s_batchVtx.capacity() < rList.size() * 6)
+					s_batchVtx.reserve(rList.size() * 6);
+
+				for (TParticleInstanceList::iterator itor = rList.begin(); itor != rList.end(); ++itor)
 				{
-					TParticleInstanceList& rList = m_ParticleInstanceListVector[dwFrameIndex];
-					if (rList.empty()) continue;
-					STATEMANAGER.SetTexture(0, m_kVct_pkImgInst[dwFrameIndex]->GetTextureReference().GetD3DTexture());
-					s_batchVtx.clear();
-					DWORD lastColor = 0;
-					bool hasBatch = false;
-					for (TParticleInstanceList::iterator itor = rList.begin(); itor != rList.end(); ++itor)
+					CParticleInstance* pInst = *itor;
+					if (byBillboard < BILLBOARD_TYPE_2FACE)
 					{
-						CParticleInstance* pInst = *itor;
-						if (!m_ignoreFrustum && !InFrustum(pInst))
-							continue;
 						pInst->Transform(pLocalMat);
-						DWORD curColor = STATEMANAGER.GetRenderState(D3DRS_TEXTUREFACTOR);
-						if (hasBatch && curColor != lastColor)
-						{
-							STATEMANAGER.SetRenderState(D3DRS_TEXTUREFACTOR, lastColor);
-							STATEMANAGER.DrawPrimitiveUP(D3DPT_TRIANGLELIST, (UINT)(s_batchVtx.size() / 3), s_batchVtx.data(), sizeof(TPTVertex));
-							s_batchVtx.clear();
-						}
-						lastColor = curColor;
-						hasBatch = true;
-						const TPTVertex* m = pInst->GetParticleMeshPointer();
-						s_batchVtx.push_back(m[0]); s_batchVtx.push_back(m[1]); s_batchVtx.push_back(m[2]);
-						s_batchVtx.push_back(m[2]); s_batchVtx.push_back(m[1]); s_batchVtx.push_back(m[3]);
+						AppendQuadToAndroidBatch(s_batchVtx, pInst->GetParticleMeshPointer(), STATEMANAGER.GetRenderState(D3DRS_TEXTUREFACTOR));
 					}
-					if (!s_batchVtx.empty())
+					else if (byBillboard == BILLBOARD_TYPE_2FACE)
 					{
-						STATEMANAGER.SetRenderState(D3DRS_TEXTUREFACTOR, lastColor);
-						STATEMANAGER.DrawPrimitiveUP(D3DPT_TRIANGLELIST, (UINT)(s_batchVtx.size() / 3), s_batchVtx.data(), sizeof(TPTVertex));
+						pInst->Transform(pLocalMat, D3DXToRadian(-30.0f));
+						DWORD col = STATEMANAGER.GetRenderState(D3DRS_TEXTUREFACTOR);
+						AppendQuadToAndroidBatch(s_batchVtx, pInst->GetParticleMeshPointer(), col);
+						pInst->Transform(pLocalMat, D3DXToRadian(+30.0f));
+						AppendQuadToAndroidBatch(s_batchVtx, pInst->GetParticleMeshPointer(), col);
+					}
+					else
+					{
+						pInst->Transform(pLocalMat);
+						DWORD col = STATEMANAGER.GetRenderState(D3DRS_TEXTUREFACTOR);
+						AppendQuadToAndroidBatch(s_batchVtx, pInst->GetParticleMeshPointer(), col);
+						pInst->Transform(pLocalMat, D3DXToRadian(-60.0f));
+						AppendQuadToAndroidBatch(s_batchVtx, pInst->GetParticleMeshPointer(), col);
+						pInst->Transform(pLocalMat, D3DXToRadian(+60.0f));
+						AppendQuadToAndroidBatch(s_batchVtx, pInst->GetParticleMeshPointer(), col);
 					}
 				}
-				return;
+
+				if (!s_batchVtx.empty())
+				{
+					STATEMANAGER.DrawPrimitiveUP(D3DPT_TRIANGLELIST, (UINT)(s_batchVtx.size() / 3), s_batchVtx.data(), sizeof(SAndroidBatchParticleVertex));
+				}
 			}
+
+#ifdef DIRECTX9
+			STATEMANAGER.RestoreFVF();
+#else
+			STATEMANAGER.SetVertexShader(D3DFVF_XYZ | D3DFVF_TEX1);
 #endif
+			STATEMANAGER.RestoreTextureStageState(0, D3DTSS_ALPHAARG2);
+			STATEMANAGER.RestoreTextureStageState(0, D3DTSS_ALPHAARG1);
+			STATEMANAGER.RestoreTextureStageState(0, D3DTSS_COLORARG2);
+			STATEMANAGER.RestoreTextureStageState(0, D3DTSS_COLORARG1);
+			STATEMANAGER.RestoreRenderState(D3DRS_COLORVERTEX);
+			STATEMANAGER.RestoreRenderState(D3DRS_LIGHTING);
+			return;
+#else
 			for(dwFrameIndex=0; dwFrameIndex<m_kVct_pkImgInst.size(); dwFrameIndex++)
 			{
 				STATEMANAGER.SetTexture(0, m_kVct_pkImgInst[dwFrameIndex]->GetTextureReference().GetD3DTexture());
 				TParticleInstanceList::iterator itor = m_ParticleInstanceListVector[dwFrameIndex].begin();
 				for (; itor != m_ParticleInstanceListVector[dwFrameIndex].end(); ++itor)
 				{
-#ifdef __ANDROID__
-					if (!m_ignoreFrustum && !InFrustum(*itor))
-						continue;
-#else
 					if (!InFrustum(*itor) && !m_ignoreFrustum)
 						return;
-#endif
 					FunObj(*itor);
 				}
 			}
+#endif
 		}
 
 		CParticleSystemInstance();

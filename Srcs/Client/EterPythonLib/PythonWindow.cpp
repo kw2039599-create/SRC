@@ -1281,6 +1281,14 @@ struct SWindowBaseLayout
 
 	bool CWindow::IsIn(long x, long y)
 	{
+#ifdef ENABLE_OPENGL
+		if (!IsFlag(CWindow::FLAG_NOT_PICK) && dynamic_cast<CTextLine*>(this) != nullptr)
+		{
+			if (x >= m_rect.left - 8 && x <= m_rect.right + 8 &&
+			    y >= m_rect.top - 8 && y <= m_rect.bottom + 8)
+				return true;
+		}
+#endif
 		if (x >= m_rect.left && x <= m_rect.right)
 			if (y >= m_rect.top && y <= m_rect.bottom)
 				return true;

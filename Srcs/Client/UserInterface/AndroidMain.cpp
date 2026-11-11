@@ -1,7 +1,3 @@
-#ifdef __APPLE__
-#define _XOPEN_SOURCE 600
-#define _DARWIN_C_SOURCE 1
-#endif
 #include "StdAfx.h"
 #ifdef __ANDROID__
 #include "PythonApplication.h"
@@ -1326,7 +1322,78 @@ static float s_fBaseCamDistance = -1.0f;
 static float s_fSmoothedSpeedZoomOffset = 0.0f;
 static float s_fLastPinchSpan = -1.0f;
 
-static void AndroidToggleSoftKeyboard(bool show) {
+static bool s_bSoftKeyboardVisible = false;
+static DWORD s_dwLastKeyboardOpenMs = 0;
+
+void AndroidToggleSoftKeyboard(bool show) {
+    if (show) {
+        s_dwLastKeyboardOpenMs = ELTimer_GetMSec();
+    }
+    s_bSoftKeyboardVisible = show;
+
+    // Show or hide the global TOP_MOST live text input bar above the keyboard
+    PyRun_SimpleString(show ?
+        "try:\n"
+        "    import ui, wndMgr, ime\n"
+        "    if not hasattr(ui, '_g_mobileKbBar') or ui._g_mobileKbBar is None:\n"
+        "        class _MobileKbPreview(ui.Window):\n"
+        "            def __init__(self):\n"
+        "                ui.Window.__init__(self, 'TOP_MOST')\n"
+        "                sw = wndMgr.GetScreenWidth()\n"
+        "                self.SetSize(500, 42)\n"
+        "                self.SetPosition((sw - 500) / 2, 8)\n"
+        "                self.txt = ui.TextLine()\n"
+        "                self.txt.SetParent(self)\n"
+        "                self.txt.SetPosition(210, 12)\n"
+        "                self.txt.SetHorizontalAlignCenter()\n"
+        "                self.txt.SetOutline()\n"
+        "                self.txt.SetPackedFontColor(0xFFFFFFFF)\n"
+        "                self.txt.AddFlag('not_pick')\n"
+        "                self.txt.Show()\n"
+        "                self.doneTxt = ui.TextLine()\n"
+        "                self.doneTxt.SetParent(self)\n"
+        "                self.doneTxt.SetPosition(456, 12)\n"
+        "                self.doneTxt.SetHorizontalAlignCenter()\n"
+        "                self.doneTxt.SetOutline()\n"
+        "                self.doneTxt.SetPackedFontColor(0xFF6ED2FF)\n"
+        "                self.doneTxt.SetText('تم')\n"
+        "                self.doneTxt.AddFlag('not_pick')\n"
+        "                self.doneTxt.Show()\n"
+        "            def SetPreviewText(self, val, isSecret):\n"
+        "                sw = wndMgr.GetScreenWidth()\n"
+        "                self.SetPosition((sw - 500) / 2, 8)\n"
+        "                disp = ('*' * len(val)) if isSecret else val\n"
+        "                self.txt.SetText((disp if disp else '') + ' |')\n"
+        "            def OnMouseLeftButtonDown(self):\n"
+        "                lx, ly = self.GetMouseLocalPosition()\n"
+        "                if lx >= 412:\n"
+        "                    ime.PasteReturn()\n"
+        "                return True\n"
+        "            def OnRender(self):\n"
+        "                import grp\n"
+        "                x, y = self.GetGlobalPosition()\n"
+        "                w, h = self.GetWidth(), self.GetHeight()\n"
+        "                grp.SetColor(0xF20A101C)\n"
+        "                grp.RenderBar(x, y, w, h)\n"
+        "                grp.SetColor(0xFF1D3D5E)\n"
+        "                grp.RenderBar(x + w - 84, y + 4, 80, h - 8)\n"
+        "                grp.SetColor(0xFF6ED2FF)\n"
+        "                grp.RenderBox(x, y, w, h)\n"
+        "                grp.RenderBox(x + w - 84, y + 4, 80, h - 8)\n"
+        "        ui._g_mobileKbBar = _MobileKbPreview()\n"
+        "    ui._g_mobileKbBar.Show()\n"
+        "    ui._g_mobileKbBar.SetTop()\n"
+        "except:\n"
+        "    pass\n"
+        :
+        "try:\n"
+        "    import ui\n"
+        "    if hasattr(ui, '_g_mobileKbBar') and ui._g_mobileKbBar:\n"
+        "        ui._g_mobileKbBar.Hide()\n"
+        "except:\n"
+        "    pass\n"
+    );
+
 #ifdef __APPLE__
     IOSToggleSoftKeyboard(show);
     return;
@@ -1346,9 +1413,22 @@ static void AndroidToggleSoftKeyboard(bool show) {
         jobject immObj = env->CallObjectMethod(appObj, getSysMid, immStr);
         if (immObj) {
             jclass immCls = env->GetObjectClass(immObj);
-            jmethodID toggleMid = env->GetMethodID(immCls, "toggleSoftInput", "(II)V");
-            if (toggleMid) {
-                env->CallVoidMethod(immObj, toggleMid, show ? 2 : 0, 0);
+            jmethodID visHMid = env->GetMethodID(immCls, "getInputMethodWindowVisibleHeight", "()I");
+            env->ExceptionClear();
+            bool shouldToggle = true;
+            if (visHMid) {
+                jint kbH = env->CallIntMethod(immObj, visHMid);
+                if (!env->ExceptionCheck()) {
+                    bool isCurrentlyOpen = (kbH > 0);
+                    shouldToggle = (isCurrentlyOpen != show);
+                }
+                env->ExceptionClear();
+            }
+            if (shouldToggle) {
+                jmethodID toggleMid = env->GetMethodID(immCls, "toggleSoftInput", "(II)V");
+                if (toggleMid) {
+                    env->CallVoidMethod(immObj, toggleMid, show ? 2 : 0, 0);
+                }
             }
             env->DeleteLocalRef(immCls);
             env->DeleteLocalRef(immObj);
@@ -1360,6 +1440,14 @@ static void AndroidToggleSoftKeyboard(bool show) {
     env->DeleteLocalRef(actThreadCls);
     env->ExceptionClear();
 #endif
+}
+
+bool AndroidIsSoftKeyboardVisible() {
+    return s_bSoftKeyboardVisible;
+}
+
+DWORD AndroidGetLastKeyboardOpenMs() {
+    return s_dwLastKeyboardOpenMs;
 }
 
 static bool IsAnyPointerDraggingCamera() {
@@ -1615,6 +1703,53 @@ static PyObject* mobileInput_FindNearestEnemyVID(PyObject* self, PyObject* args)
     return Py_BuildValue("i", (int)chosenVID);
 }
 
+#define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
+
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+#include <time.h>
+
+struct SMobileGLFrameStats {
+    uint32_t drawCalls[8];
+    uint32_t tris[8];
+    uint64_t cpuTimeNs[8];
+    uint32_t vboUploads;
+    uint32_t vboUploadBytes;
+    uint32_t texBinds;
+    uint32_t progSwitches;
+    uint32_t fboSwitches;
+};
+extern "C" SMobileGLFrameStats g_mobileGLStats;
+__attribute__((weak)) float g_androidSubTimingMs[8] = {0.0f};
+
+enum EMobilePhaseId {
+    MPHASE_UPDATE_GAME   = 0,
+    MPHASE_RENDER_GAME   = 1,
+    MPHASE_TEXTTAIL_UPD  = 2,
+    MPHASE_TEXTTAIL_ARR  = 3,
+    MPHASE_TEXTTAIL_RND  = 4,
+    MPHASE_CHR_PICK      = 5,
+    MPHASE_COUNT         = 6
+};
+
+static double s_phaseAccumMs[MPHASE_COUNT] = {0};
+static char s_perfHudLines[5][192] = {{0}};
+
+static PyObject* mobileInput_RecordPhaseTime(PyObject* /*self*/, PyObject* args) {
+    int phaseId = 0;
+    float elapsedMs = 0.0f;
+    if (PyArg_ParseTuple(args, "if", &phaseId, &elapsedMs)) {
+        if (phaseId >= 0 && phaseId < MPHASE_COUNT)
+            s_phaseAccumMs[phaseId] += (double)elapsedMs;
+    }
+    return Py_BuildValue("i", 1);
+}
+
+static PyObject* mobileInput_GetPerfHudText(PyObject* /*self*/, PyObject* /*args*/) {
+    return Py_BuildValue("(sssss)",
+        s_perfHudLines[0], s_perfHudLines[1], s_perfHudLines[2], s_perfHudLines[3], s_perfHudLines[4]);
+}
+#endif // ENABLE_MOBILE_PERF_DEBUGGER
+
 static PyMethodDef s_mobileInputMethods[] = {
     { "SetJoystickZone",     mobileInput_SetJoystickZone,     METH_VARARGS, "Set virtual joystick zone" },
     { "GetJoystickState",    mobileInput_GetJoystickState,    METH_VARARGS, "Get joystick state tuple" },
@@ -1623,6 +1758,10 @@ static PyMethodDef s_mobileInputMethods[] = {
     { "GetScreenSize",       mobileInput_GetScreenSize,       METH_VARARGS, "Get native Android screen size" },
     { "ShowKeyboard",        mobileInput_ShowKeyboard,        METH_VARARGS, "Show or hide Android soft keyboard" },
     { "FindNearestEnemyVID", mobileInput_FindNearestEnemyVID, METH_VARARGS, "Find nearest enemy VID" },
+#ifdef ENABLE_MOBILE_PERF_DEBUGGER
+    { "RecordPhaseTime",     mobileInput_RecordPhaseTime,     METH_VARARGS, "Record engine phase ms" },
+    { "GetPerfHudText",      mobileInput_GetPerfHudText,      METH_VARARGS, "Get 5-line perf HUD strings" },
+#endif
     { NULL, NULL, 0, NULL }
 };
 
@@ -1979,23 +2118,250 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
             AndroidKeyEvt kev = s_keyQueue[s_keyTail];
             s_keyTail = (s_keyTail + 1) & 63;
             pthread_mutex_unlock(&s_inputQueueMutex);
-            if (kev.keyCode == 67) {
-                CPythonIME::Instance().WMChar(NULL, WM_CHAR, 0x08, 0);
+            if (kev.keyCode == 67 || kev.unicodeChar == 8) {
                 PyRun_SimpleString("import ime\nime.PasteBackspace()\n");
-            } else if (kev.keyCode == 66 || kev.keyCode == 160) {
+                UI::CWindowManager::Instance().RunIMEUpdate();
+            } else if (kev.keyCode == 66 || kev.keyCode == 160 || kev.unicodeChar == 10 || kev.unicodeChar == 13) {
+                UI::CWindow* pBefore = UI::CWindowManager::Instance().GetActivateWindow();
                 UI::CWindowManager::Instance().RunIMEReturnEvent();
+                UI::CWindow* pAfter = UI::CWindowManager::Instance().GetActivateWindow();
+                if (!pAfter || pAfter == pBefore) {
+                    AndroidToggleSoftKeyboard(false);
+                }
             } else if (kev.keyCode == 61) {
                 UI::CWindowManager::Instance().RunIMETabEvent();
-            } else if (kev.unicodeChar >= 32 && kev.unicodeChar < 127) {
-                char cmd[64];
-                if (kev.unicodeChar == '\'' || kev.unicodeChar == '\\')
-                    snprintf(cmd, sizeof(cmd), "import ime\nime.PasteString('\\%c')\n", (char)kev.unicodeChar);
-                else
-                    snprintf(cmd, sizeof(cmd), "import ime\nime.PasteString('%c')\n", (char)kev.unicodeChar);
-                PyRun_SimpleString(cmd);
+            } else if (kev.unicodeChar >= 32) {
+                unsigned char outCh = 0;
+                if (kev.unicodeChar < 127) {
+                    outCh = (unsigned char)kev.unicodeChar;
+                } else {
+                    static const uint16_t s_cp1256Map[128] = {
+                        0x20AC,0x067E,0x201A,0x0192,0x201E,0x2026,0x2020,0x2021,0x02C6,0x2030,0x0679,0x2039,0x0152,0x0686,0x0698,0x0688,
+                        0x06AF,0x2018,0x2019,0x201C,0x201D,0x2022,0x2013,0x2014,0x06A9,0x2122,0x0691,0x203A,0x0153,0x200C,0x200D,0x06BA,
+                        0x00A0,0x060C,0x00A2,0x00A3,0x00A4,0x00A5,0x00A6,0x00A7,0x00A8,0x00A9,0x06BE,0x00AB,0x00AC,0x00AD,0x00AE,0x00AF,
+                        0x00B0,0x00B1,0x00B2,0x00B3,0x00B4,0x00B5,0x00B6,0x00B7,0x00B8,0x00B9,0x061B,0x00BB,0x00BC,0x00BD,0x00BE,0x061F,
+                        0x06C1,0x0621,0x0622,0x0623,0x0624,0x0625,0x0626,0x0627,0x0628,0x0629,0x062A,0x062B,0x062C,0x062D,0x062E,0x062F,
+                        0x0630,0x0631,0x0632,0x0633,0x0634,0x0635,0x0636,0x00D7,0x0637,0x0638,0x0639,0x063A,0x0640,0x0641,0x0642,0x0643,
+                        0x00E0,0x0644,0x00E2,0x0645,0x0646,0x0647,0x0648,0x00E7,0x00E8,0x00E9,0x00EA,0x00EB,0x0649,0x064A,0x00EE,0x00EF,
+                        0x064B,0x064C,0x064D,0x064E,0x00F4,0x064F,0x0650,0x00F7,0x0651,0x00F9,0x0652,0x00FB,0x00FC,0x200E,0x200F,0x06D2
+                    };
+                    for (int idx = 0; idx < 128; ++idx) {
+                        if (s_cp1256Map[idx] == (uint16_t)kev.unicodeChar) {
+                            outCh = (unsigned char)(0x80 + idx);
+                            break;
+                        }
+                    }
+                }
+                if (outCh != 0) {
+                    char cmd[64];
+                    snprintf(cmd, sizeof(cmd), "import ime\nime.PasteString('\\x%02x')\n", (unsigned int)outCh);
+                    PyRun_SimpleString(cmd);
+                    UI::CWindowManager::Instance().RunIMEUpdate();
+                }
             }
         }
+        #ifdef ENABLE_MOBILE_PERF_DEBUGGER
+        const bool bInGameWorldNow = (CPythonCharacterManager::InstancePtr() &&
+                                      CPythonCharacterManager::Instance().GetMainInstancePtr() != nullptr);
+        if (bInGameWorldNow) {
+            static bool s_bPyPerfHooked = false;
+            if (!s_bPyPerfHooked) {
+                s_bPyPerfHooked = true;
+                PyRun_SimpleString(
+                    "try:\n"
+                    "    import app, chr, textTail, ui, mobileInput, time as _t\n"
+                    "    def _wrap_phase(mod, name, pid):\n"
+                    "        orig = getattr(mod, name, None)\n"
+                    "        if orig is None or getattr(orig, '_prof_wrapped', False): return\n"
+                    "        def _wrapped(*a, **k):\n"
+                    "            t0 = _t.time()\n"
+                    "            r = orig(*a, **k)\n"
+                    "            mobileInput.RecordPhaseTime(pid, (_t.time() - t0) * 1000.0)\n"
+                    "            return r\n"
+                    "        _wrapped._prof_wrapped = True\n"
+                    "        setattr(mod, name, _wrapped)\n"
+                    "    _wrap_phase(app, 'UpdateGame', 0)\n"
+                    "    _wrap_phase(app, 'RenderGame', 1)\n"
+                    "    _wrap_phase(textTail, 'UpdateAllTextTail', 2)\n"
+                    "    _wrap_phase(textTail, 'UpdateShowingTextTail', 2)\n"
+                    "    _wrap_phase(textTail, 'ArrangeTextTail', 3)\n"
+                    "    _wrap_phase(textTail, 'Render', 4)\n"
+                    "    _wrap_phase(chr, 'Pick', 5)\n"
+                    "    class _MobilePerfHud(ui.Window):\n"
+                    "        def __init__(self):\n"
+                    "            ui.Window.__init__(self, 'TOP_MOST')\n"
+                    "            self.SetSize(720, 95)\n"
+                    "            self.SetPosition(155, 4)\n"
+                    "            self.AddFlag('not_pick')\n"
+                    "            self.lines = []\n"
+                    "            for i in xrange(5):\n"
+                    "                tl = ui.TextLine()\n"
+                    "                tl.SetParent(self)\n"
+                    "                tl.SetPosition(0, i * 16)\n"
+                    "                tl.SetOutline()\n"
+                    "                tl.SetPackedFontColor(0xFF00FF66 if i == 0 else (0xFFFFDD66 if i < 3 else 0xFF88EEFF))\n"
+                    "                tl.Show()\n"
+                    "                self.lines.append(tl)\n"
+                    "            self.lastUpd = 0.0\n"
+                    "            self.Show()\n"
+                    "        def OnUpdate(self):\n"
+                    "            now = _t.time()\n"
+                    "            if now - self.lastUpd >= 0.5:\n"
+                    "                self.lastUpd = now\n"
+                    "                txts = mobileInput.GetPerfHudText()\n"
+                    "                for i in xrange(5):\n"
+                    "                    self.lines[i].SetText(txts[i])\n"
+                    "    _g_mobilePerfHud = _MobilePerfHud()\n"
+                    "except:\n"
+                    "    pass\n"
+                );
+            }
+        }
+
+        struct timespec tsLoop0, tsLoop1;
+        clock_gettime(CLOCK_MONOTONIC, &tsLoop0);
+        static uint64_t s_lastFrameEndNs = 0;
+        uint64_t loopStartNs = (uint64_t)tsLoop0.tv_sec * 1000000000ULL + (uint64_t)tsLoop0.tv_nsec;
+
         CPythonApplication::InstancePtr()->Loop();
+
+        clock_gettime(CLOCK_MONOTONIC, &tsLoop1);
+        uint64_t loopEndNs = (uint64_t)tsLoop1.tv_sec * 1000000000ULL + (uint64_t)tsLoop1.tv_nsec;
+
+        static uint32_t s_profFrames = 0;
+        static double s_accumLoopMs = 0.0;
+        static double s_accumSwapMs = 0.0;
+        static SMobileGLFrameStats s_accumGL = {};
+        static DWORD s_lastReportMs = ELTimer_GetMSec();
+
+        s_profFrames++;
+        s_accumLoopMs += (double)(loopEndNs - loopStartNs) * 1e-6;
+        if (s_lastFrameEndNs > 0 && loopStartNs > s_lastFrameEndNs)
+            s_accumSwapMs += (double)(loopStartNs - s_lastFrameEndNs) * 1e-6;
+        s_lastFrameEndNs = loopEndNs;
+
+        for (int b = 0; b < 8; ++b) {
+            s_accumGL.drawCalls[b] += g_mobileGLStats.drawCalls[b];
+            s_accumGL.tris[b]      += g_mobileGLStats.tris[b];
+            s_accumGL.cpuTimeNs[b] += g_mobileGLStats.cpuTimeNs[b];
+        }
+        s_accumGL.vboUploads     += g_mobileGLStats.vboUploads;
+        s_accumGL.vboUploadBytes += g_mobileGLStats.vboUploadBytes;
+        s_accumGL.texBinds       += g_mobileGLStats.texBinds;
+        s_accumGL.progSwitches   += g_mobileGLStats.progSwitches;
+        s_accumGL.fboSwitches    += g_mobileGLStats.fboSwitches;
+        memset(&g_mobileGLStats, 0, sizeof(g_mobileGLStats));
+
+        DWORD nowReportMs = ELTimer_GetMSec();
+        if (nowReportMs - s_lastReportMs >= 1500 && s_profFrames > 0) {
+            double invF = 1.0 / (double)s_profFrames;
+            double elapsedSec = (double)(nowReportMs - s_lastReportMs) * 0.001;
+            double realFps = (double)s_profFrames / (elapsedSec > 0.001 ? elapsedSec : 1.0);
+            double avgLoopMs = s_accumLoopMs * invF;
+            double avgSwapMs = s_accumSwapMs * invF;
+            double totalFrameMs = (avgLoopMs + avgSwapMs) > 0.01 ? (avgLoopMs + avgSwapMs) : 1.0;
+
+            double phUpd  = s_phaseAccumMs[MPHASE_UPDATE_GAME]  * invF;
+            double phRnd  = s_phaseAccumMs[MPHASE_RENDER_GAME]  * invF;
+            double phTTU  = s_phaseAccumMs[MPHASE_TEXTTAIL_UPD] * invF;
+            double phTTA  = s_phaseAccumMs[MPHASE_TEXTTAIL_ARR] * invF;
+            double phTTR  = s_phaseAccumMs[MPHASE_TEXTTAIL_RND] * invF;
+            double phPick = s_phaseAccumMs[MPHASE_CHR_PICK]     * invF;
+
+            uint32_t totalDC = 0, totalTris = 0;
+            double bMs[8];
+            uint32_t bDc[8];
+            for (int b = 0; b < 8; ++b) {
+                bDc[b]    = (uint32_t)(s_accumGL.drawCalls[b] * invF);
+                totalDC   += bDc[b];
+                totalTris += (uint32_t)(s_accumGL.tris[b] * invF);
+                bMs[b]    = (double)s_accumGL.cpuTimeNs[b] * 1e-6 * invF;
+            }
+
+            double gl3dSumMs = bMs[0] + bMs[1] + bMs[2] + bMs[3] + bMs[4] + bMs[5] + bMs[6];
+            double cpuDeformAndCullMs = (phRnd > gl3dSumMs) ? (phRnd - gl3dSumMs) : 0.0;
+
+            double subBGUpd  = g_androidSubTimingMs[0] * invF;
+            double subIkaUpd = g_androidSubTimingMs[1] * invF;
+            double subChrUpd = g_androidSubTimingMs[2] * invF;
+            double subEftUpd = g_androidSubTimingMs[3] * invF;
+            double subDeform = g_androidSubTimingMs[4] * invF;
+            memset(g_androidSubTimingMs, 0, sizeof(g_androidSubTimingMs));
+
+            const bool hasSubTimings = (subBGUpd + subIkaUpd + subChrUpd + subEftUpd) > 0.05;
+
+            struct SSubsysCost { const char* name; double ms; uint32_t dc; };
+            SSubsysCost costs[14] = {
+                { "CPU Deform/Frustum/Sort", cpuDeformAndCullMs, 0 },
+                { "Update: Characters/NPCs", hasSubTimings ? subChrUpd : phUpd, 0 },
+                { "Update: Effects/Particles", subEftUpd, 0 },
+                { "Update: OfflineShops/Evt",  subIkaUpd, 0 },
+                { "Update: Map/Background",    subBGUpd,  0 },
+                { "ShadowMap Depth Pass",    bMs[0],             bDc[0] },
+                { "Water/Puddle Refl FBO",   bMs[1],             bDc[1] },
+                { "Terrain Splat Shaders",   bMs[2],             bDc[2] },
+                { "Map Objects & Trees",     bMs[3],             bDc[3] },
+                { "Water Surface Shader",    bMs[4],             bDc[4] },
+                { "Actors .gr2 Meshes GL",   bMs[5],             bDc[5] },
+                { "3D Particles/Effects GL", bMs[6],             bDc[6] },
+                { "TextTail Arrange+Upd",    phTTU + phTTA,      0 },
+                { "2D UI Windows & Icons",   bMs[7],             bDc[7] }
+            };
+            std::sort(std::begin(costs), std::end(costs), [](const SSubsysCost& a, const SSubsysCost& b) {
+                return a.ms > b.ms;
+            });
+
+            snprintf(s_perfHudLines[0], sizeof(s_perfHudLines[0]),
+                "FPS: %.1f | Frame: %.1fms (CPU: %.1fms | GPU/Swap: %.1fms) | VBOUp: %u (%uKB)",
+                realFps, avgLoopMs + avgSwapMs, avgLoopMs, avgSwapMs,
+                (uint32_t)(s_accumGL.vboUploads * invF),
+                (uint32_t)(s_accumGL.vboUploadBytes * invF / 1024));
+            if (hasSubTimings) {
+                snprintf(s_perfHudLines[1], sizeof(s_perfHudLines[1]),
+                    "Rnd3D %.1fms (Def:%.1f GL:%.1f) | Upd %.1fms (Chr:%.1f Eft:%.1f Ika:%.1f BG:%.1f) | TT:%.1fms",
+                    phRnd, subDeform > 0.0f ? subDeform : cpuDeformAndCullMs, gl3dSumMs,
+                    phUpd, subChrUpd, subEftUpd, subIkaUpd, subBGUpd, phTTU + phTTA + phTTR);
+            } else {
+                snprintf(s_perfHudLines[1], sizeof(s_perfHudLines[1]),
+                    "Phases: Render3D %.1fms (Deform/CPU:%.1fms GL:%.1fms) | Update %.1fms | TextTail %.1fms | Pick %.1fms",
+                    phRnd, cpuDeformAndCullMs, gl3dSumMs, phUpd, phTTU + phTTA + phTTR, phPick);
+            }
+            snprintf(s_perfHudLines[2], sizeof(s_perfHudLines[2]),
+                "GL: %u dc (%uk tri) | Act:%.1fms(%u) Shd:%.1fms(%u) Obj:%.1fms(%u) Ter:%.1fms(%u) FX:%.1fms(%u) UI:%.1fms(%u)",
+                totalDC, totalTris / 1000,
+                bMs[5], bDc[5], bMs[0], bDc[0], bMs[3], bDc[3], bMs[2], bDc[2], bMs[6], bDc[6], bMs[7], bDc[7]);
+            snprintf(s_perfHudLines[3], sizeof(s_perfHudLines[3]),
+                "Hot #1: %s = %.1fms (%.0f%%) [%u dc]",
+                costs[0].name, costs[0].ms, (100.0 * costs[0].ms) / totalFrameMs, costs[0].dc);
+            snprintf(s_perfHudLines[4], sizeof(s_perfHudLines[4]),
+                "Hot #2: %s = %.1fms (%.0f%%) | #3: %s = %.1fms (%.0f%%)",
+                costs[1].name, costs[1].ms, (100.0 * costs[1].ms) / totalFrameMs,
+                costs[2].name, costs[2].ms, (100.0 * costs[2].ms) / totalFrameMs);
+
+            LOGI("[PERF] %s", s_perfHudLines[0]);
+            LOGI("[PERF] %s", s_perfHudLines[1]);
+            LOGI("[PERF] %s", s_perfHudLines[2]);
+            LOGI("[PERF] %s", s_perfHudLines[3]);
+            LOGI("[PERF] %s", s_perfHudLines[4]);
+
+            if (bInGameWorldNow) {
+                if (FILE* pfp = fopen("perf_mobile.txt", "a")) {
+                    fprintf(pfp, "=== PERF REPORT (%.1f FPS) ===\n%s\n%s\n%s\n%s\n%s\n",
+                        realFps, s_perfHudLines[0], s_perfHudLines[1], s_perfHudLines[2], s_perfHudLines[3], s_perfHudLines[4]);
+                    fclose(pfp);
+                }
+            }
+
+            s_profFrames = 0;
+            s_accumLoopMs = 0.0;
+            s_accumSwapMs = 0.0;
+            memset(&s_accumGL, 0, sizeof(s_accumGL));
+            for (int i = 0; i < MPHASE_COUNT; ++i) s_phaseAccumMs[i] = 0.0;
+            s_lastReportMs = nowReportMs;
+        }
+#else
+        CPythonApplication::InstancePtr()->Loop();
+#endif
     }
 }
 
@@ -2888,20 +3254,33 @@ static void FixupTreePointers(STreeInternalData* d) {
 }
 
 static void UpdateTreeWindAndBillboards(STreeInternalData* d) {
-    DWORD nowMs = ELTimer_GetMSec();
-    float camDiff = fabsf(s_camDir[0] - d->lastCamDir[0]) + fabsf(s_camDir[1] - d->lastCamDir[1]);
-    if (nowMs - d->lastWindUpdateMs < 15 && camDiff < 0.002f && !d->bbTableWorld.empty())
-        return;
-    d->lastWindUpdateMs = nowMs;
-    d->lastCamDir[0] = s_camDir[0];
-    d->lastCamDir[1] = s_camDir[1];
+    const bool bIsShadowPass = (GetCurrentGLDevice() != nullptr &&
+                                GetCurrentGLDevice()->m_pCurrentRenderTargetTex != nullptr &&
+                                GetCurrentGLDevice()->m_ActivePixelShaderType == PS_TYPE_SHADOW_DEPTH);
 
-    // 1. Rotate reference billboard table (captured at camDir = (0, 1, 0)) to current camera + wind rocking
-    float dx = s_camDir[0], dy = s_camDir[1];
+    float dx = s_camDir[0];
+    float dy = s_camDir[1];
+    if (bIsShadowPass && Frustum::Instance().graphicsLevel > 0) {
+        // Lock tree leaf billboards to the sun/light direction during shadow depth passes
+        // so tree shadows have the exact same shape regardless of camera rotation
+        dx = -Frustum::Instance().treeLightDirection.x;
+        dy = -Frustum::Instance().treeLightDirection.y;
+    }
+
     float len = sqrtf(dx * dx + dy * dy);
-    if (len > 0.001f) { dx /= len; dy /= len; } else { dx = 0.0f; dy = 1.0f; }
+    if (len > 0.001f) { dx /= len; dy /= len; } else { dx = 0.35f; dy = 0.35f; }
+
+    DWORD nowMs = ELTimer_GetMSec();
+    float camDiff = fabsf(dx - d->lastCamDir[0]) + fabsf(dy - d->lastCamDir[1]);
+    if (camDiff < 0.002f && (nowMs - d->lastWindUpdateMs < 15) && !d->bbTableWorld.empty())
+        return;
+
+    d->lastWindUpdateMs = nowMs;
+    d->lastCamDir[0] = dx;
+    d->lastCamDir[1] = dy;
+
     float rx = dy, ry = -dx;
-    float tSec = ELTimer_GetMSec() * 0.001f;
+    float tSec = nowMs * 0.001f;
 
     size_t numCorners = d->bbTableBase.size() / 4;
     if (d->bbTableWorld.size() != d->bbTableBase.size())
@@ -3120,6 +3499,7 @@ void CSpeedTreeRT::GetTextures(STextures& sTextures) const {
 const float* CSpeedTreeRT::GetLeafBillboardTable(unsigned int& nEntryCount) const {
     STreeInternalData* inst = GetTreeData(this);
     STreeInternalData* d = inst->proto ? inst->proto : inst;
+    UpdateTreeWindAndBillboards(d);
     nEntryCount = (unsigned int)d->bbTableWorld.size();
     return d->bbTableWorld.empty() ? nullptr : d->bbTableWorld.data();
 }

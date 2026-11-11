@@ -114,10 +114,8 @@ void CMapOutdoor::__RenderTerrain_RecurseRenderQuadTree(CTerrainQuadtreeNode* No
 int	CMapOutdoor::__RenderTerrain_RecurseRenderQuadTree_CheckBoundingCircle(const D3DXVECTOR3& c_v3Center, const float& c_fRadius)
 {
 	float extraRadius = 1.0f;
-#ifndef __ANDROID__
 	if (Frustum::Instance().graphicsLevel != 0)
 		extraRadius = 8.0f;
-#endif
 
 	const int count = 6;
 
@@ -145,7 +143,6 @@ int	CMapOutdoor::__RenderTerrain_RecurseRenderQuadTree_CheckBoundingCircle(const
 
 void CMapOutdoor::__RenderTerrain_AppendPatch(const D3DXVECTOR3& c_rv3Center, float fDistance, long lPatchNum)
 {
-#ifndef __ANDROID__
 	if (Frustum::Instance().graphicsLevel != 0)
 	{
 		if (Frustum::Instance().treeShadow < 2)
@@ -159,7 +156,6 @@ void CMapOutdoor::__RenderTerrain_AppendPatch(const D3DXVECTOR3& c_rv3Center, fl
 		m_PatchVector.push_back(std::make_pair(fDistance, lPatchNum));
 	}
 	else
-#endif
 	{
 		assert(NULL != m_pTerrainPatchProxyList && "CMapOutdoor::__RenderTerrain_AppendPatch");
 		if (!m_pTerrainPatchProxyList[lPatchNum].isUsed())
@@ -646,6 +642,13 @@ void CMapOutdoor::RenderArea(bool bRenderAmbience)
 			pArea->CollectRenderingObject(s_kVct_pkOpaqueThingInstSort);
 		}
 	}
+
+#ifdef __ANDROID__
+	std::sort(s_kVct_pkOpaqueThingInstSort.begin(), s_kVct_pkOpaqueThingInstSort.end(),
+		[](CGraphicThingInstance* a, CGraphicThingInstance* b) {
+			return a->LessRenderOrder(b);
+		});
+#endif
 
 	std::for_each(s_kVct_pkOpaqueThingInstSort.begin(), s_kVct_pkOpaqueThingInstSort.end(), CMapOutdoor_FOpaqueThingInstanceRender());
 

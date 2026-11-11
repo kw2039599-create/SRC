@@ -379,7 +379,11 @@ struct FCharacterManagerCharacterInstanceListDeform
 
 void CPythonCharacterManager::Deform()
 {
-	std::for_each(m_kAliveInstMap.begin(), m_kAliveInstMap.end(), FCharacterManagerCharacterInstanceDeform());
+	for (TCharacterInstanceMap::iterator i = m_kAliveInstMap.begin(); i != m_kAliveInstMap.end(); ++i)
+	{
+		CInstanceBase* pkInst = i->second;
+		pkInst->Deform();
+	}
 	std::for_each(m_kDeadInstList.begin(), m_kDeadInstList.end(), FCharacterManagerCharacterInstanceListDeform());
 }
 
@@ -536,6 +540,7 @@ void CPythonCharacterManager::RenderShadowMainInstance()
 
 void CPythonCharacterManager::RenderShadowAllInstances()
 {
+#ifdef __ANDROID__
 	CInstanceBase* pkInstMain = GetMainInstancePtr();
 	if (!pkInstMain)
 	{
@@ -546,12 +551,13 @@ void CPythonCharacterManager::RenderShadowAllInstances()
 
 	TPixelPosition kPPosMain;
 	pkInstMain->NEW_GetPixelPosition(&kPPosMain);
-	constexpr float fShadowCutoffDistSq = 4500.0f * 4500.0f;
+	constexpr float fShadowCutoffDistSq = 3000.0f * 3000.0f;
+	const bool bKeepOffscreenShadows = (Frustum::Instance().graphicsLevel > 0);
 
 	for (TCharacterInstanceMap::iterator i = m_kAliveInstMap.begin(); i != m_kAliveInstMap.end(); ++i)
 	{
 		CInstanceBase* pInst = i->second;
-		if (!pInst->GetGraphicThingInstanceRef().isShow())
+		if (!bKeepOffscreenShadows && !pInst->GetGraphicThingInstanceRef().isShow())
 			continue;
 
 		TPixelPosition kPPosEach;
@@ -561,6 +567,10 @@ void CPythonCharacterManager::RenderShadowAllInstances()
 		if ((dx * dx + dy * dy) <= fShadowCutoffDistSq)
 			pInst->RenderToShadowMap();
 	}
+#else
+	for (TCharacterInstanceMap::iterator i = m_kAliveInstMap.begin(); i != m_kAliveInstMap.end(); ++i)
+		i->second->RenderToShadowMap();
+#endif
 }
 
 struct FCharacterManagerCharacterInstanceRenderCollision
@@ -840,35 +850,6 @@ void CPythonCharacterManager::__NEW_Pick()
 	{
 		m_pkInstPick->OnUnselected();
 		m_pkInstPick = NULL;
-	}
-}
-
-void CPythonCharacterManager::__OLD_Pick()
-{
-	for (TCharacterInstanceMap::iterator itor = m_kAliveInstMap.begin(); itor != m_kAliveInstMap.end(); ++itor)
-	{
-		CInstanceBase * pkInstEach = itor->second;
-
-		if (pkInstEach == m_pkInstMain)
-			continue;
-
-		if (pkInstEach->IntersectDefendingSphere())
-		{
-			if (m_pkInstPick)
-				if (m_pkInstPick!=pkInstEach)
-					m_pkInstPick->OnUnselected();
-
-			m_pkInstPick = pkInstEach;
-			m_pkInstPick->OnSelected();
-
-			return;
-		}
-	}
-
-	if (m_pkInstPick)
-	{
-		m_pkInstPick->OnUnselected();
-		m_pkInstPick=NULL;
 	}
 }
 

@@ -44,6 +44,15 @@ def prepare_bundle():
     pl['UIRequiresFullScreen'] = True
     pl['ITSAppUsesNonExemptEncryption'] = False
     pl['UIDeviceFamily'] = [1, 2]
+    if not str(pl.get('DTSDKName', '')).startswith('iphoneos26'):
+        pl['DTSDKName'] = 'iphoneos26.0'
+        pl['DTPlatformVersion'] = '26.0'
+        pl['DTSDKBuild'] = '23A339'
+        pl['DTPlatformBuild'] = '23A339'
+        pl['DTXcode'] = '2600'
+        pl['DTXcodeBuild'] = '17A324'
+        bp = f'{APP_PATH}/M2WorldOnline'
+        subprocess.check_call(['xcrun', 'vtool', '-set-build-version', 'ios', '14.0', '26.0', '-tool', 'ld', '1221.4', '-replace', '-output', bp, bp])
     orient = ['UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight', 'UIInterfaceOrientationPortrait', 'UIInterfaceOrientationPortraitUpsideDown']
     pl['UISupportedInterfaceOrientations'] = orient[:2]
     pl['UISupportedInterfaceOrientations' + chr(126) + 'ipad'] = orient

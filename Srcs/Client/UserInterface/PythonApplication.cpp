@@ -10,6 +10,7 @@
 #include "PythonApplication.h"
 #ifdef __ANDROID__
 #include <Python27/frameobject.h>
+float g_androidSubTimingMs[8] = {0.0f}; // 0:BGUpd, 1:IkaUpd, 2:ChrUpd, 3:EftUpd, 4:Deform+Cull
 #endif
 #include "PythonCharacterManager.h"
 #ifdef ENABLE_RENDER_TARGET
@@ -299,6 +300,14 @@ void CPythonApplication::RenderGame()
 		if (Frustum::Instance().frameCounter > 100)
 			Frustum::Instance().frameCounter = 0;
 
+		static bool s_bPuddleStateInitialized = false;
+		if (!s_bPuddleStateInitialized)
+		{
+			s_bPuddleStateInitialized = true;
+			if (Frustum::Instance().selectRainFrustun == 0)
+				Frustum::Instance().puddleThreshold = 1.0f;
+		}
+
 		static DWORD s_dwLastPuddleTime = ELTimer_GetMSec();
 		DWORD dwCurPuddleTime = ELTimer_GetMSec();
 		float fPuddleDeltaSec = (dwCurPuddleTime > s_dwLastPuddleTime) ? ((dwCurPuddleTime - s_dwLastPuddleTime) * 0.001f) : 0.0f;
@@ -362,6 +371,9 @@ void CPythonApplication::RenderGame()
 
 		m_pyGraphic.SetPerspective(fFOV, fAspect, fNearClip, fFarClip);
 
+#ifdef __ANDROID__
+		DWORD tDeform0 = ELTimer_GetMSec();
+#endif
 		CCullingManager::Instance().Process();
 
 		m_kChrMgr.Deform();
@@ -369,8 +381,15 @@ void CPythonApplication::RenderGame()
 #ifdef ENABLE_MINI_GAME_YUTNORI
 		m_kYutNoriManager.DeformModel();
 #endif
+#ifdef __ANDROID__
+		extern float g_androidSubTimingMs[8];
+		g_androidSubTimingMs[4] += (float)(ELTimer_GetMSec() - tDeform0);
+#endif
 
-// 1. Render offscreen reflections & shadow maps BEFORE starting PostProcessing or pushing main game state
+		static DWORD s_dwAndroidOffscreenPassTick = 0;
+		++s_dwAndroidOffscreenPassTick;
+
+		// 1. Render offscreen reflections & shadow maps BEFORE starting PostProcessing or pushing main game state
 		if (Frustum::instance().graphicsWaterLevel == 2)
 		{
 			m_pyBackground.GetUnderwaterCamera();
@@ -734,7 +753,12 @@ void CPythonApplication::UpdateGame()
 	OnCameraUpdate();
 #endif
 	DWORD t12=ELTimer_GetMSec();
-
+#ifdef __ANDROID__
+	g_androidSubTimingMs[0] += (float)(t5 - t4); // BG.Update
+	g_androidSubTimingMs[1] += (float)(t6 - t5); // IkaShop/Event.Update
+	g_androidSubTimingMs[2] += (float)(t7 - t6); // ChrMgr.Update
+	g_androidSubTimingMs[3] += (float)(t9 - t7); // EftMgr+Fly.Update
+#endif
 	if (PERF_CHECKER_RENDER_GAME)
 	{
 		if (t12-t1>5)

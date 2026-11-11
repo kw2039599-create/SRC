@@ -1,87 +1,12 @@
-﻿  StdAfx.cpp
-  ActorInstance.cpp
-  ActorInstanceAttach.cpp
-  ActorInstanceBattle.cpp
-  ActorInstanceBlend.cpp
-  ActorInstanceCollisionDetection.cpp
-  ActorInstanceData.cpp
-  ActorInstanceEvent.cpp
-  ActorInstanceFly.cpp
-  ActorInstanceMotion.cpp
-  ActorInstanceMotionEvent.cpp
-  ActorInstancePosition.cpp
-  ActorInstanceRender.cpp
-  ActorInstanceRotation.cpp
-  ActorInstanceSync.cpp
-  ActorInstanceWeaponTrace.cpp
-  Area.cpp
-  AreaLoaderThread.cpp
-  AreaTerrain.cpp
-  DungeonBlock.cpp
-  FlyTarget.cpp
-  FlyTrace.cpp
-  FlyingData.cpp
-  FlyingInstance.cpp
-  FlyingObjectManager.cpp
-  GameEventManager.cpp
-  GameType.cpp
-  GameUtil.cpp
-  ItemData.cpp
-  ItemManager.cpp
-  MapBase.cpp
-  MapManager.cpp
-  MapOutdoor.cpp
-  MapOutdoorCharacterShadow.cpp
-  MapOutdoorIndexBuffer.cpp
-  MapOutdoorLoad.cpp
-  MapOutdoorQuadtree.cpp
+﻿  MapOutdoorCharacterShadow.cpp
   MapOutdoorRender.cpp
-  MapOutdoorRenderHTP.cpp
-  MapOutdoorRenderSTP.cpp
-  MapOutdoorUpdate.cpp
-  MapOutdoorWater.cpp
-  MapType.cpp
-  MapUtil.cpp
-  MonsterAreaInfo.cpp
-  PhysicsObject.cpp
-  Property.cpp
-  PropertyLoader.cpp
-  PropertyManager.cpp
-  RaceData.cpp
-  RaceDataFile.cpp
-  RaceManager.cpp
-  RaceMotionData.cpp
-  SnowEnvironment.cpp
-  SnowParticle.cpp
-  TerrainDecal.cpp
-  TerrainPatch.cpp
-  TerrainQuadtree.cpp
-  WeaponTrace.cpp
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\AreaTerrain.cpp(446,18): warning C5055: operator '*': deprecated between enumerations and floating-point types
-  (compiling source file '/AreaTerrain.cpp')
-  
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorLoad.cpp(483,64): warning C5055: operator '/': deprecated between enumerations and floating-point types
-  (compiling source file '/MapOutdoorLoad.cpp')
-  
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorLoad.cpp(484,64): warning C5055: operator '/': deprecated between enumerations and floating-point types
-  (compiling source file '/MapOutdoorLoad.cpp')
-  
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorRenderSTP.cpp(630,86): warning C5055: operator '/': deprecated between enumerations and floating-point types
-  (compiling source file '/MapOutdoorRenderSTP.cpp')
-  
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorRenderSTP.cpp(631,86): warning C5055: operator '/': deprecated between enumerations and floating-point types
-  (compiling source file '/MapOutdoorRenderSTP.cpp')
-  
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorCharacterShadow.cpp(1287,67): warning C4305: 'argument': truncation from 'double' to 'FLOAT'
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorCharacterShadow.cpp(1299,67): warning C4305: 'argument': truncation from 'double' to 'FLOAT'
   (compiling source file '/MapOutdoorCharacterShadow.cpp')
   
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorCharacterShadow.cpp(1287,56): warning C4305: 'argument': truncation from 'double' to 'FLOAT'
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorCharacterShadow.cpp(1299,56): warning C4305: 'argument': truncation from 'double' to 'FLOAT'
   (compiling source file '/MapOutdoorCharacterShadow.cpp')
   
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorCharacterShadow.cpp(1287,45): warning C4305: 'argument': truncation from 'double' to 'FLOAT'
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\MapOutdoorCharacterShadow.cpp(1299,45): warning C4305: 'argument': truncation from 'double' to 'FLOAT'
   (compiling source file '/MapOutdoorCharacterShadow.cpp')
-  
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\SnowEnvironment.cpp(69,62): warning C4805: '!=': unsafe mix of type 'bool' and type 'BOOL' in operation
-  (compiling source file '/SnowEnvironment.cpp')
   
   gamelib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\GameLib\Release\gamelib.lib

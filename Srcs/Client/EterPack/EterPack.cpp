@@ -33,7 +33,7 @@
 #include <iostream>
 #include <fstream>
 
-#if !defined(ANDROID) && !defined(__ANDROID__) && !defined(NDEBUG)
+#if !defined(ANDROID) && !defined(__ANDROID__) && !defined(__APPLE__)
 #define ENABLE_CRC32_CHECK
 #endif
 

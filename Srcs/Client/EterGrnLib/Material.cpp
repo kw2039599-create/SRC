@@ -334,6 +334,24 @@ void CGrannyMaterial::__ApplySpecularRenderState()
 		return;
 	}
 
+#ifdef __ANDROID__
+	if (TRUE == STATEMANAGER.GetRenderState(D3DRS_ALPHATESTENABLE))
+	{
+		__ApplyDiffuseRenderState();
+		return;
+	}
+	if (!m_roImage[0].IsNull())
+	{
+		const char* szTexName = m_roImage[0].GetPointer()->GetFileName();
+		if (szTexName && (strcasestr(szTexName, "face") || strcasestr(szTexName, "hair") ||
+		                  strcasestr(szTexName, "head") || strcasestr(szTexName, "eye")))
+		{
+			__ApplyDiffuseRenderState();
+			return;
+		}
+	}
+#endif
+
 	CGraphicTexture* pkTexture = ms_akSphereMapInstance[m_bSphereMapIndex].GetTexturePointer();
 
 	STATEMANAGER.SetTexture(0, GetD3DTexture(0));
@@ -341,12 +359,16 @@ void CGrannyMaterial::__ApplySpecularRenderState()
 	const int iGraphicsLevel = Frustum::Instance().graphicsLevel;
 	if (pkTexture)
 	{
+#ifdef __ANDROID__
+		STATEMANAGER.SetTexture(1, pkTexture->GetD3DTexture());
+#else
 		if (iGraphicsLevel > 0 && Frustum::Instance().TextureReflectionMap)
 			STATEMANAGER.SetTexture(1, Frustum::Instance().TextureReflectionMap);
 		else if (iGraphicsLevel > 0 && Frustum::Instance().specularTexture)
 			STATEMANAGER.SetTexture(1, Frustum::Instance().specularTexture);
 		else
 			STATEMANAGER.SetTexture(1, pkTexture->GetD3DTexture());
+#endif
 	}
 	else
 	{
@@ -402,6 +424,23 @@ void CGrannyMaterial::__RestoreSpecularRenderState()
 		__RestoreDiffuseRenderState();
 		return;
 	}
+#ifdef __ANDROID__
+	if (TRUE == STATEMANAGER.GetRenderState(D3DRS_ALPHATESTENABLE))
+	{
+		__RestoreDiffuseRenderState();
+		return;
+	}
+	if (!m_roImage[0].IsNull())
+	{
+		const char* szTexName = m_roImage[0].GetPointer()->GetFileName();
+		if (szTexName && (strcasestr(szTexName, "face") || strcasestr(szTexName, "hair") ||
+		                  strcasestr(szTexName, "head") || strcasestr(szTexName, "eye")))
+		{
+			__RestoreDiffuseRenderState();
+			return;
+		}
+	}
+#endif
 
 	STATEMANAGER.RestoreTextureStageState(1, D3DTSS_TEXTURETRANSFORMFLAGS);
 #ifdef DIRECTX9
@@ -420,6 +459,11 @@ void CGrannyMaterial::__RestoreSpecularRenderState()
 	STATEMANAGER.RestoreTextureStageState(1, D3DTSS_TEXCOORDINDEX);
 	STATEMANAGER.SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
 	STATEMANAGER.SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+#ifdef __ANDROID__
+	STATEMANAGER.SetTexture(1, NULL);
+	const float vZeroSpec[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	STATEMANAGER.SetPixelShaderConstant(92, vZeroSpec, 1);
+#endif
 
 	STATEMANAGER.RestoreTextureStageState(0, D3DTSS_COLORARG1);
 	STATEMANAGER.RestoreTextureStageState(0, D3DTSS_COLORARG2);

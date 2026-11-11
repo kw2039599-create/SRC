@@ -1,15 +1,10 @@
 #pragma once
-#define __INSIDE_WINDOWS_H__ 1
-#ifndef _LIBCPP_ENABLE_CXX17_REMOVED_FEATURES
-#define _LIBCPP_ENABLE_CXX17_REMOVED_FEATURES 1
-#define _LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION 1
-#endif
 
 #if !defined(__ANDROID__) && !defined(__APPLE__)
   #error "This windows.h is only for Android and iOS!"
 #endif
 
-#ifdef __APPLE__
+#if defined(__APPLE__)
   #ifndef ANDROID
     #define ANDROID 1
   #endif
@@ -59,11 +54,7 @@ extern "C" {
 #define _WIN32
 #endif
 
-#if defined(__APPLE__) && defined(__OBJC__)
-#include <objc/objc.h>
-#else
 typedef int BOOL;
-#endif
 typedef int32_t LONG;
 typedef uint32_t DWORD;
 typedef uint16_t WORD;
@@ -104,15 +95,6 @@ typedef long HRESULT;
 #define CALLBACK
 #define __stdcall
 #define STDMETHODCALLTYPE
-typedef char CHAR;
-typedef char* LPSTR;
-typedef const char* LPCSTR;
-typedef wchar_t WCHAR;
-typedef WCHAR* LPWSTR;
-typedef const WCHAR* LPCWSTR;
-typedef BOOL* LPBOOL;
-typedef DWORD* LPDWORD;
-
 
 typedef struct _RECT {
   LONG left;
@@ -172,8 +154,6 @@ typedef struct IDirect3DTexture8 *LPDIRECT3DTEXTURE8;
 #ifdef __cplusplus
 }
 #endif
-
-
 #ifndef CONST
 #define CONST const
 #endif
@@ -536,6 +516,8 @@ static inline HANDLE GetCurrentProcess(void) {
     return (HANDLE)-1;
 }
 
+static inline bool __IsPersistentPackFd(int fd);
+
 static inline BOOL CloseHandle(HANDLE hObject) {
     if (hObject == ((HANDLE)-1) || !hObject || hObject == (HANDLE)-1 || hObject == (HANDLE)-2) 
         return FALSE;
@@ -547,6 +529,9 @@ static inline BOOL CloseHandle(HANDLE hObject) {
     }
     if (uval >= 1000 && uval < 500000) {
         int fd = (int)(uval - 1000);
+        if (__IsPersistentPackFd(fd)) {
+            return TRUE;
+        }
         return (close(fd) == 0) ? TRUE : FALSE;
     }
     return TRUE;
@@ -1626,12 +1611,6 @@ static inline BOOL GetWindowRect(HWND hWnd, LPRECT lpRect) { return GetClientRec
 #endif
 
 #ifdef __cplusplus
-#include <vector>
-#include <string>
-#include <map>
-#include <set>
-#include <list>
-#include <unordered_map>
 #include <algorithm>
 #include <type_traits>
 
@@ -2269,8 +2248,6 @@ static inline MMRESULT timeGetDevCaps(LPTIMECAPS ptc, UINT cbtc) {
 #include <stdarg.h>
 #include <wchar.h>
 #include <math.h>
-#include <float.h>
-#include <limits.h>
 
 #ifndef _vsnprintf
 #define _vsnprintf vsnprintf
@@ -2425,7 +2402,7 @@ static inline HRESULT CoInitializeEx(LPVOID pvReserved, DWORD dwCoInit) {
 static inline void CoUninitialize(void) {}
 
 // MSVC interface keyword extension for COM headers (DIMM.h)
-#if !defined(interface) && !defined(__OBJC__)
+#ifndef interface
 #define interface struct
 #endif
 
@@ -4079,21 +4056,6 @@ static inline BOOL SetConsoleTitleA(LPCSTR lpConsoleTitle) {
 #undef GetFileSize
 #endif
 
-static inline DWORD WINAPI GetFileSize_Win32(HANDLE hFile, LPDWORD lpFileSizeHigh) {
-    if (hFile == INVALID_HANDLE_VALUE || !hFile) return 0xFFFFFFFF;
-    int fd = (int)(intptr_t)hFile - 1000;
-    if (fd < 0) return 0xFFFFFFFF;
-    struct stat st;
-    if (fstat(fd, &st) == 0) {
-        if (lpFileSizeHigh) {
-            *lpFileSizeHigh = (DWORD)(((uint64_t)st.st_size >> 32) & 0xFFFFFFFF);
-        }
-        return (DWORD)((uint64_t)st.st_size & 0xFFFFFFFF);
-    }
-    return 0xFFFFFFFF;
-}
-#define GetFileSize GetFileSize_Win32
-
 // Win32 File Mapping & Handle Emulation stubs for EterBase/CRC32.cpp & MappedFile.cpp
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -4107,6 +4069,98 @@ static inline DWORD WINAPI GetFileSize_Win32(HANDLE hFile, LPDWORD lpFileSizeHig
 #define PAGE_READONLY 0x02
 #endif
 
+struct __AndroidPersistentPackEntry {
+    char path[512];
+    int fd;
+    size_t fileSize;
+    void* fullMmapBase;
+    bool mmapAttempted;
+};
+
+static inline __AndroidPersistentPackEntry* __GetPersistentPackTable() {
+    static __AndroidPersistentPackEntry s_packs[128];
+    return s_packs;
+}
+
+static inline pthread_mutex_t* __GetAndroidMmapMutex() {
+    static pthread_mutex_t s_mutex = PTHREAD_MUTEX_INITIALIZER;
+    return &s_mutex;
+}
+
+static inline bool __IsPersistentPackFd(int fd) {
+    if (fd < 0) return false;
+    pthread_mutex_lock(__GetAndroidMmapMutex());
+    __AndroidPersistentPackEntry* packs = __GetPersistentPackTable();
+    bool found = false;
+    for (int i = 0; i < 128; ++i) {
+        if (packs[i].path[0] != '\0' && packs[i].fd == fd) {
+            found = true;
+            break;
+        }
+    }
+    pthread_mutex_unlock(__GetAndroidMmapMutex());
+    return found;
+}
+
+static inline bool __LookupPersistentPackByFd(int fd, size_t* outSize, void** outBase) {
+    if (fd < 0) return false;
+    pthread_mutex_lock(__GetAndroidMmapMutex());
+    __AndroidPersistentPackEntry* packs = __GetPersistentPackTable();
+    for (int i = 0; i < 128; ++i) {
+        if (packs[i].path[0] != '\0' && packs[i].fd == fd) {
+            if (!packs[i].mmapAttempted) {
+                packs[i].mmapAttempted = true;
+#if defined(__LP64__) || defined(_LP64) || (INTPTR_MAX == INT64_MAX)
+                if (packs[i].fileSize > 0) {
+                    void* base = mmap(NULL, packs[i].fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+                    if (base != MAP_FAILED && base != NULL) {
+                        packs[i].fullMmapBase = base;
+                    }
+                }
+#endif
+            }
+            if (outSize) *outSize = packs[i].fileSize;
+            if (outBase) *outBase = packs[i].fullMmapBase;
+            pthread_mutex_unlock(__GetAndroidMmapMutex());
+            return true;
+        }
+    }
+    pthread_mutex_unlock(__GetAndroidMmapMutex());
+    return false;
+}
+
+static inline DWORD WINAPI GetFileSize_Win32(HANDLE hFile, LPDWORD lpFileSizeHigh) {
+    if (hFile == INVALID_HANDLE_VALUE || !hFile) return 0xFFFFFFFF;
+    int fd = (int)(intptr_t)hFile - 1000;
+    if (fd < 0) return 0xFFFFFFFF;
+
+    size_t cachedSize = 0;
+    if (__LookupPersistentPackByFd(fd, &cachedSize, NULL)) {
+        if (lpFileSizeHigh) {
+            *lpFileSizeHigh = (DWORD)(((uint64_t)cachedSize >> 32) & 0xFFFFFFFF);
+        }
+        return (DWORD)((uint64_t)cachedSize & 0xFFFFFFFF);
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) == 0) {
+        if (lpFileSizeHigh) {
+            *lpFileSizeHigh = (DWORD)(((uint64_t)st.st_size >> 32) & 0xFFFFFFFF);
+        }
+        return (DWORD)((uint64_t)st.st_size & 0xFFFFFFFF);
+    }
+    return 0xFFFFFFFF;
+}
+#define GetFileSize GetFileSize_Win32
+
+static inline bool __IsPackArchivePath(const char* normPath) {
+    if (!normPath) return false;
+    size_t len = strlen(normPath);
+    if (len >= 6 && strcasecmp(normPath + len - 6, ".mt010") == 0)
+        return true;
+    return false;
+}
+
 static inline HANDLE CreateFileA(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile) {
     (void)dwShareMode; (void)lpSecurityAttributes; (void)dwFlagsAndAttributes; (void)hTemplateFile;
     if (!lpFileName || !*lpFileName) return INVALID_HANDLE_VALUE;
@@ -4116,6 +4170,23 @@ static inline HANDLE CreateFileA(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD
     normPath[sizeof(normPath) - 1] = '\0';
     for (char* p = normPath; *p; ++p) {
         if (*p == '\\') *p = '/';
+    }
+
+    const bool isReadOnly = ((dwDesiredAccess & GENERIC_WRITE) == 0) &&
+                            (dwCreationDisposition == OPEN_EXISTING);
+    const bool isPackFile = isReadOnly && __IsPackArchivePath(normPath);
+
+    if (isPackFile) {
+        pthread_mutex_lock(__GetAndroidMmapMutex());
+        __AndroidPersistentPackEntry* packs = __GetPersistentPackTable();
+        for (int i = 0; i < 128; ++i) {
+            if (packs[i].path[0] != '\0' && strcmp(packs[i].path, normPath) == 0) {
+                int cachedFd = packs[i].fd;
+                pthread_mutex_unlock(__GetAndroidMmapMutex());
+                return (HANDLE)(intptr_t)(cachedFd + 1000);
+            }
+        }
+        pthread_mutex_unlock(__GetAndroidMmapMutex());
     }
 
     int flags = O_RDONLY;
@@ -4128,7 +4199,29 @@ static inline HANDLE CreateFileA(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD
     }
 
     int fd = open(normPath, flags, 0666);
-    return (fd < 0) ? INVALID_HANDLE_VALUE : (HANDLE)(intptr_t)(fd + 1000);
+    if (fd < 0) return INVALID_HANDLE_VALUE;
+
+    if (isPackFile && strlen(normPath) < 512) {
+        struct stat st;
+        if (fstat(fd, &st) == 0 && st.st_size > 0) {
+            pthread_mutex_lock(__GetAndroidMmapMutex());
+            __AndroidPersistentPackEntry* packs = __GetPersistentPackTable();
+            for (int i = 0; i < 128; ++i) {
+                if (packs[i].path[0] == '\0') {
+                    strncpy(packs[i].path, normPath, sizeof(packs[i].path) - 1);
+                    packs[i].path[sizeof(packs[i].path) - 1] = '\0';
+                    packs[i].fd = fd;
+                    packs[i].fileSize = (size_t)st.st_size;
+                    packs[i].fullMmapBase = NULL;
+                    packs[i].mmapAttempted = false;
+                    break;
+                }
+            }
+            pthread_mutex_unlock(__GetAndroidMmapMutex());
+        }
+    }
+
+    return (HANDLE)(intptr_t)(fd + 1000);
 }
 #ifndef CreateFile
 #define CreateFile CreateFileA
@@ -4155,11 +4248,6 @@ static inline __AndroidMmapEntry* __GetAndroidMmapTable() {
     return s_table;
 }
 
-static inline pthread_mutex_t* __GetAndroidMmapMutex() {
-    static pthread_mutex_t s_mutex = PTHREAD_MUTEX_INITIALIZER;
-    return &s_mutex;
-}
-
 static inline LPVOID MapViewOfFile(HANDLE hFileMappingObject, DWORD dwDesiredAccess, DWORD dwFileOffsetHigh, DWORD dwFileOffsetLow, SIZE_T dwNumberOfBytesToMap) {
     (void)dwDesiredAccess;
     if (hFileMappingObject == INVALID_HANDLE_VALUE || !hFileMappingObject) return NULL;
@@ -4169,15 +4257,29 @@ static inline LPVOID MapViewOfFile(HANDLE hFileMappingObject, DWORD dwDesiredAcc
     else if (uval >= 1000 && uval < 500000) fd = (int)(uval - 1000);
     if (fd < 0) return NULL;
 
-    struct stat st;
-    if (fstat(fd, &st) < 0 || st.st_size <= 0) return NULL;
-
     off_t offset = ((off_t)dwFileOffsetHigh << 32) | (off_t)dwFileOffsetLow;
-    if (offset >= st.st_size) return NULL;
 
-    size_t size = (dwNumberOfBytesToMap > 0) ? (size_t)dwNumberOfBytesToMap : (size_t)(st.st_size - offset);
-    if ((off_t)size > (st.st_size - offset)) {
-        size = (size_t)(st.st_size - offset);
+    size_t persistentSize = 0;
+    void* persistentBase = NULL;
+    if (__LookupPersistentPackByFd(fd, &persistentSize, &persistentBase)) {
+        if (offset < 0 || (size_t)offset >= persistentSize) return NULL;
+        if (persistentBase != NULL) {
+            return (void*)((uint8_t*)persistentBase + (size_t)offset);
+        }
+    }
+
+    size_t fileSize = persistentSize;
+    if (fileSize == 0) {
+        struct stat st;
+        if (fstat(fd, &st) < 0 || st.st_size <= 0) return NULL;
+        fileSize = (size_t)st.st_size;
+    }
+
+    if (offset < 0 || (size_t)offset >= fileSize) return NULL;
+
+    size_t size = (dwNumberOfBytesToMap > 0) ? (size_t)dwNumberOfBytesToMap : (fileSize - (size_t)offset);
+    if (size > (fileSize - (size_t)offset)) {
+        size = fileSize - (size_t)offset;
     }
 
     // Align offset down to OS page size (4 KB on legacy Android, 16 KB on iOS & Android 15+)
@@ -4219,6 +4321,18 @@ static inline BOOL UnmapViewOfFile(LPCVOID lpBaseAddress) {
     size_t mmapSize = 0;
 
     pthread_mutex_lock(__GetAndroidMmapMutex());
+    __AndroidPersistentPackEntry* packs = __GetPersistentPackTable();
+    for (int i = 0; i < 128; ++i) {
+        if (packs[i].fullMmapBase != NULL) {
+            const uint8_t* start = (const uint8_t*)packs[i].fullMmapBase;
+            const uint8_t* end = start + packs[i].fileSize;
+            if ((const uint8_t*)lpBaseAddress >= start && (const uint8_t*)lpBaseAddress < end) {
+                pthread_mutex_unlock(__GetAndroidMmapMutex());
+                return TRUE;
+            }
+        }
+    }
+
     __AndroidMmapEntry* table = __GetAndroidMmapTable();
     for (int i = 0; i < 16384; ++i) {
         if (table[i].viewPtr == lpBaseAddress) {
@@ -5102,21 +5216,3 @@ EXTERN_C inline const GUID CLSID_TF_ThreadMgr = { 0x529a9e6b, 0x6587, 0x4f23, { 
 
 // Suppress NDK -Werror=format-security across legacy client snprintf/sprintf calls
 #pragma clang diagnostic ignored "-Wformat-security"
-// FixTransformToLower
-#ifdef __cplusplus
-#include <vector>
-#include <string>
-#include <map>
-#include <set>
-#include <list>
-#include <unordered_map>
-#include <algorithm>
-namespace std {
-template <class _InputIterator, class _OutputIterator>
-inline _OutputIterator transform(_InputIterator __first, _InputIterator __last, _OutputIterator __result, int (*__op)(int)) {
-    for (; __first != __last; ++__first, (void)++__result) *__result = __op(*__first);
-    return __result;
-}
-}
-#endif
-#undef __INSIDE_WINDOWS_H__

@@ -1,6 +1,3 @@
-﻿  StdAfx.cpp
-  EterPack.cpp
-  EterPackCursor.cpp
+﻿  EterPack.cpp
   EterPackManager.cpp
-  EterPackPolicy_CSHybridCrypt.cpp
   EterPack.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EterPack\Release\EterPack.lib

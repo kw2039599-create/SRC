@@ -1,21 +1,10 @@
-﻿  StdAfx.cpp
-  PythonGraphic.cpp
-  PythonGraphicImageModule.cpp
-  PythonGraphicModule.cpp
-  PythonGraphicTextModule.cpp
-  PythonGraphicThingModule.cpp
-  PythonGridSlotWindow.cpp
-  PythonSlotWindow.cpp
-  PythonWindow.cpp
+﻿  PythonWindow.cpp
   PythonWindowManager.cpp
   PythonWindowManagerModule.cpp
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterPythonLib\PythonGraphic.cpp(386,5): warning C4838: conversion from 'int' to 'unsigned char' requires a narrowing conversion
-  (compiling source file '/PythonGraphic.cpp')
-  
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterPythonLib\PythonWindow.cpp(2252,25): warning C4267: '=': conversion from 'size_t' to 'unsigned char', possible loss of data
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterPythonLib\PythonWindow.cpp(2260,25): warning C4267: '=': conversion from 'size_t' to 'unsigned char', possible loss of data
   (compiling source file '/PythonWindow.cpp')
   
-C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterPythonLib\PythonWindow.cpp(2272,25): warning C4267: '=': conversion from 'size_t' to 'unsigned char', possible loss of data
+C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterPythonLib\PythonWindow.cpp(2280,25): warning C4267: '=': conversion from 'size_t' to 'unsigned char', possible loss of data
   (compiling source file '/PythonWindow.cpp')
   
   eterPythonLib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\eterPythonLib\Release\eterPythonLib.lib

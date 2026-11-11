@@ -206,9 +206,11 @@ void CGrannyModelInstance::RenderWithoutTexture()
 #else
 	STATEMANAGER.SetVertexShader(ms_pntVS);
 #endif
+	#ifndef __ANDROID__
 	if (Frustum::Instance().graphicsLevel != 0 && Frustum::Instance().shadowTexture)
 		STATEMANAGER.SetTexture(0, Frustum::Instance().shadowTexture);
 	else
+#endif
 		STATEMANAGER.SetTexture(0, NULL);
 	STATEMANAGER.SetTexture(1, NULL);
 

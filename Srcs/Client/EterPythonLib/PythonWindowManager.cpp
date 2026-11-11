@@ -8,8 +8,46 @@
 
 BOOL g_bShowOverInWindowName = FALSE;
 
+#ifdef ENABLE_OPENGL
+extern "C" void AndroidToggleSoftKeyboard(bool show);
+extern "C" bool AndroidIsSoftKeyboardVisible();
+extern "C" DWORD AndroidGetLastKeyboardOpenMs();
+#endif
+
 namespace UI
 {
+#ifdef ENABLE_OPENGL
+	static bool IsMobileEditLineWindow(CWindow* pWin)
+	{
+		if (!pWin || pWin->IsFlag(CWindow::FLAG_NOT_PICK))
+			return false;
+		return (dynamic_cast<CTextLine*>(pWin) != NULL);
+	}
+
+	static void SyncMobileTopInputBar(CWindow* pActiveWin)
+	{
+		if (!AndroidIsSoftKeyboardVisible() || !IsMobileEditLineWindow(pActiveWin))
+			return;
+		CTextLine* pTextLine = static_cast<CTextLine*>(pActiveWin);
+		const char* szVal = pTextLine->GetText() ? pTextLine->GetText() : "";
+		const char* szName = pActiveWin->GetName() ? pActiveWin->GetName() : "";
+		int isSecret = (strstr(szName, "Password") != NULL || strstr(szName, "password") != NULL || strstr(szName, "pwd") != NULL) ? 1 : 0;
+
+		PyObject* uiMod = PyImport_AddModule("ui");
+		if (uiMod && PyObject_HasAttrString(uiMod, "_g_mobileKbBar"))
+		{
+			PyObject* pBar = PyObject_GetAttrString(uiMod, "_g_mobileKbBar");
+			if (pBar && pBar != Py_None)
+			{
+				PyObject* res = PyObject_CallMethod(pBar, "SetPreviewText", "(si)", szVal, isSecret);
+				Py_XDECREF(res);
+			}
+			Py_XDECREF(pBar);
+		}
+		if (PyErr_Occurred())
+			PyErr_Clear();
+	}
+#endif
 	static PyObject* gs_poEmptyTuple = NULL;
 
 	PyObject * BuildEmptyTuple()
@@ -654,7 +692,16 @@ namespace UI
 		m_ActiveWindowList.remove(pWin);
 
 		if (pWin == m_pActiveWindow)
+		{
+#ifdef ENABLE_OPENGL
+			if (IsMobileEditLineWindow(pWin) && pWin->IsRendering())
+			{
+				AndroidToggleSoftKeyboard(true);
+				SyncMobileTopInputBar(pWin);
+			}
+#endif
 			return;
+		}
 
 		if (m_pActiveWindow)
 		{
@@ -667,6 +714,13 @@ namespace UI
 		if (m_pActiveWindow)
 		{
 			m_pActiveWindow->OnSetFocus();
+#ifdef ENABLE_OPENGL
+			if (IsMobileEditLineWindow(m_pActiveWindow) && m_pActiveWindow->IsRendering())
+			{
+				AndroidToggleSoftKeyboard(true);
+				SyncMobileTopInputBar(m_pActiveWindow);
+			}
+#endif
 		}
 	}
 
@@ -793,6 +847,20 @@ namespace UI
 		__ClearReserveDeleteWindowList();
 
 		m_pRootWindow->Update();
+#ifdef ENABLE_OPENGL
+		if (AndroidIsSoftKeyboardVisible())
+		{
+			if (!m_pActiveWindow || !IsMobileEditLineWindow(m_pActiveWindow) || !m_pActiveWindow->IsRendering())
+			{
+				if (timeGetTime() - AndroidGetLastKeyboardOpenMs() > 350)
+					AndroidToggleSoftKeyboard(false);
+			}
+			else
+			{
+				SyncMobileTopInputBar(m_pActiveWindow);
+			}
+		}
+#endif
 	}
 
 	void CWindowManager::Render()
@@ -951,6 +1019,22 @@ namespace UI
 
 		if (!pWin)
 			return;
+
+#ifdef ENABLE_OPENGL
+		if (IsMobileEditLineWindow(pWin))
+		{
+			ActivateWindow(pWin);
+		}
+		else if (AndroidIsSoftKeyboardVisible() && (timeGetTime() - AndroidGetLastKeyboardOpenMs() > 350))
+		{
+			bool isTopMostBar = (pWin->GetParent() && strcmp(pWin->GetParent()->GetName(), "TOP_MOST") == 0);
+			if (!isTopMostBar)
+			{
+				DeactivateWindow();
+				AndroidToggleSoftKeyboard(false);
+			}
+		}
+#endif
 
 		// Attach
 		if (pWin->IsFlag(CWindow::FLAG_ATTACH))

@@ -1278,12 +1278,12 @@ struct IDirect3DTexture8 : public IDirect3DBaseTexture8 {
 struct IDirect3DVertexBuffer8 {
 	ULONG m_refCount;
 	GLuint glVbo; UINT length; DWORD usage; DWORD lastLockFlags;
-	bool bDirty; bool bGpuInitialized; bool bDiscardRequested;
+	bool bDirty; bool bGpuInitialized;
 	UINT dirtyOffset; UINT dirtyEnd;
 	void* pData;
 	IDirect3DVertexBuffer8(UINT len, DWORD dwUsage = 0)
 		: m_refCount(1), glVbo(0), length(len > 0 ? len : 4), usage(dwUsage), lastLockFlags(0),
-		  bDirty(true), bGpuInitialized(false), bDiscardRequested(true),
+		  bDirty(true), bGpuInitialized(false),
 		  dirtyOffset(0), dirtyEnd(len > 0 ? len : 4), pData(NULL) {
 		pData = calloc(this->length, 1);
 	}
@@ -1298,11 +1298,7 @@ struct IDirect3DVertexBuffer8 {
 		if ((Flags & D3DLOCK_READONLY) == 0) {
 			UINT safeOff = (Offset < length) ? Offset : 0;
 			UINT lockEnd = (Size > 0 && safeOff + Size <= length) ? (safeOff + Size) : length;
-			if ((Flags & D3DLOCK_DISCARD) != 0 || (Offset == 0 && Size == 0)) {
-				bDiscardRequested = true;
-				dirtyOffset = 0;
-				dirtyEnd = length;
-			} else if (!bDirty) {
+			if (!bDirty) {
 				dirtyOffset = safeOff;
 				dirtyEnd = lockEnd;
 			} else {
@@ -1328,12 +1324,12 @@ struct IDirect3DVertexBuffer8 {
 struct IDirect3DIndexBuffer8 {
 	ULONG m_refCount;
 	GLuint glIbo; UINT length; DWORD usage; DWORD lastLockFlags;
-	bool bDirty; bool bGpuInitialized; bool bDiscardRequested;
+	bool bDirty; bool bGpuInitialized;
 	UINT dirtyOffset; UINT dirtyEnd;
 	void* pData;
 	IDirect3DIndexBuffer8(UINT len, DWORD dwUsage = 0)
 		: m_refCount(1), glIbo(0), length(len > 0 ? len : 4), usage(dwUsage), lastLockFlags(0),
-		  bDirty(true), bGpuInitialized(false), bDiscardRequested(true),
+		  bDirty(true), bGpuInitialized(false),
 		  dirtyOffset(0), dirtyEnd(len > 0 ? len : 4), pData(NULL) {
 		pData = calloc(this->length, 1);
 	}
@@ -1348,11 +1344,7 @@ struct IDirect3DIndexBuffer8 {
 		if ((Flags & D3DLOCK_READONLY) == 0) {
 			UINT safeOff = (Offset < length) ? Offset : 0;
 			UINT lockEnd = (Size > 0 && safeOff + Size <= length) ? (safeOff + Size) : length;
-			if ((Flags & D3DLOCK_DISCARD) != 0 || (Offset == 0 && Size == 0)) {
-				bDiscardRequested = true;
-				dirtyOffset = 0;
-				dirtyEnd = length;
-			} else if (!bDirty) {
+			if (!bDirty) {
 				dirtyOffset = safeOff;
 				dirtyEnd = lockEnd;
 			} else {
@@ -1551,6 +1543,7 @@ struct IDirect3DDevice8 {
 		m_ActivePixelShaderType = 0;
 		memset(m_vsConsts, 0, sizeof(m_vsConsts));
 		memset(m_psConsts, 0, sizeof(m_psConsts));
+		m_psConsts[87][0] = 1.0f; // Default uPsPuddleThreshold to 1.0 (no puddles unless enabled)
 		memset(m_ClipPlane0, 0, sizeof(m_ClipPlane0));
 		m_ClipPlaneEnable = 0;
 		m_ScreenViewport = m_Viewport;
@@ -1696,7 +1689,15 @@ struct IDirect3DDevice8 {
 	HRESULT SetViewport(const D3DVIEWPORT8* v) {
 		if (v && v->Width > 0 && v->Height > 0) {
 			if (m_pCurrentRenderTargetTex) {
+#ifdef __ANDROID__
+				if (m_ActivePixelShaderType == PS_TYPE_SHADOW_DEPTH) {
+					glViewport(v->X, v->Y, v->Width, v->Height);
+				} else {
+					glViewport(0, 0, m_pCurrentRenderTargetTex->width, m_pCurrentRenderTargetTex->height);
+				}
+#else
 				glViewport(v->X, v->Y, v->Width, v->Height);
+#endif
 			} else {
 				m_Viewport = *v;
 				m_ScreenViewport = *v;
@@ -2695,7 +2696,7 @@ inline bool DecodeTGAorBMPFromMemory(const BYTE* data, UINT size, UINT& outW, UI
 		}
 	}
 
-	// 2. Check DDS ('DDS ') - Uncompressed (16/24/32-bit) & DXT1/DXT3/DXT5
+	// 2. Check DDS ('DDS ') - Uncompressed (8/16/24/32-bit), DXT1/DXT3/DXT5, ATI1/BC4, ATI2/BC5, and DX10
 	if (size >= 128 && data[0] == 'D' && data[1] == 'D' && data[2] == 'S' && data[3] == ' ') {
 		UINT h = ReadU32Unaligned(data + 12);
 		UINT w = ReadU32Unaligned(data + 16);
@@ -2705,67 +2706,118 @@ inline bool DecodeTGAorBMPFromMemory(const BYTE* data, UINT size, UINT& outW, UI
 		UINT gMask = ReadU32Unaligned(data + 96);
 		UINT bMask = ReadU32Unaligned(data + 100);
 		UINT aMask = ReadU32Unaligned(data + 104);
+		size_t dataStart = 128;
+		if (fourCC == 0x30315844u && size >= 148) { // 'DX10' extended header
+			UINT dxgiFmt = ReadU32Unaligned(data + 128);
+			dataStart = 148;
+			if (dxgiFmt >= 70 && dxgiFmt <= 72) fourCC = 0x31545844u;      // BC1 -> DXT1
+			else if (dxgiFmt >= 73 && dxgiFmt <= 75) fourCC = 0x33545844u; // BC2 -> DXT3
+			else if (dxgiFmt >= 76 && dxgiFmt <= 78) fourCC = 0x35545844u; // BC3 -> DXT5
+			else if (dxgiFmt >= 79 && dxgiFmt <= 81) fourCC = 0x31495441u; // BC4 -> ATI1
+			else if (dxgiFmt >= 82 && dxgiFmt <= 84) fourCC = 0x32495441u; // BC5 -> ATI2
+			else if (dxgiFmt == 28 || dxgiFmt == 29) { fourCC = 0; bpp = 32; rMask = 0x000000FFu; gMask = 0x0000FF00u; bMask = 0x00FF0000u; aMask = 0xFF000000u; }
+			else if (dxgiFmt == 87 || dxgiFmt == 91) { fourCC = 0; bpp = 32; rMask = 0x00FF0000u; gMask = 0x0000FF00u; bMask = 0x000000FFu; aMask = 0xFF000000u; }
+		}
 		if (w > 0 && h > 0 && w <= 4096 && h <= 4096) {
 			const bool isDXT1 = (fourCC == 0x31545844u); // 'DXT1'
 			const bool isDXT3 = (fourCC == 0x33545844u); // 'DXT3'
 			const bool isDXT5 = (fourCC == 0x35545844u); // 'DXT5'
-			if (isDXT1 || isDXT3 || isDXT5) {
+			const bool isATI1 = (fourCC == 0x31495441u || fourCC == 0x55344342u); // 'ATI1' / 'BC4U'
+			const bool isATI2 = (fourCC == 0x32495441u || fourCC == 0x55354342u); // 'ATI2' / 'BC5U'
+			if (isATI1 || isATI2) {
 				outW = w; outH = h;
-				outBGRA.assign((size_t)w * (size_t)h, 0);
+				outBGRA.assign((size_t)w * (size_t)h, 0xFF8080FFu);
 				UINT bw = (w + 3) / 4, bh = (h + 3) / 4;
-				size_t blockSize = isDXT1 ? 8 : 16;
-				size_t offset = 128;
+				size_t blockSize = isATI2 ? 16 : 8;
+				size_t offset = dataStart;
+				auto DecodeBC4Block = [](const BYTE* bPtr, BYTE out16[16]) {
+					BYTE a0 = bPtr[0], a1 = bPtr[1];
+					uint64_t aBits = 0;
+					for (int i = 0; i < 6; ++i) aBits |= ((uint64_t)bPtr[2 + i]) << (8 * i);
+					BYTE lut[8]; lut[0] = a0; lut[1] = a1;
+					if (a0 > a1) { for (int i = 1; i <= 6; ++i) lut[i + 1] = (BYTE)(((7 - i) * a0 + i * a1) / 7); }
+					else { for (int i = 1; i <= 4; ++i) lut[i + 1] = (BYTE)(((5 - i) * a0 + i * a1) / 5); lut[6] = 0; lut[7] = 255; }
+					for (int i = 0; i < 16; ++i) out16[i] = lut[(aBits >> (i * 3)) & 0x07];
+				};
 				for (UINT by = 0; by < bh; ++by) {
 					for (UINT bx = 0; bx < bw; ++bx) {
 						if (offset + blockSize > size) break;
 						const BYTE* blk = data + offset;
 						offset += blockSize;
-						BYTE alpha[16];
-						const BYTE* cBlk = blk;
-						if (isDXT3) {
-							for (int i = 0; i < 8; ++i) {
-								alpha[i * 2 + 0] = (blk[i] & 0x0F) * 17;
-								alpha[i * 2 + 1] = (blk[i] >> 4) * 17;
+						BYTE chX[16], chY[16];
+						DecodeBC4Block(blk, chX);
+						if (isATI2) DecodeBC4Block(blk + 8, chY);
+						for (UINT py = 0; py < 4; ++py) {
+							UINT yy = by * 4 + py; if (yy >= h) continue;
+							for (UINT px = 0; px < 4; ++px) {
+								UINT xx = bx * 4 + px; if (xx >= w) continue;
+								int idx = py * 4 + px;
+								BYTE r = chX[idx];
+								BYTE g = isATI2 ? chY[idx] : r;
+								BYTE b = r;
+								if (isATI2) {
+									float nx = (r / 255.0f) * 2.0f - 1.0f;
+									float ny = (g / 255.0f) * 2.0f - 1.0f;
+									float nz = sqrtf(fmaxf(0.0f, 1.0f - nx * nx - ny * ny));
+									b = (BYTE)((nz * 0.5f + 0.5f) * 255.0f);
+								}
+								outBGRA[(size_t)yy * (size_t)w + (size_t)xx] = 0xFF000000u | ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
 							}
-							cBlk = blk + 8;
-						} else if (isDXT5) {
-							BYTE a0 = blk[0], a1 = blk[1];
-							uint64_t aBits = 0;
-							for (int i = 0; i < 6; ++i) aBits |= ((uint64_t)blk[2 + i]) << (8 * i);
-							BYTE aLut[8];
-							aLut[0] = a0; aLut[1] = a1;
-							if (a0 > a1) {
-								for (int i = 1; i <= 6; ++i) aLut[i + 1] = (BYTE)(((7 - i) * a0 + i * a1) / 7);
-							} else {
-								for (int i = 1; i <= 4; ++i) aLut[i + 1] = (BYTE)(((5 - i) * a0 + i * a1) / 5);
-								aLut[6] = 0; aLut[7] = 255;
-							}
-							for (int i = 0; i < 16; ++i) alpha[i] = aLut[(aBits >> (i * 3)) & 0x07];
-							cBlk = blk + 8;
 						}
-						WORD c0 = ReadU16Unaligned(cBlk + 0);
-						WORD c1 = ReadU16Unaligned(cBlk + 2);
-						DWORD bits = ReadU32Unaligned(cBlk + 4);
+					}
+				}
+				return true;
+			}
+			if (isDXT1 || isDXT3 || isDXT5) {
+				outW = w; outH = h;
+				outBGRA.assign((size_t)w * (size_t)h, 0);
+				UINT bw = (w + 3) / 4, bh = (h + 3) / 4;
+				size_t blockSize = isDXT1 ? 8 : 16;
+				size_t offset = dataStart;
+				for (UINT by = 0; by < bh; ++by) {
+					for (UINT bx = 0; bx < bw; ++bx) {
+						if (offset + blockSize > size) break;
+						const BYTE* blk = data + offset;
+						offset += blockSize;
+						const BYTE* colorBlk = isDXT1 ? blk : (blk + 8);
+						WORD c0 = ReadU16Unaligned(colorBlk + 0);
+						WORD c1 = ReadU16Unaligned(colorBlk + 2);
+						DWORD bits = ReadU32Unaligned(colorBlk + 4);
 						BYTE r[4], g[4], b[4], a[4] = { 255, 255, 255, 255 };
 						r[0] = ((c0 >> 11) & 31) * 255 / 31; g[0] = ((c0 >> 5) & 63) * 255 / 63; b[0] = (c0 & 31) * 255 / 31;
 						r[1] = ((c1 >> 11) & 31) * 255 / 31; g[1] = ((c1 >> 5) & 63) * 255 / 63; b[1] = (c1 & 31) * 255 / 31;
-						if (!isDXT1 || c0 > c1) {
+						if (isDXT1 && c0 <= c1) {
+							r[2] = (r[0] + r[1]) / 2; g[2] = (g[0] + g[1]) / 2; b[2] = (b[0] + b[1]) / 2;
+							r[3] = g[3] = b[3] = 0; a[3] = 0;
+						} else {
 							r[2] = (2 * r[0] + r[1]) / 3; g[2] = (2 * g[0] + g[1]) / 3; b[2] = (2 * b[0] + b[1]) / 3;
 							r[3] = (r[0] + 2 * r[1]) / 3; g[3] = (g[0] + 2 * g[1]) / 3; b[3] = (b[0] + 2 * b[1]) / 3;
-						} else {
-							r[2] = (r[0] + r[1]) / 2; g[2] = (g[0] + g[1]) / 2; b[2] = (b[0] + b[1]) / 2;
-							r[3] = 0; g[3] = 0; b[3] = 0; a[3] = 0;
+						}
+						BYTE aLut[8] = {0};
+						uint64_t aBits = 0;
+						if (isDXT5) {
+							aLut[0] = blk[0]; aLut[1] = blk[1];
+							if (aLut[0] > aLut[1]) {
+								for (int i = 1; i <= 6; ++i) aLut[i + 1] = (BYTE)(((7 - i) * aLut[0] + i * aLut[1]) / 7);
+							} else {
+								for (int i = 1; i <= 4; ++i) aLut[i + 1] = (BYTE)(((5 - i) * aLut[0] + i * aLut[1]) / 5);
+								aLut[6] = 0; aLut[7] = 255;
+							}
+							for (int i = 0; i < 6; ++i) aBits |= ((uint64_t)blk[2 + i]) << (8 * i);
 						}
 						for (UINT py = 0; py < 4; ++py) {
 							UINT yy = by * 4 + py;
 							if (yy >= h) continue;
+							WORD dxt3Row = isDXT3 ? ReadU16Unaligned(blk + py * 2) : 0;
 							for (UINT px = 0; px < 4; ++px) {
 								UINT xx = bx * 4 + px;
 								if (xx >= w) continue;
-								int idx = py * 4 + px;
-								int ci = (bits >> (idx * 2)) & 3;
-								BYTE pa = isDXT1 ? a[ci] : alpha[idx];
-								outBGRA[(size_t)yy * (size_t)w + (size_t)xx] = ((DWORD)pa << 24) | ((DWORD)r[ci] << 16) | ((DWORD)g[ci] << 8) | (DWORD)b[ci];
+								int pIdx = py * 4 + px;
+								int cIdx = (bits >> (pIdx * 2)) & 3;
+								BYTE pa = a[cIdx];
+								if (isDXT3) pa = ((dxt3Row >> (px * 4)) & 0xF) * 17;
+								else if (isDXT5) pa = aLut[(aBits >> (pIdx * 3)) & 7];
+								outBGRA[(size_t)yy * (size_t)w + (size_t)xx] = ((DWORD)pa << 24) | ((DWORD)r[cIdx] << 16) | ((DWORD)g[cIdx] << 8) | (DWORD)b[cIdx];
 							}
 						}
 					}
@@ -2775,14 +2827,17 @@ inline bool DecodeTGAorBMPFromMemory(const BYTE* data, UINT size, UINT& outW, UI
 			if (bpp == 24 || bpp == 32) {
 				outW = w; outH = h;
 				outBGRA.resize((size_t)w * (size_t)h, 0xFFFFFFFF);
-				const BYTE* src = data + 128;
+				const BYTE* src = data + dataStart;
 				size_t bytesPerPixel = bpp / 8;
 				size_t totalPixels = (size_t)w * (size_t)h;
-				for (size_t i = 0; i < totalPixels && (128 + (i + 1) * bytesPerPixel <= size); ++i) {
-					BYTE b = src[i * bytesPerPixel + 0];
-					BYTE g = src[i * bytesPerPixel + 1];
-					BYTE r = src[i * bytesPerPixel + 2];
-					BYTE a = (bytesPerPixel == 4 && aMask != 0) ? src[i * 4 + 3] : 0xFF;
+				const bool isRGBOrder = (rMask == 0x000000FFu);
+				for (size_t i = 0; i < totalPixels && (dataStart + (i + 1) * bytesPerPixel <= size); ++i) {
+					BYTE c0 = src[i * bytesPerPixel + 0];
+					BYTE g  = src[i * bytesPerPixel + 1];
+					BYTE c2 = src[i * bytesPerPixel + 2];
+					BYTE r  = isRGBOrder ? c0 : c2;
+					BYTE b  = isRGBOrder ? c2 : c0;
+					BYTE a  = (bytesPerPixel == 4 && aMask != 0) ? src[i * 4 + 3] : 0xFF;
 					outBGRA[i] = ((DWORD)a << 24) | ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
 				}
 				return true;
@@ -2790,9 +2845,9 @@ inline bool DecodeTGAorBMPFromMemory(const BYTE* data, UINT size, UINT& outW, UI
 			if (bpp == 16) {
 				outW = w; outH = h;
 				outBGRA.resize((size_t)w * (size_t)h, 0xFFFFFFFF);
-				const BYTE* src = data + 128;
+				const BYTE* src = data + dataStart;
 				size_t totalPixels = (size_t)w * (size_t)h;
-				for (size_t i = 0; i < totalPixels && (128 + (i + 1) * 2 <= size); ++i) {
+				for (size_t i = 0; i < totalPixels && (dataStart + (i + 1) * 2 <= size); ++i) {
 					WORD c = ReadU16Unaligned(src + i * 2);
 					BYTE r, g, b, a = 0xFF;
 					if (aMask == 0xF000 || rMask == 0x0F00) { // A4R4G4B4
@@ -3198,8 +3253,8 @@ inline HRESULT D3DXCreateTextureFromFileEx(LPDIRECT3DDEVICE8 pDev, LPCSTR, UINT 
 	if (pInfo) { pInfo->Width = w; pInfo->Height = h; pInfo->MipLevels = 1; pInfo->Format = D3DFMT_A8R8G8B8; }
 	return pDev->CreateTexture(w, h, 1, Usage, D3DFMT_A8R8G8B8, Pool, ppTex);
 }
-inline HRESULT D3DXCreateTextureFromFileInMemory(LPDIRECT3DDEVICE8 pDev, LPCVOID, UINT, LPDIRECT3DTEXTURE8* ppTex) {
-	return pDev->CreateTexture(256, 256, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, ppTex);
+inline HRESULT D3DXCreateTextureFromFileInMemory(LPDIRECT3DDEVICE8 pDev, LPCVOID pSrcData, UINT SrcDataSize, LPDIRECT3DTEXTURE8* ppTex) {
+	return D3DXCreateTextureFromFileInMemoryEx(pDev, pSrcData, SrcDataSize, D3DX_DEFAULT, D3DX_DEFAULT, 1, 0, D3DFMT_FROM_FILE, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_LINEAR, 0, NULL, NULL, ppTex);
 }
 
 #endif // ENABLE_OPENGL

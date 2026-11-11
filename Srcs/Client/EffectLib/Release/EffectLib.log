@@ -1,19 +1,4 @@
-﻿  StdAfx.cpp
-  EffectData.cpp
-  EffectElementBase.cpp
-  EffectElementBaseInstance.cpp
-  EffectInstance.cpp
+﻿  EffectInstance.cpp
   EffectManager.cpp
-  EffectMesh.cpp
-  EffectMeshInstance.cpp
-  EffectUpdateDecorator.cpp
-  EmitterProperty.cpp
-  FrameController.cpp
-  ParticleInstance.cpp
-  ParticleProperty.cpp
-  ParticleSystemData.cpp
   ParticleSystemInstance.cpp
-  SimpleLightData.cpp
-  SimpleLightInstance.cpp
-  Type.cpp
   EffectLib.vcxproj -> C:\Users\Admin\Documents\Project\39 MOBILE\ClientSrc\Srcs\Client\EffectLib\Release\EffectLib.lib

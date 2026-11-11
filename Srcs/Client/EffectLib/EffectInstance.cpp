@@ -6,7 +6,82 @@
 #include "../eterBase/Stl.h"
 #include "../eterLib/StateManager.h"
 #include "../MilesLib/SoundManager.h"
+#include "../eterLib/Camera.h"
 
+#ifdef __ANDROID__
+static inline bool IsAndroidEffectInCameraFrustum(const D3DXMATRIX& rMatGlobal, const D3DXVECTOR3& v3SphereOffset, float fSphereRadius, float fExtraPad)
+{
+	CCamera* pCam = CCameraManager::Instance().GetCurrentCamera();
+	if (!pCam)
+		return true;
+
+	const float px = rMatGlobal._41 + v3SphereOffset.x;
+	const float py = rMatGlobal._42 + v3SphereOffset.y;
+	const float pz = rMatGlobal._43 + v3SphereOffset.z;
+
+	// Never cull unpositioned effects at the origin
+	if (fabsf(px) < 1.0f && fabsf(py) < 1.0f && fabsf(pz) < 1.0f)
+		return true;
+
+	const D3DXVECTOR3& v3Eye = pCam->GetEye();
+	const D3DXVECTOR3& v3Target = pCam->GetTarget();
+
+	static D3DXVECTOR3 s_lastEye(0.0f, 0.0f, 0.0f);
+	static D3DXVECTOR3 s_lastTarget(0.0f, 0.0f, 0.0f);
+	static D3DXVECTOR3 s_F(0.0f, 1.0f, 0.0f);
+	static D3DXVECTOR3 s_R(1.0f, 0.0f, 0.0f);
+	static D3DXVECTOR3 s_U(0.0f, 0.0f, 1.0f);
+
+	if (v3Eye != s_lastEye || v3Target != s_lastTarget)
+	{
+		s_lastEye = v3Eye;
+		s_lastTarget = v3Target;
+		float fx = v3Target.x - v3Eye.x;
+		float fy = v3Target.y - v3Eye.y;
+		float fz = v3Target.z - v3Eye.z;
+		float flen = sqrtf(fx * fx + fy * fy + fz * fz);
+		if (flen > 1e-3f) { fx /= flen; fy /= flen; fz /= flen; }
+		s_F = D3DXVECTOR3(fx, fy, fz);
+
+		float rlen = sqrtf(fy * fy + fx * fx);
+		if (rlen > 1e-3f)
+			s_R = D3DXVECTOR3(fy / rlen, -fx / rlen, 0.0f);
+		else
+			s_R = D3DXVECTOR3(1.0f, 0.0f, 0.0f);
+
+		s_U = D3DXVECTOR3(
+			s_R.y * s_F.z,
+			-s_R.x * s_F.z,
+			s_R.x * s_F.y - s_R.y * s_F.x);
+	}
+
+	const float pad = ((fSphereRadius > 260.0f) ? fSphereRadius : 260.0f) + fExtraPad;
+
+	// Always keep effects near the camera target (main player) active
+	const float tdx = px - v3Target.x;
+	const float tdy = py - v3Target.y;
+	if ((tdx * tdx + tdy * tdy) <= (550.0f * 550.0f))
+		return true;
+
+	const float vx = px - v3Eye.x;
+	const float vy = py - v3Eye.y;
+	const float vz = pz - v3Eye.z;
+
+	const float zCam = vx * s_F.x + vy * s_F.y + vz * s_F.z;
+	if (zCam < -pad)
+		return false;
+
+	const float xCam = fabsf(vx * s_R.x + vy * s_R.y);
+	if (xCam > (zCam * 1.35f + pad))
+		return false;
+
+	const float yCam = fabsf(vx * s_U.x + vy * s_U.y + vz * s_U.z);
+	if (yCam > (zCam * 0.95f + pad))
+		return false;
+
+	return true;
+}
+#endif
 CDynamicPool<CEffectInstance>	CEffectInstance::ms_kPool;
 int CEffectInstance::ms_iRenderingEffectCount = 0;
 
@@ -86,13 +161,27 @@ struct FEffectFrustum
 
 void CEffectInstance::OnUpdate()
 {
+#ifndef __ANDROID__
 	Transform();
+#endif
 
 #ifdef WORLD_EDITOR
 	const float fElapsedTime = CTimer::Instance().GetElapsedSecond();
 #else
 	const float fCurTime = CTimer::Instance().GetCurrentSecond();
 	float fElapsedTime = fCurTime - m_fLastTime;
+#ifdef __ANDROID__
+	if (!m_ignoreFrustum && m_dwFrame > 2)
+	{
+		if (!IsAndroidEffectInCameraFrustum(m_matGlobal, m_v3BoundingSpherePosition, m_fBoundingSphereRadius, 150.0f))
+		{
+			// Off-screen effect: only step simulation every 8th frame so one-shot effects still expire
+			// without burning CPU on 200 off-screen players' shining/aura particles every frame
+			if ((m_dwFrame & 7) != 0)
+				return;
+		}
+	}
+#endif
 	m_fLastTime = fCurTime;
 	if (fElapsedTime < 0.0f)
 		fElapsedTime = 0.0f;
@@ -131,6 +220,11 @@ void CEffectInstance::OnRender()
 
 	if (m_ParticleInstanceVector.empty() && m_MeshInstanceVector.empty())
 		return;
+
+#ifdef __ANDROID__
+	if (!m_ignoreFrustum && !IsAndroidEffectInCameraFrustum(m_matGlobal, m_v3BoundingSpherePosition, m_fBoundingSphereRadius, 250.0f))
+		return;
+#endif
 
 #ifdef DIRECTX9
 	STATEMANAGER.SaveSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);

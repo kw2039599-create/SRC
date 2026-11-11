@@ -28,14 +28,6 @@ void CGrannyModelInstance::Update(DWORD dwAniFPS)
 
 	GrannyFreeCompletedModelControls(m_pgrnModelInstance); //@fixme029
 	GrannySetModelClock(m_pgrnModelInstance, GetLocalTime());
-
-#ifdef __ANDROID__
-	if (m_pgrnModelInstance && (!m_ppkSkeletonInst || *m_ppkSkeletonInst == this))
-	{
-		UpdateWorldPose();
-		s_androidDeformCache[this].lastWorldPoseFrame = m_dwOldUpdateFrame;
-	}
-#endif
 }
 
 void CGrannyModelInstance::UpdateLocalTime(float fElapsedTime)
@@ -74,7 +66,7 @@ void CGrannyModelInstance::Deform(const D3DXMATRIX * c_pWorldMatrix)
 	else if (mc_pParentInstance)
 		effectiveFrame = mc_pParentInstance->m_dwOldUpdateFrame;
 
-	const bool bNeedPose = (st.warmupCount < 4) ||
+	const bool bNeedPose = (st.warmupCount < 2) ||
 	                       (st.lastUpdateFrame != effectiveFrame);
 	if (!bNeedPose)
 	{
@@ -91,7 +83,7 @@ void CGrannyModelInstance::Deform(const D3DXMATRIX * c_pWorldMatrix)
 
 	if (!m_ppkSkeletonInst || *m_ppkSkeletonInst == this)
 	{
-		if (st.lastWorldPoseFrame != effectiveFrame || st.warmupCount <= 4)
+		if (st.lastWorldPoseFrame != effectiveFrame || st.warmupCount <= 2)
 		{
 			if (m_pgrnModelInstance)
 				GrannySetModelClock(m_pgrnModelInstance, GetLocalTime());
@@ -162,8 +154,23 @@ class CGrannyLocalPose
 
 void CGrannyModelInstance::UpdateSkeleton(const D3DXMATRIX * c_pWorldMatrix, float /*fLocalTime*/)
 {
+#ifdef __ANDROID__
+	SAndroidDeformState& st = s_androidDeformCache[this];
+	if (!m_ppkSkeletonInst || *m_ppkSkeletonInst == this)
+	{
+		if (st.lastWorldPoseFrame == 0xFFFFFFFF)
+		{
+			if (m_pgrnModelInstance)
+				GrannySetModelClock(m_pgrnModelInstance, GetLocalTime());
+			UpdateWorldPose();
+			st.lastWorldPoseFrame = m_dwOldUpdateFrame;
+		}
+	}
+	UpdateWorldMatrices(c_pWorldMatrix);
+#else
 	UpdateWorldPose();
 	UpdateWorldMatrices(c_pWorldMatrix);
+#endif
 }
 
 void CGrannyModelInstance::UpdateWorldPose()

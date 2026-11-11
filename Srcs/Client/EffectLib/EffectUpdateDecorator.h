@@ -67,8 +67,10 @@ namespace NEffectUpdateDecorator
 		virtual CBaseDecorator* __Clone(CParticleInstance* pFirstInstance, CParticleInstance* pInstance) = 0;
 		void RemoveMe()
 		{
-			m_PrevDecorator->m_NextDecorator = m_NextDecorator;
-			m_NextDecorator->m_PrevDecorator=m_PrevDecorator;
+			if (m_PrevDecorator)
+				m_PrevDecorator->m_NextDecorator = m_NextDecorator;
+			if (m_NextDecorator)
+				m_NextDecorator->m_PrevDecorator = m_PrevDecorator;
 			delete this;
 		}
 		CBaseDecorator * m_NextDecorator;
@@ -109,7 +111,10 @@ namespace NEffectUpdateDecorator
 				pData(pValue)
 			{
 				if (it_start == it_end)
-					*pValue = T();
+				{
+					if (pValue)
+						*pValue = T();
+				}
 				else
 					++it_next;
 			}
@@ -124,25 +129,27 @@ namespace NEffectUpdateDecorator
 				it_end(ted.it_end),
 				it_cur(ted.it_cur),
 				it_next(ted.it_next),
-				pData((T*)( (unsigned char*)ted.pData - (DWORD)pFirstInstance + (DWORD)pInstance))
+				pData((ted.pData && pFirstInstance && pInstance)
+					? (T*)((unsigned char*)pInstance + ((unsigned char*)ted.pData - (unsigned char*)pFirstInstance))
+					: ted.pData)
 			{
-				if (it_start == it_end)
+				if (it_start == it_end && pData)
 					*pData = T();
 			}
 		virtual CBaseDecorator* __Clone(CParticleInstance* pFirstInstance, CParticleInstance* pInstance) { return new CTimeEventDecorator(*this, pFirstInstance, pInstance); }
 		virtual void __Excute(const CDecoratorData & d)
 		{
-			if (it_start==it_end)
+			if (!pData || it_start == it_end)
 			{
 				RemoveMe();
 			}
-			else if (it_cur->m_fTime>d.fTime)
+			else if (it_cur->m_fTime > d.fTime)
 			{
 				*pData = it_cur->m_Value;
 			}
 			else
 			{
-				while (it_next!=it_end && it_next->m_fTime<=d.fTime)
+				while (it_next != it_end && it_next->m_fTime <= d.fTime)
 					++it_cur, ++it_next;
 				if (it_next == it_end)
 				{
@@ -154,9 +161,15 @@ namespace NEffectUpdateDecorator
 				else
 				{
 					float length = it_next->m_fTime - it_cur->m_fTime;
-					//*pData = it_cur->m_Value + (it_next->m_Value - it_cur->m_Value)*(d.fTime-it_cur->m_fTime)/length;
-					*pData = it_cur->m_Value*(1-(d.fTime-it_cur->m_fTime)/length) ;
-					*pData += it_next->m_Value * ((d.fTime-it_cur->m_fTime)/length);
+					if (length > 1e-6f)
+					{
+						*pData = it_cur->m_Value * (1.0f - (d.fTime - it_cur->m_fTime) / length);
+						*pData += it_next->m_Value * ((d.fTime - it_cur->m_fTime) / length);
+					}
+					else
+					{
+						*pData = it_cur->m_Value;
+					}
 				}
 			}
 		}
