@@ -77,6 +77,19 @@ extern "C" bool IOSDecodeImageFromMemory(const void* data, unsigned int size, un
     CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), img);
     CGContextRelease(ctx);
     CGImageRelease(img);
+
+    uint32_t* pixels = outBGRA.data();
+    size_t totalPixels = w * h;
+    for (size_t i = 0; i < totalPixels; ++i) {
+        uint32_t p = pixels[i];
+        uint32_t a = (p >> 24) & 0xFF;
+        if (a > 0 && a < 255) {
+            uint32_t b = (p & 0xFF) * 255 / a;
+            uint32_t g = ((p >> 8) & 0xFF) * 255 / a;
+            uint32_t r = ((p >> 16) & 0xFF) * 255 / a;
+            pixels[i] = (a << 24) | ((r > 255 ? 255 : r) << 16) | ((g > 255 ? 255 : g) << 8) | (b > 255 ? 255 : b);
+        }
+    }
     return true;
 }
 
