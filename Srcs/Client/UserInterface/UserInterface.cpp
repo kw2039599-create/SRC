@@ -727,7 +727,9 @@ bool RunMainScript(CPythonLauncher& pyLauncher, const char* lpCmdLine)
 		SplitLine(lpCmdLine," " ,&stVec);
 
 		if (stVec.size() != 0 && "--pause-before-create-window" == stVec[0])
+			#if !defined(__APPLE__)
 			system("pause");
+			#endif
 
 #ifdef ENABLE_DAEMONPROTECTION
 		DWORD dwCrc32, dwSize;

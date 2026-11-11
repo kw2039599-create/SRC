@@ -1,3 +1,4 @@
+#include <cfloat>
 #include "StdAfx.h"
 #include "MapUtil.h"
 

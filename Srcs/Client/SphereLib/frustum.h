@@ -1,3 +1,4 @@
+#include <cfloat>
 /* Copyright (C) John W. Ratcliff, 2001.
  * All rights reserved worldwide.
  *
