@@ -1,6 +1,16 @@
 name: Build iPhone IPA
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: 'macOS Runner Pool (macos-15-intel or macos-15)'
+        required: false
+        default: 'macos-15-intel'
+        type: choice
+        options:
+          - macos-15-intel
+          - macos-15
+          - macos-26
 
 concurrency:
   group: ios-build-${{ github.ref }}
@@ -8,7 +18,7 @@ concurrency:
 
 jobs:
   build-ios:
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner || 'macos-15-intel' }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -23,13 +33,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: Srcs/Client/build_ios
-          key: ios-build-cache-${{ github.run_id }}
+          key: ios-build-cache-${{ runner.arch }}-${{ github.run_id }}
           restore-keys: |
+            ios-build-cache-${{ runner.arch }}-
             ios-build-cache-
 
       - name: Configure & Compile iOS App
         working-directory: Srcs/Client
         run: |
+          sudo defaults -currentHost write /Library/Preferences/com.apple.powerlogd SMCMonitorCadence 0 2>/dev/null || true
+          sudo killall PerfPowerServices 2>/dev/null || true
           python3 ios_cache_helper.py restore
           if [ ! -f build_ios/CMakeCache.txt ]; then
             cmake -B build_ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
@@ -40,7 +53,7 @@ jobs:
           cmake --build build_ios --config Release -- -sdk iphoneos -jobs 8 -IDEBuildingContinueBuildingAfterErrors=YES -PBXBuildsContinueAfterErrors=YES -continueBuildingAfterErrors=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1
           BUILD_STATUS=$?
           if [ $BUILD_STATUS -ne 0 ]; then
-            echo "[Retry] Clean reconfiguring build_ios..."
+            echo "[Retry] Reconfiguring build_ios..."
             rm -rf build_ios
             cmake -B build_ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
             cmake --build build_ios --config Release -- -sdk iphoneos -jobs 8 -IDEBuildingContinueBuildingAfterErrors=YES -PBXBuildsContinueAfterErrors=YES -continueBuildingAfterErrors=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1
