@@ -57,9 +57,7 @@ if(EXISTS "${PYTHON_SRC_DIR}/Python-2.7.18/Python")
 endif()
 
 set(PY_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/python27_gen")
-file(MAKE_DIRECTORY "")
-
-if(NOT EXISTS "/Python27/Python.h")
+file(MAKE_DIRECTORY "${PY_GEN_DIR}")
 
 # Generate Android/iOS pyconfig.h for Python 2.7
 file(WRITE "${PY_GEN_DIR}/pyconfig.h" "
@@ -336,8 +334,6 @@ PyAPI_FUNC(PyObject *) Py_InitModule4(const char *name, PyMethodDef *methods, co
 }
 #endif
 ")
-
-endif()
 
 set(PYTHON_CORE_SOURCES
     ${PY_GEN_DIR}/config.c
@@ -667,11 +663,13 @@ elseif(APPLE)
         python27_static
         "-framework Foundation"
         "-framework UIKit"
+        "-framework QuartzCore"
         "-framework GLKit"
         "-framework OpenGLES"
         "-framework CoreGraphics"
         "-framework ImageIO"
         "-framework AVFoundation"
+        "-framework CoreMedia"
         "-framework AudioToolbox"
         "-Wl,-no_fixup_chains"
         z

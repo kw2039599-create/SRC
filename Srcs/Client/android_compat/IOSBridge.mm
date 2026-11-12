@@ -242,36 +242,6 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
     s_hiddenTextField.autocorrectionType = UITextAutocorrectionTypeNo;
     s_hiddenTextField.autocapitalizationType = UITextAutocapitalizationTypeNone;
     [self.view addSubview:s_hiddenTextField];
-
-    UIButton* kbBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [kbBtn setTitle:@"⌨" forState:UIControlStateNormal];
-    [kbBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    kbBtn.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.47f];
-    kbBtn.layer.cornerRadius = 4.0f;
-    kbBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    [kbBtn addTarget:self action:@selector(onToggleKeyboard) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:kbBtn];
-
-    UIButton* logBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [logBtn setTitle:@"LOG" forState:UIControlStateNormal];
-    [logBtn setTitleColor:[UIColor yellowColor] forState:UIControlStateNormal];
-    logBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11.0f];
-    logBtn.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.63f];
-    logBtn.layer.cornerRadius = 4.0f;
-    logBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    [logBtn addTarget:self action:@selector(onShowLogs) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:logBtn];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [kbBtn.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8.0f],
-        [kbBtn.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12.0f],
-        [kbBtn.widthAnchor constraintEqualToConstant:48.0f],
-        [kbBtn.heightAnchor constraintEqualToConstant:38.0f],
-        [logBtn.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8.0f],
-        [logBtn.trailingAnchor constraintEqualToAnchor:kbBtn.leadingAnchor constant:-8.0f],
-        [logBtn.widthAnchor constraintEqualToConstant:56.0f],
-        [logBtn.heightAnchor constraintEqualToConstant:38.0f]
-    ]];
 }
 
 - (void)onToggleKeyboard {

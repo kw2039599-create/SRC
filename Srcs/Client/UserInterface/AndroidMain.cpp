@@ -1820,7 +1820,7 @@ static void WriteTopBarButtonTGA(const char* path, int iconType, bool isPressed)
     if (access(path, F_OK) == 0)
         return;
 
-    const int size = 52;
+    const int size = 104;
     FILE* fp = fopen(path, "wb");
     if (!fp) return;
 
@@ -2120,26 +2120,26 @@ void GenerateMobileHUDTextures() {
     WriteTopBarButtonTGA("mark/m_top_sys_down.tga",      TICON_SYS,      true);
     WriteSquaredMiniMapTextures();
 	WriteMobileStatusHUDTextures();
-	WriteTopBarButtonTGA("mark/m_top_collapse_norm_v3.tga", TICON_COLLAPSE, false);
-    WriteTopBarButtonTGA("mark/m_top_collapse_down_v3.tga", TICON_COLLAPSE, true);
-    WriteTopBarButtonTGA("mark/m_top_expand_norm_v3.tga",   TICON_EXPAND,   false);
-    WriteTopBarButtonTGA("mark/m_top_expand_down_v3.tga",   TICON_EXPAND,   true);
-    WriteTopBarButtonTGA("mark/m_top_char_norm_v3.tga",     TICON_CHAR,     false);
-    WriteTopBarButtonTGA("mark/m_top_char_down_v3.tga",     TICON_CHAR,     true);
-    WriteTopBarButtonTGA("mark/m_top_inven_norm_v3.tga",    TICON_INVEN,    false);
-    WriteTopBarButtonTGA("mark/m_top_inven_down_v3.tga",    TICON_INVEN,    true);
-    WriteTopBarButtonTGA("mark/m_top_comm_norm_v3.tga",     TICON_COMM,     false);
-    WriteTopBarButtonTGA("mark/m_top_comm_down_v3.tga",     TICON_COMM,     true);
-    WriteTopBarButtonTGA("mark/m_top_shop_norm_v3.tga",     TICON_SHOP,     false);
-    WriteTopBarButtonTGA("mark/m_top_shop_down_v3.tga",     TICON_SHOP,     true);
-    WriteTopBarButtonTGA("mark/m_top_auto_norm_v3.tga",     TICON_AUTOHUNT, false);
-    WriteTopBarButtonTGA("mark/m_top_auto_down_v3.tga",     TICON_AUTOHUNT, true);
-    WriteTopBarButtonTGA("mark/m_top_ds_norm_v3.tga",       TICON_DS,       false);
-    WriteTopBarButtonTGA("mark/m_top_ds_down_v3.tga",       TICON_DS,       true);
-    WriteTopBarButtonTGA("mark/m_top_util_norm_v3.tga",     TICON_UTIL,     false);
-    WriteTopBarButtonTGA("mark/m_top_util_down_v3.tga",     TICON_UTIL,     true);
-    WriteTopBarButtonTGA("mark/m_top_sys_norm_v3.tga",      TICON_SYS,      false);
-    WriteTopBarButtonTGA("mark/m_top_sys_down_v3.tga",      TICON_SYS,      true);
+	WriteTopBarButtonTGA("mark/m_top_collapse_norm_v4.tga", TICON_COLLAPSE, false);
+    WriteTopBarButtonTGA("mark/m_top_collapse_down_v4.tga", TICON_COLLAPSE, true);
+    WriteTopBarButtonTGA("mark/m_top_expand_norm_v4.tga",   TICON_EXPAND,   false);
+    WriteTopBarButtonTGA("mark/m_top_expand_down_v4.tga",   TICON_EXPAND,   true);
+    WriteTopBarButtonTGA("mark/m_top_char_norm_v4.tga",     TICON_CHAR,     false);
+    WriteTopBarButtonTGA("mark/m_top_char_down_v4.tga",     TICON_CHAR,     true);
+    WriteTopBarButtonTGA("mark/m_top_inven_norm_v4.tga",    TICON_INVEN,    false);
+    WriteTopBarButtonTGA("mark/m_top_inven_down_v4.tga",    TICON_INVEN,    true);
+    WriteTopBarButtonTGA("mark/m_top_comm_norm_v4.tga",     TICON_COMM,     false);
+    WriteTopBarButtonTGA("mark/m_top_comm_down_v4.tga",     TICON_COMM,     true);
+    WriteTopBarButtonTGA("mark/m_top_shop_norm_v4.tga",     TICON_SHOP,     false);
+    WriteTopBarButtonTGA("mark/m_top_shop_down_v4.tga",     TICON_SHOP,     true);
+    WriteTopBarButtonTGA("mark/m_top_auto_norm_v4.tga",     TICON_AUTOHUNT, false);
+    WriteTopBarButtonTGA("mark/m_top_auto_down_v4.tga",     TICON_AUTOHUNT, true);
+    WriteTopBarButtonTGA("mark/m_top_ds_norm_v4.tga",       TICON_DS,       false);
+    WriteTopBarButtonTGA("mark/m_top_ds_down_v4.tga",       TICON_DS,       true);
+    WriteTopBarButtonTGA("mark/m_top_util_norm_v4.tga",     TICON_UTIL,     false);
+    WriteTopBarButtonTGA("mark/m_top_util_down_v4.tga",     TICON_UTIL,     true);
+    WriteTopBarButtonTGA("mark/m_top_sys_norm_v4.tga",      TICON_SYS,      false);
+    WriteTopBarButtonTGA("mark/m_top_sys_down_v4.tga",      TICON_SYS,      true);
 }
 
 // ============================================================================
@@ -2160,7 +2160,65 @@ struct SMobilePointerSlot {
     int lastX = 0, lastY = 0;
     DWORD downTimeMs = 0;
     bool isDraggingCamera = false;
+    bool isDraggingWindow = false;
+    bool holdDragCancelled = false;
+    UI::CWindow* pHoldDragWnd = nullptr;
 };
+
+static UI::CWindow* FindHoldDraggableWindow(int x, int y) {
+    UI::CWindowManager::Instance().RunMouseMove(x, y);
+    UI::CWindow* pPointWnd = UI::CWindowManager::Instance().GetPointWindow();
+    if (!pPointWnd) return nullptr;
+
+    // Do not hijack small native slider/scrollbar thumbs (< 54px) that drag immediately
+    if (pPointWnd->IsFlag(UI::CWindow::FLAG_MOVABLE) &&
+        pPointWnd->GetWidth() < 54 && pPointWnd->GetHeight() < 54) {
+        return nullptr;
+    }
+
+    UI::CWindow* pBestMovable = nullptr;
+    UI::CWindow* pTopLayerChild = nullptr;
+    for (UI::CWindow* pCur = pPointWnd; pCur != nullptr; pCur = pCur->GetParent()) {
+        const char* szName = pCur->GetName();
+        if (szName) {
+            if (strcmp(szName, "ChatWindow") == 0 || strcmp(szName, "MobileChatCatcher") == 0) {
+                return (strcmp(szName, "MobileChatCatcher") == 0 && pCur->GetParent()) ? pCur->GetParent() : pCur;
+            }
+            if (strcmp(szName, "TaskBar") == 0 || strcmp(szName, "MobileHUDFixed") == 0) {
+                return nullptr;
+            }
+        }
+        UI::CWindow* pParent = pCur->GetParent();
+        if (pParent && pParent->GetName()) {
+            const char* pName = pParent->GetName();
+            if (strcmp(pName, "UI") == 0 || strcmp(pName, "TOP_MOST") == 0 || strcmp(pName, "UI_BOTTOM") == 0) {
+                pTopLayerChild = pCur;
+                break;
+            }
+        }
+        if (pCur->IsFlag(UI::CWindow::FLAG_MOVABLE) && !pCur->IsFlag(UI::CWindow::FLAG_RESTRICT_X)) {
+            pBestMovable = pCur;
+        }
+    }
+
+    UI::CWindow* pCandidate = pTopLayerChild ? pTopLayerChild : pBestMovable;
+    if (!pCandidate) return nullptr;
+
+    // Never drag fullscreen background windows (like Login or GameWorld) or fixed HUD buttons
+    if (pCandidate->GetWidth() >= g_AndroidScreenWidth - 32 &&
+        pCandidate->GetHeight() >= g_AndroidScreenHeight - 32) {
+        return nullptr;
+    }
+    const char* cName = pCandidate->GetName();
+    if (cName && (strcmp(cName, "MobileHUDFixed") == 0 || strcmp(cName, "TaskBar") == 0)) {
+        return nullptr;
+    }
+    if (pCandidate->IsFlag(UI::CWindow::FLAG_MOVABLE) || pBestMovable != nullptr ||
+        (cName && strcmp(cName, "ChatWindow") == 0)) {
+        return pCandidate;
+    }
+    return nullptr;
+}
 
 static SMobilePointerSlot s_pointers[4];
 static int s_iJoyCenterX = 148;
@@ -2730,10 +2788,30 @@ static void ReleasePointerSlot(int idx, int x, int y, int maskedAction) {
     if (slot.role == TOUCH_ROLE_JOYSTICK) {
         ResetJoystickState();
     } else if (slot.role == TOUCH_ROLE_UI) {
+        bool wasDraggingWnd = slot.isDraggingWindow;
+        UI::CWindow* pDraggedWnd = slot.pHoldDragWnd;
         slot.active = false;
         slot.role = TOUCH_ROLE_NONE;
         slot.isDraggingCamera = false;
+        slot.isDraggingWindow = false;
+        slot.holdDragCancelled = false;
+        slot.pHoldDragWnd = nullptr;
         UpdateUiTouchDownFlag();
+        if (wasDraggingWnd) {
+            if (pDraggedWnd && pDraggedWnd->GetName() && strcmp(pDraggedWnd->GetName(), "ChatWindow") == 0) {
+                long cx = 0, cy = 0;
+                pDraggedWnd->GetPosition(&cx, &cy);
+                char cmd[160];
+                snprintf(cmd, sizeof(cmd),
+                    "try:\n"
+                    "    import constInfo\n"
+                    "    if hasattr(constInfo, 'SaveMobileChatPos'): constInfo.SaveMobileChatPos(%ld, %ld)\n"
+                    "except:\n"
+                    "    pass\n", cx, cy);
+                PyRun_SimpleString(cmd);
+            }
+            return;
+        }
         g_AndroidMouseX = rx;
         g_AndroidMouseY = ry;
         UI::CWindowManager::Instance().RunMouseMove(rx, ry);
@@ -3053,6 +3131,9 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                 // 2. Interactive UI Window / HUD Button
                 else if (IsPointOnUILayer(ev.x, ev.y)) {
                     slot.role = TOUCH_ROLE_UI;
+                    slot.isDraggingWindow = false;
+                    slot.holdDragCancelled = false;
+                    slot.pHoldDragWnd = FindHoldDraggableWindow(ev.x, ev.y);
                     UpdateUiTouchDownFlag();
                     g_AndroidMouseX = ev.x;
                     g_AndroidMouseY = ev.y;
@@ -3102,9 +3183,46 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                     UpdateJoystickFromPoint(ev.x, ev.y);
                 }
                 else if (slot.role == TOUCH_ROLE_UI) {
-                    g_AndroidMouseX = ev.x;
-                    g_AndroidMouseY = ev.y;
-                    UI::CWindowManager::Instance().RunMouseMove(ev.x, ev.y);
+                    DWORD heldMs = ELTimer_GetMSec() - slot.downTimeMs;
+                    int totalDx = ev.x - slot.startX;
+                    int totalDy = ev.y - slot.startY;
+                    int distSq = totalDx * totalDx + totalDy * totalDy;
+
+                    if (!slot.isDraggingWindow && !slot.holdDragCancelled) {
+                        if (heldMs < 230 && distSq > 169) {
+                            // Moved immediately (< 230ms): normal slider / scrollbar drag
+                            slot.holdDragCancelled = true;
+                        } else if (heldMs >= 230 && slot.pHoldDragWnd != nullptr && distSq > 36) {
+                            // Held steady >= 230ms then dragged: activate universal window move!
+                            slot.isDraggingWindow = true;
+                            UI::CWindowManager::Instance().RunMouseLeftButtonUp(-5000, -5000);
+                            PyRun_SimpleString(
+                                "try:\n"
+                                "    import mouseModule\n"
+                                "    if mouseModule.mouseController.isAttached():\n"
+                                "        mouseModule.mouseController.DeattachObject()\n"
+                                "except:\n"
+                                "    pass\n"
+                            );
+                        }
+                    }
+
+                    if (slot.isDraggingWindow && slot.pHoldDragWnd != nullptr) {
+                        long wx = 0, wy = 0;
+                        slot.pHoldDragWnd->GetPosition(&wx, &wy);
+                        long newX = wx + stepDx;
+                        long newY = wy + stepDy;
+                        if (newX < -slot.pHoldDragWnd->GetWidth() + 48) newX = -slot.pHoldDragWnd->GetWidth() + 48;
+                        if (newX > g_AndroidScreenWidth - 48) newX = g_AndroidScreenWidth - 48;
+                        if (newY < 0) newY = 0;
+                        if (newY > g_AndroidScreenHeight - 24) newY = g_AndroidScreenHeight - 24;
+                        slot.pHoldDragWnd->SetPosition(newX, newY);
+                        slot.pHoldDragWnd->OnMoveWindow(newX, newY);
+                    } else {
+                        g_AndroidMouseX = ev.x;
+                        g_AndroidMouseY = ev.y;
+                        UI::CWindowManager::Instance().RunMouseMove(ev.x, ev.y);
+                    }
                 }
                 else if (slot.role == TOUCH_ROLE_WORLD) {
                     int wIdx0 = -1, wIdx1 = -1;
