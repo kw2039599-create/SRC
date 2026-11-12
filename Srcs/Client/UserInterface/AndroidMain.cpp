@@ -2165,14 +2165,110 @@ struct SMobilePointerSlot {
     UI::CWindow* pHoldDragWnd = nullptr;
 };
 
+static std::unordered_map<UI::CWindow*, float> s_scaledWindows;
+static D3DXMATRIX s_savedUiViewMat;
+static bool s_bUiScaleActive = false;
+
+static void MapTouchThroughScaledWindows(int inX, int inY, int* outX, int* outY) {
+    *outX = inX;
+    *outY = inY;
+    for (auto it = s_scaledWindows.begin(); it != s_scaledWindows.end(); ) {
+        UI::CWindow* pWnd = it->first;
+        float sc = it->second;
+        if (!pWnd || sc <= 1.01f) {
+            ++it;
+            continue;
+        }
+        if (!pWnd->IsShow()) {
+            ++it;
+            continue;
+        }
+        long wx = 0, wy = 0;
+        pWnd->GetPosition(&wx, &wy);
+        int ww = pWnd->GetWidth();
+        int wh = pWnd->GetHeight();
+        int scaledW = (int)(ww * sc);
+        int scaledH = (int)(wh * sc);
+        if (inX >= wx && inX <= wx + scaledW && inY >= wy && inY <= wy + scaledH) {
+            *outX = wx + (int)((inX - wx) / sc);
+            *outY = wy + (int)((inY - wy) / sc);
+            return;
+        }
+        ++it;
+    }
+}
+
+static DWORD Pick3DActorAtScreenPos(int sx, int sy) {
+    CPythonCharacterManager* pChrMgr = CPythonCharacterManager::InstancePtr();
+    CCamera* pCam = CCameraManager::InstancePtr() ? CCameraManager::Instance().GetCurrentCamera() : nullptr;
+    if (!pChrMgr || !pCam) return 0;
+
+    CInstanceBase* pMain = pChrMgr->GetMainInstancePtr();
+    const D3DXMATRIX& matV = pCam->GetViewMatrix();
+    float fovDeg = 30.0f;
+    if (fovDeg < 10.0f) fovDeg = 30.0f;
+    float tanHalfFov = tanf(fovDeg * 0.5f * (3.14159265f / 180.0f));
+    float aspect = (float)g_AndroidScreenWidth / (float)(g_AndroidScreenHeight > 0 ? g_AndroidScreenHeight : 720);
+
+    DWORD bestVID = 0;
+    float bestScore = 1e9f;
+
+    for (CPythonCharacterManager::CharacterIterator it = pChrMgr->CharacterInstanceBegin();
+         it != pChrMgr->CharacterInstanceEnd(); ++it) {
+        CInstanceBase* pkInst = *it;
+        if (!pkInst || pkInst == pMain) continue;
+
+        TPixelPosition kPos;
+        pkInst->NEW_GetPixelPosition(&kPos);
+        float wx = kPos.x;
+        float wy = -kPos.y;
+        float wzFeet = kPos.z;
+        float wzHead = kPos.z + 150.0f;
+
+        auto ProjectPt = [&](float px, float py, float pz, float& outX, float& outY) -> bool {
+            float vx = px * matV._11 + py * matV._21 + pz * matV._31 + matV._41;
+            float vy = px * matV._12 + py * matV._22 + pz * matV._32 + matV._42;
+            float vz = px * matV._13 + py * matV._23 + pz * matV._33 + matV._43;
+            float depth = (vz < 0.0f) ? -vz : vz;
+            if (depth < 20.0f) return false;
+            float ndcX = vx / (depth * tanHalfFov * aspect);
+            float ndcY = vy / (depth * tanHalfFov);
+            outX = (ndcX * 0.5f + 0.5f) * (float)g_AndroidScreenWidth;
+            outY = (0.5f - ndcY * 0.5f) * (float)g_AndroidScreenHeight;
+            return true;
+        };
+
+        float fx = 0, fy = 0, hx = 0, hy = 0;
+        if (!ProjectPt(wx, wy, wzFeet, fx, fy) || !ProjectPt(wx, wy, wzHead, hx, hy))
+            continue;
+
+        float minY = fminf(fy, hy) - 28.0f;
+        float maxY = fmaxf(fy, hy) + 24.0f;
+        float bodyH = fmaxf(48.0f, fabsf(fy - hy));
+        float halfW = fmaxf(38.0f, bodyH * 0.48f);
+        float cx = 0.5f * (fx + hx);
+
+        if (sx >= cx - halfW && sx <= cx + halfW && sy >= minY && sy <= maxY) {
+            float cy = 0.5f * (fy + hy);
+            float distSq = (sx - cx) * (sx - cx) + (sy - cy) * (sy - cy);
+            if (pkInst->IsPC()) distSq *= 0.7f; // Prioritize players slightly when overlapping
+            if (distSq < bestScore) {
+                bestScore = distSq;
+                bestVID = pkInst->GetVirtualID();
+            }
+        }
+    }
+    return bestVID;
+}
+
 static UI::CWindow* FindHoldDraggableWindow(int x, int y) {
     UI::CWindowManager::Instance().RunMouseMove(x, y);
     UI::CWindow* pPointWnd = UI::CWindowManager::Instance().GetPointWindow();
     if (!pPointWnd) return nullptr;
 
-    // Do not hijack small native slider/scrollbar thumbs (< 54px) that drag immediately
+    // Only skip tiny slider/scrollbar thumbs (<= 28px)
     if (pPointWnd->IsFlag(UI::CWindow::FLAG_MOVABLE) &&
-        pPointWnd->GetWidth() < 54 && pPointWnd->GetHeight() < 54) {
+        pPointWnd->GetWidth() <= 28 && pPointWnd->GetHeight() <= 28) {
         return nullptr;
     }
 
@@ -2204,7 +2300,6 @@ static UI::CWindow* FindHoldDraggableWindow(int x, int y) {
     UI::CWindow* pCandidate = pTopLayerChild ? pTopLayerChild : pBestMovable;
     if (!pCandidate) return nullptr;
 
-    // Never drag fullscreen background windows (like Login or GameWorld) or fixed HUD buttons
     if (pCandidate->GetWidth() >= g_AndroidScreenWidth - 32 &&
         pCandidate->GetHeight() >= g_AndroidScreenHeight - 32) {
         return nullptr;
@@ -2213,11 +2308,7 @@ static UI::CWindow* FindHoldDraggableWindow(int x, int y) {
     if (cName && (strcmp(cName, "MobileHUDFixed") == 0 || strcmp(cName, "TaskBar") == 0)) {
         return nullptr;
     }
-    if (pCandidate->IsFlag(UI::CWindow::FLAG_MOVABLE) || pBestMovable != nullptr ||
-        (cName && strcmp(cName, "ChatWindow") == 0)) {
-        return pCandidate;
-    }
-    return nullptr;
+    return pCandidate;
 }
 
 static SMobilePointerSlot s_pointers[4];
@@ -2812,21 +2903,53 @@ static void ReleasePointerSlot(int idx, int x, int y, int maskedAction) {
             }
             return;
         }
-        g_AndroidMouseX = rx;
-        g_AndroidMouseY = ry;
-        UI::CWindowManager::Instance().RunMouseMove(rx, ry);
-        UI::CWindowManager::Instance().RunMouseLeftButtonUp(rx, ry);
+        int mx = rx, my = ry;
+        MapTouchThroughScaledWindows(rx, ry, &mx, &my);
+        g_AndroidMouseX = mx;
+        g_AndroidMouseY = my;
+        UI::CWindowManager::Instance().RunMouseMove(mx, my);
+        UI::CWindowManager::Instance().RunMouseLeftButtonUp(mx, my);
         return;
     } else if (slot.role == TOUCH_ROLE_WORLD) {
         DWORD heldMs = ELTimer_GetMSec() - slot.downTimeMs;
         int totalDx = rx - slot.startX;
         int totalDy = ry - slot.startY;
-        if (maskedAction != 3 && !slot.isDraggingCamera && heldMs < 250 && (totalDx * totalDx + totalDy * totalDy <= 196)) {
-            g_AndroidMouseX = rx;
-            g_AndroidMouseY = ry;
-            UI::CWindowManager::Instance().RunMouseMove(rx, ry);
-            UI::CWindowManager::Instance().RunMouseLeftButtonDown(rx, ry);
-            UI::CWindowManager::Instance().RunMouseLeftButtonUp(rx, ry);
+        if (maskedAction != 3 && !slot.isDraggingCamera && heldMs < 400 && (totalDx * totalDx + totalDy * totalDy <= 576)) {
+            DWORD pickedVID = Pick3DActorAtScreenPos(rx, ry);
+            if (pickedVID != 0 && CPythonPlayer::InstancePtr()) {
+                CPythonPlayer::Instance().SetTarget(pickedVID, TRUE);
+                CInstanceBase* pkInst = CPythonCharacterManager::InstancePtr()
+                    ? CPythonCharacterManager::Instance().GetInstancePtr(pickedVID) : nullptr;
+                if (pkInst) {
+                    if (pkInst->IsPC()) {
+                        char cmd[256];
+                        snprintf(cmd, sizeof(cmd),
+                            "try:\n"
+                            "    import constInfo, chr\n"
+                            "    itf = constInfo.GetInterfaceInstance()\n"
+                            "    if itf and hasattr(itf, 'wndTargetBoard') and itf.wndTargetBoard:\n"
+                            "        itf.wndTargetBoard.Open(%u, chr.GetNameByVID(%u))\n"
+                            "except:\n"
+                            "    pass\n", (unsigned int)pickedVID, (unsigned int)pickedVID);
+                        PyRun_SimpleString(cmd);
+                    } else if (pkInst->IsNPC() || pkInst->IsShop()) {
+                        char cmd[128];
+                        snprintf(cmd, sizeof(cmd),
+                            "try:\n"
+                            "    import net\n"
+                            "    net.SendOnClickPacket(%u)\n"
+                            "except:\n"
+                            "    pass\n", (unsigned int)pickedVID);
+                        PyRun_SimpleString(cmd);
+                    }
+                }
+            } else {
+                g_AndroidMouseX = rx;
+                g_AndroidMouseY = ry;
+                UI::CWindowManager::Instance().RunMouseMove(rx, ry);
+                UI::CWindowManager::Instance().RunMouseLeftButtonDown(rx, ry);
+                UI::CWindowManager::Instance().RunMouseLeftButtonUp(rx, ry);
+            }
         }
     }
     slot.active = false;
@@ -3020,7 +3143,52 @@ static PyObject* mobileInput_GetPerfHudText(PyObject* /*self*/, PyObject* /*args
 }
 #endif // ENABLE_MOBILE_PERF_DEBUGGER
 
+static PyObject* mobileInput_SetWindowScale(PyObject* /*self*/, PyObject* args) {
+    int hWnd = 0;
+    float scale = 1.0f;
+    if (!PyArg_ParseTuple(args, "if", &hWnd, &scale))
+        return Py_BuildValue("i", 0);
+    UI::CWindow* pWnd = (UI::CWindow*)(intptr_t)hWnd;
+    if (pWnd) {
+        if (scale <= 1.01f) s_scaledWindows.erase(pWnd);
+        else s_scaledWindows[pWnd] = scale;
+    }
+    return Py_BuildValue("i", 1);
+}
+
+static PyObject* mobileInput_BeginWindowScale(PyObject* /*self*/, PyObject* args) {
+    int gx = 0, gy = 0;
+    float scale = 1.0f;
+    if (!PyArg_ParseTuple(args, "iif", &gx, &gy, &scale))
+        return Py_BuildValue("i", 0);
+    if (scale > 1.01f && CStateManager::InstancePtr()) {
+        if (!s_bUiScaleActive) {
+            CStateManager::Instance().GetTransform(D3DTS_VIEW, &s_savedUiViewMat);
+            s_bUiScaleActive = true;
+        }
+        D3DXMATRIX mat;
+        D3DXMatrixIdentity(&mat);
+        mat._11 = scale;
+        mat._22 = scale;
+        mat._41 = (float)gx * (1.0f - scale);
+        mat._42 = (float)gy * (1.0f - scale);
+        CStateManager::Instance().SetTransform(D3DTS_VIEW, &mat);
+    }
+    return Py_BuildValue("i", 1);
+}
+
+static PyObject* mobileInput_EndWindowScale(PyObject* /*self*/, PyObject* /*args*/) {
+    if (s_bUiScaleActive && CStateManager::InstancePtr()) {
+        CStateManager::Instance().SetTransform(D3DTS_VIEW, &s_savedUiViewMat);
+        s_bUiScaleActive = false;
+    }
+    return Py_BuildValue("i", 1);
+}
+
 static PyMethodDef s_mobileInputMethods[] = {
+    { "SetWindowScale",      mobileInput_SetWindowScale,      METH_VARARGS, "Register scaled UI window" },
+    { "BeginWindowScale",    mobileInput_BeginWindowScale,    METH_VARARGS, "Begin 2D UI scale matrix" },
+    { "EndWindowScale",      mobileInput_EndWindowScale,      METH_VARARGS, "End 2D UI scale matrix" },
     { "SetJoystickZone",     mobileInput_SetJoystickZone,     METH_VARARGS, "Set virtual joystick zone" },
     { "GetJoystickState",    mobileInput_GetJoystickState,    METH_VARARGS, "Get joystick state tuple" },
     { "IsUiTouchDown",       mobileInput_IsUiTouchDown,       METH_VARARGS, "Check if UI touch is held" },
@@ -3129,16 +3297,22 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                     UpdateJoystickFromPoint(ev.x, ev.y);
                 }
                 // 2. Interactive UI Window / HUD Button
-                else if (IsPointOnUILayer(ev.x, ev.y)) {
+                else if ([&]() {
+                    int mx = ev.x, my = ev.y;
+                    MapTouchThroughScaledWindows(ev.x, ev.y, &mx, &my);
+                    return IsPointOnUILayer(mx, my);
+                }()) {
+                    int mx = ev.x, my = ev.y;
+                    MapTouchThroughScaledWindows(ev.x, ev.y, &mx, &my);
                     slot.role = TOUCH_ROLE_UI;
                     slot.isDraggingWindow = false;
                     slot.holdDragCancelled = false;
-                    slot.pHoldDragWnd = FindHoldDraggableWindow(ev.x, ev.y);
+                    slot.pHoldDragWnd = FindHoldDraggableWindow(mx, my);
                     UpdateUiTouchDownFlag();
-                    g_AndroidMouseX = ev.x;
-                    g_AndroidMouseY = ev.y;
-                    UI::CWindowManager::Instance().RunMouseMove(ev.x, ev.y);
-                    UI::CWindowManager::Instance().RunMouseLeftButtonDown(ev.x, ev.y);
+                    g_AndroidMouseX = mx;
+                    g_AndroidMouseY = my;
+                    UI::CWindowManager::Instance().RunMouseMove(mx, my);
+                    UI::CWindowManager::Instance().RunMouseLeftButtonDown(mx, my);
                 }
                 // 3. 3D World (Orbit / Pinch-to-Zoom / Fast-Tap)
                 else {
@@ -3189,11 +3363,8 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                     int distSq = totalDx * totalDx + totalDy * totalDy;
 
                     if (!slot.isDraggingWindow && !slot.holdDragCancelled) {
-                        if (heldMs < 230 && distSq > 169) {
-                            // Moved immediately (< 230ms): normal slider / scrollbar drag
-                            slot.holdDragCancelled = true;
-                        } else if (heldMs >= 230 && slot.pHoldDragWnd != nullptr && distSq > 36) {
-                            // Held steady >= 230ms then dragged: activate universal window move!
+                        if (heldMs >= 120 && slot.pHoldDragWnd != nullptr && distSq > 16) {
+                            // Easy & responsive hold-drag after 120ms!
                             slot.isDraggingWindow = true;
                             UI::CWindowManager::Instance().RunMouseLeftButtonUp(-5000, -5000);
                             PyRun_SimpleString(
@@ -3219,9 +3390,11 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                         slot.pHoldDragWnd->SetPosition(newX, newY);
                         slot.pHoldDragWnd->OnMoveWindow(newX, newY);
                     } else {
-                        g_AndroidMouseX = ev.x;
-                        g_AndroidMouseY = ev.y;
-                        UI::CWindowManager::Instance().RunMouseMove(ev.x, ev.y);
+                        int mx = ev.x, my = ev.y;
+                        MapTouchThroughScaledWindows(ev.x, ev.y, &mx, &my);
+                        g_AndroidMouseX = mx;
+                        g_AndroidMouseY = my;
+                        UI::CWindowManager::Instance().RunMouseMove(mx, my);
                     }
                 }
                 else if (slot.role == TOUCH_ROLE_WORLD) {
