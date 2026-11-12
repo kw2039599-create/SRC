@@ -257,7 +257,7 @@
 #if defined(NN_PLATFORM_CTR) || \
     defined(_MSC_VER) || \
     defined(_MACOSX) || \
-    defined(linux) || defined(__linux__) || defined(LINUX)
+    defined(linux) || defined(__linux__) || defined(LINUX) || defined(__APPLE__)
 #undef GRANNY_USES_MS_PACKING
 #define GRANNY_USES_MS_PACKING 1
 #endif

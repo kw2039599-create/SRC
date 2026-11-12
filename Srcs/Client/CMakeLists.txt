@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10.2)
-project("M2WorldOnline")
+project("Metin2Mobile")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,7 +16,7 @@ add_definitions(-DBUILDING_GRANNY_STATIC=1)
 add_definitions(-DCRYPTOPP_DISABLE_ASM -D_LIBCPP_ENABLE_CXX17_REMOVED_FEATURES=1 -D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION=1)
 
 if(ANDROID)
-    add_definitions(-DANDROID)
+    add_definitions(-DANDROID -D__ANDROID__)
 elseif(APPLE)
     set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/android_compat)
@@ -88,9 +88,9 @@ file(WRITE "${PY_GEN_DIR}/pyconfig.h" "
 #define HAVE_UTIME_H 1
 #define HAVE_PTHREAD_H 1
 #define HAVE_DLFCN_H 1
-#define HAVE_WCHAR_H 1
 // FixiOSSystem
 #ifdef __APPLE__
+#define HAVE_WCHAR_H 1
 #include <stdlib.h>
 #undef system
 #define system(cmd) (-1)
@@ -539,7 +539,8 @@ set(METIN2_ALL_SOURCES
 
 if(APPLE)
     set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-    add_executable(world_mobile MACOSX_BUNDLE ${METIN2_ALL_SOURCES})
+    set(MOBILE_TARGET world_mobile)
+    add_executable(${MOBILE_TARGET} MACOSX_BUNDLE ${METIN2_ALL_SOURCES})
     set_target_properties(world_mobile PROPERTIES
         OUTPUT_NAME "M2WorldOnline"
         XCODE_ATTRIBUTE_GCC_STRICT_ALIASING NO
@@ -560,14 +561,15 @@ if(APPLE)
         "XCODE_ATTRIBUTE_INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=ipad*]" "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     )
 else()
-    add_library(world_mobile SHARED ${METIN2_ALL_SOURCES})
+    set(MOBILE_TARGET metin2_mobile)
+    add_library(${MOBILE_TARGET} SHARED ${METIN2_ALL_SOURCES})
 endif()
 
 if(ANDROID)
-    set_target_properties(world_mobile PROPERTIES OUTPUT_NAME "metin2_mobile")
+    # metin2_mobile already named
 endif()
 
-target_include_directories(world_mobile PRIVATE
+target_include_directories(${MOBILE_TARGET} PRIVATE
     "${PY_GEN_DIR}"
     "${PY_GEN_DIR}/Python27"
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -619,7 +621,7 @@ if(ANDROID OR APPLE)
         file(WRITE "${DUMMY_LIB_DIR}/${WIN_LIB}" "")
     endforeach()
 
-    target_link_directories(world_mobile PRIVATE "${DUMMY_LIB_DIR}")
+    target_link_directories(${MOBILE_TARGET} PRIVATE "${DUMMY_LIB_DIR}")
 endif()
 
 if(ANDROID)
@@ -628,7 +630,7 @@ if(ANDROID)
     find_library(gles3-lib GLESv3)
     find_library(egl-lib EGL)
 
-    target_link_libraries(world_mobile
+    target_link_libraries(${MOBILE_TARGET}
         granny2_static
         cryptopp_static
         python27_static
@@ -639,10 +641,10 @@ if(ANDROID)
         z
         m
     )
-    target_link_options(world_mobile PRIVATE "-Wl,-error-limit=0" "-Wl,--export-dynamic")
+    target_link_options(${MOBILE_TARGET} PRIVATE "-Wl,-error-limit=0" "-Wl,--export-dynamic")
 elseif(APPLE)
     set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-    target_link_libraries(world_mobile
+    target_link_libraries(${MOBILE_TARGET}
         granny2_static
         cryptopp_static
         python27_static
@@ -661,5 +663,5 @@ endif()
 
 if(APPLE)
     set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-    target_compile_definitions(world_mobile PRIVATE __ANDROID__=1)
+    target_compile_definitions(${MOBILE_TARGET} PRIVATE __ANDROID__=1)
 endif()
