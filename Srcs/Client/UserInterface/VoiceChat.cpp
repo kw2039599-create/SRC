@@ -18,6 +18,7 @@ static constexpr auto DISABLE_ACTIVE_WINDOW_CHECK_FOR_HEARING = false;
 extern "C" {
 	bool MobileVoiceChat_Init(uint32_t sampleRate, uint8_t channelCount);
 	void MobileVoiceChat_Destroy();
+	bool MobileVoiceChat_RequestPermission();
 	bool MobileVoiceChat_StartRecording();
 	void MobileVoiceChat_StopRecording();
 	void MobileVoiceChat_AddPlaybackSamples(const int16_t* samples, size_t count, float volumePercent);

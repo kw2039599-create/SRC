@@ -16,7 +16,7 @@ add_definitions(-DBUILDING_GRANNY_STATIC=1)
 add_definitions(-DCRYPTOPP_DISABLE_ASM -D_LIBCPP_ENABLE_CXX17_REMOVED_FEATURES=1 -D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION=1)
 
 if(ANDROID)
-    add_definitions(-DANDROID -D__ANDROID__)
+    add_definitions(-DANDROID)
 elseif(APPLE)
     set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/android_compat)
@@ -88,9 +88,9 @@ file(WRITE "${PY_GEN_DIR}/pyconfig.h" "
 #define HAVE_UTIME_H 1
 #define HAVE_PTHREAD_H 1
 #define HAVE_DLFCN_H 1
+#define HAVE_WCHAR_H 1
 // FixiOSSystem
 #ifdef __APPLE__
-#define HAVE_WCHAR_H 1
 #include <stdlib.h>
 #undef system
 #define system(cmd) (-1)
@@ -541,13 +541,23 @@ if(APPLE)
     set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     set(MOBILE_TARGET world_mobile)
     add_executable(${MOBILE_TARGET} MACOSX_BUNDLE ${METIN2_ALL_SOURCES})
+
+    # Bundle trailer.mp4 directly into the iOS .app for instant first-boot playback
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/trailer.mp4")
+        target_sources(${MOBILE_TARGET} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/trailer.mp4")
+        set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/trailer.mp4" PROPERTIES
+            MACOSX_PACKAGE_LOCATION "Resources"
+        )
+    endif()
+
     set_target_properties(world_mobile PROPERTIES
         OUTPUT_NAME "M2WorldOnline"
         XCODE_ATTRIBUTE_GCC_STRICT_ALIASING NO
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.m2world.online"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.m2world.online"
-        MACOSX_BUNDLE_BUNDLE_NAME "M2World Online"
-        XCODE_ATTRIBUTE_INFOPLIST_KEY_CFBundleDisplayName "M2World Online"
+        MACOSX_BUNDLE_BUNDLE_NAME "World Online"
+        XCODE_ATTRIBUTE_INFOPLIST_KEY_CFBundleDisplayName "World Online"
+        XCODE_ATTRIBUTE_INFOPLIST_KEY_NSMicrophoneUsageDescription "Microphone access is required for in-game voice chat."
         MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.0"
         MACOSX_BUNDLE_BUNDLE_VERSION "1"
         XCODE_ATTRIBUTE_MARKETING_VERSION "1.0.0"
@@ -563,10 +573,13 @@ if(APPLE)
 else()
     set(MOBILE_TARGET metin2_mobile)
     add_library(${MOBILE_TARGET} SHARED ${METIN2_ALL_SOURCES})
-endif()
 
-if(ANDROID)
-    # metin2_mobile already named
+    # Automatically copy trailer.mp4 into Android's assets/ folder during build
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/trailer.mp4")
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../android/app/src/main/assets")
+        file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/trailer.mp4"
+             DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/../android/app/src/main/assets")
+    endif()
 endif()
 
 target_include_directories(${MOBILE_TARGET} PRIVATE
@@ -655,6 +668,7 @@ elseif(APPLE)
         "-framework CoreGraphics"
         "-framework ImageIO"
         "-framework AVFoundation"
+        "-framework AudioToolbox"
         "-Wl,-no_fixup_chains"
         z
         m
