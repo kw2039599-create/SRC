@@ -133,6 +133,16 @@ void VoiceChat::SetRecorderState(uint8_t newRecorderState)
 		StopRecording();
 	}
 	m_RecorderState = newRecorderState;
+#ifdef __ANDROID__
+	if (newRecorderState != RECORDER_STATE_OFF)
+	{
+		MobileVoiceChat_RequestPermission();
+		if (newRecorderState == RECORDER_STATE_ALWAYS_ON)
+		{
+			StartRecording();
+		}
+	}
+#endif
 }
 
 void VoiceChat::StartTalking()

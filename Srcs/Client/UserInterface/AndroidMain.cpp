@@ -58,11 +58,6 @@ extern "C" {
     void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float volume);
     const char* IOSGetDocumentsDirectory();
 }
-#ifdef __APPLE__
-#include <objc/runtime.h>
-#include <objc/message.h>
-#include <dlfcn.h>
-#endif
 #endif
 #include <IL/il.h>
 #include <SpeedTreeRT.h>
@@ -102,13 +97,31 @@ typedef void* ObjcSEL;
 typedef void* ObjcMethod;
 typedef void (*ObjcIMP)(void);
 
-extern "C" {
-    ObjcClass objc_getClass(const char* name);
-    ObjcClass object_getClass(ObjcId obj);
-    ObjcSEL sel_registerName(const char* str);
-    ObjcMethod class_getInstanceMethod(ObjcClass cls, ObjcSEL name);
-    ObjcIMP method_setImplementation(ObjcMethod m, ObjcIMP imp);
-    void objc_msgSend(void);
+typedef ObjcClass (*PFN_objc_getClass)(const char*);
+typedef ObjcClass (*PFN_object_getClass)(ObjcId);
+typedef ObjcSEL (*PFN_sel_registerName)(const char*);
+typedef ObjcMethod (*PFN_class_getInstanceMethod)(ObjcClass, ObjcSEL);
+typedef ObjcIMP (*PFN_method_setImplementation)(ObjcMethod, ObjcIMP);
+
+static PFN_objc_getClass s_objc_getClass = nullptr;
+static PFN_object_getClass s_object_getClass = nullptr;
+static PFN_sel_registerName s_sel_registerName = nullptr;
+static PFN_class_getInstanceMethod s_class_getInstanceMethod = nullptr;
+static PFN_method_setImplementation s_method_setImplementation = nullptr;
+static void* s_objc_msgSend = nullptr;
+
+static bool EnsureObjcRuntimeLoaded() {
+    static bool s_bLoaded = false;
+    if (s_bLoaded) return (s_objc_msgSend != nullptr);
+    s_bLoaded = true;
+    s_objc_getClass = (PFN_objc_getClass)dlsym(RTLD_DEFAULT, "objc_getClass");
+    s_object_getClass = (PFN_object_getClass)dlsym(RTLD_DEFAULT, "object_getClass");
+    s_sel_registerName = (PFN_sel_registerName)dlsym(RTLD_DEFAULT, "sel_registerName");
+    s_class_getInstanceMethod = (PFN_class_getInstanceMethod)dlsym(RTLD_DEFAULT, "class_getInstanceMethod");
+    s_method_setImplementation = (PFN_method_setImplementation)dlsym(RTLD_DEFAULT, "method_setImplementation");
+    s_objc_msgSend = dlsym(RTLD_DEFAULT, "objc_msgSend");
+    return (s_objc_getClass && s_object_getClass && s_sel_registerName &&
+            s_class_getInstanceMethod && s_method_setImplementation && s_objc_msgSend);
 }
 
 static ObjcIMP s_origUITextFieldDeleteBackward = nullptr;
@@ -154,60 +167,61 @@ static bool Hooked_UIView_isMultipleTouchEnabled(ObjcId /*self*/, ObjcSEL /*_cmd
 }
 
 static void EnableIosMultipleTouchOnViewHierarchy(ObjcId view) {
-    if (!view) return;
-    ObjcSEL respSel = sel_registerName("respondsToSelector:");
-    ObjcSEL setMultiSel = sel_registerName("setMultipleTouchEnabled:");
-    if (((bool(*)(ObjcId, ObjcSEL, ObjcSEL))objc_msgSend)(view, respSel, setMultiSel)) {
-        ((void(*)(ObjcId, ObjcSEL, bool))objc_msgSend)(view, setMultiSel, true);
+    if (!view || !EnsureObjcRuntimeLoaded()) return;
+    ObjcSEL respSel = s_sel_registerName("respondsToSelector:");
+    ObjcSEL setMultiSel = s_sel_registerName("setMultipleTouchEnabled:");
+    if (((bool(*)(ObjcId, ObjcSEL, ObjcSEL))s_objc_msgSend)(view, respSel, setMultiSel)) {
+        ((void(*)(ObjcId, ObjcSEL, bool))s_objc_msgSend)(view, setMultiSel, true);
     }
-    ObjcSEL delSel = sel_registerName("deleteBackward");
-    if (!s_hookedCustomKeyInputCls && ((bool(*)(ObjcId, ObjcSEL, ObjcSEL))objc_msgSend)(view, respSel, delSel)) {
-        ObjcClass cls = object_getClass(view);
-        if (cls && cls != objc_getClass("UITextField") && cls != objc_getClass("UITextView")) {
-            if (ObjcMethod m = class_getInstanceMethod(cls, delSel)) {
+    ObjcSEL delSel = s_sel_registerName("deleteBackward");
+    if (!s_hookedCustomKeyInputCls && ((bool(*)(ObjcId, ObjcSEL, ObjcSEL))s_objc_msgSend)(view, respSel, delSel)) {
+        ObjcClass cls = s_object_getClass(view);
+        if (cls && cls != s_objc_getClass("UITextField") && cls != s_objc_getClass("UITextView")) {
+            if (ObjcMethod m = s_class_getInstanceMethod(cls, delSel)) {
                 s_hookedCustomKeyInputCls = cls;
-                s_origCustomViewDeleteBackward = method_setImplementation(m, (ObjcIMP)Hooked_CustomView_deleteBackward);
+                s_origCustomViewDeleteBackward = s_method_setImplementation(m, (ObjcIMP)Hooked_CustomView_deleteBackward);
             }
         }
     }
-    ObjcId subviews = ((ObjcId(*)(ObjcId, ObjcSEL))objc_msgSend)(view, sel_registerName("subviews"));
+    ObjcId subviews = ((ObjcId(*)(ObjcId, ObjcSEL))s_objc_msgSend)(view, s_sel_registerName("subviews"));
     if (subviews) {
-        unsigned long count = ((unsigned long(*)(ObjcId, ObjcSEL))objc_msgSend)(subviews, sel_registerName("count"));
-        ObjcSEL objAtIdxSel = sel_registerName("objectAtIndex:");
+        unsigned long count = ((unsigned long(*)(ObjcId, ObjcSEL))s_objc_msgSend)(subviews, s_sel_registerName("count"));
+        ObjcSEL objAtIdxSel = s_sel_registerName("objectAtIndex:");
         for (unsigned long i = 0; i < count; ++i) {
-            ObjcId child = ((ObjcId(*)(ObjcId, ObjcSEL, unsigned long))objc_msgSend)(subviews, objAtIdxSel, i);
+            ObjcId child = ((ObjcId(*)(ObjcId, ObjcSEL, unsigned long))s_objc_msgSend)(subviews, objAtIdxSel, i);
             EnableIosMultipleTouchOnViewHierarchy(child);
         }
     }
 }
 
 static void InstallIosInputHooks(bool forceRefreshHierarchy = false) {
+    if (!EnsureObjcRuntimeLoaded()) return;
     static bool s_bInstalled = false;
     if (!s_bInstalled) {
         s_bInstalled = true;
-        ObjcSEL delSel = sel_registerName("deleteBackward");
-        if (ObjcClass tfCls = objc_getClass("UITextField")) {
-            if (ObjcMethod m = class_getInstanceMethod(tfCls, delSel)) {
-                s_origUITextFieldDeleteBackward = method_setImplementation(m, (ObjcIMP)Hooked_UITextField_deleteBackward);
+        ObjcSEL delSel = s_sel_registerName("deleteBackward");
+        if (ObjcClass tfCls = s_objc_getClass("UITextField")) {
+            if (ObjcMethod m = s_class_getInstanceMethod(tfCls, delSel)) {
+                s_origUITextFieldDeleteBackward = s_method_setImplementation(m, (ObjcIMP)Hooked_UITextField_deleteBackward);
             }
         }
-        if (ObjcClass tvCls = objc_getClass("UITextView")) {
-            if (ObjcMethod m = class_getInstanceMethod(tvCls, delSel)) {
-                s_origUITextViewDeleteBackward = method_setImplementation(m, (ObjcIMP)Hooked_UITextView_deleteBackward);
+        if (ObjcClass tvCls = s_objc_getClass("UITextView")) {
+            if (ObjcMethod m = s_class_getInstanceMethod(tvCls, delSel)) {
+                s_origUITextViewDeleteBackward = s_method_setImplementation(m, (ObjcIMP)Hooked_UITextView_deleteBackward);
             }
         }
-        if (ObjcClass viewCls = objc_getClass("UIView")) {
-            if (ObjcMethod m = class_getInstanceMethod(viewCls, sel_registerName("isMultipleTouchEnabled"))) {
-                method_setImplementation(m, (ObjcIMP)Hooked_UIView_isMultipleTouchEnabled);
+        if (ObjcClass viewCls = s_objc_getClass("UIView")) {
+            if (ObjcMethod m = s_class_getInstanceMethod(viewCls, s_sel_registerName("isMultipleTouchEnabled"))) {
+                s_method_setImplementation(m, (ObjcIMP)Hooked_UIView_isMultipleTouchEnabled);
             }
         }
         forceRefreshHierarchy = true;
     }
     if (forceRefreshHierarchy) {
-        if (ObjcClass appCls = objc_getClass("UIApplication")) {
-            ObjcId sharedApp = ((ObjcId(*)(ObjcId, ObjcSEL))objc_msgSend)((ObjcId)appCls, sel_registerName("sharedApplication"));
+        if (ObjcClass appCls = s_objc_getClass("UIApplication")) {
+            ObjcId sharedApp = ((ObjcId(*)(ObjcId, ObjcSEL))s_objc_msgSend)((ObjcId)appCls, s_sel_registerName("sharedApplication"));
             if (sharedApp) {
-                ObjcId keyWin = ((ObjcId(*)(ObjcId, ObjcSEL))objc_msgSend)(sharedApp, sel_registerName("keyWindow"));
+                ObjcId keyWin = ((ObjcId(*)(ObjcId, ObjcSEL))s_objc_msgSend)(sharedApp, s_sel_registerName("keyWindow"));
                 EnableIosMultipleTouchOnViewHierarchy(keyWin);
             }
         }
@@ -566,31 +580,32 @@ static bool LoadIOSAudioToolboxSymbols() {
 }
 
 static bool ConfigureIOSAudioSessionForVoice() {
-    ObjcClass bundleCls = objc_getClass("NSBundle");
-    ObjcClass strCls = objc_getClass("NSString");
+    if (!EnsureObjcRuntimeLoaded()) return false;
+    ObjcClass bundleCls = s_objc_getClass("NSBundle");
+    ObjcClass strCls = s_objc_getClass("NSString");
     if (!bundleCls || !strCls) return false;
-    ObjcId mainBundle = ((ObjcId(*)(ObjcId, ObjcSEL))objc_msgSend)((ObjcId)bundleCls, sel_registerName("mainBundle"));
-    ObjcId keyStr = ((ObjcId(*)(ObjcId, ObjcSEL, const char*))objc_msgSend)((ObjcId)strCls, sel_registerName("stringWithUTF8String:"), "NSMicrophoneUsageDescription");
-    ObjcId descObj = mainBundle ? ((ObjcId(*)(ObjcId, ObjcSEL, ObjcId))objc_msgSend)(mainBundle, sel_registerName("objectForInfoDictionaryKey:"), keyStr) : nullptr;
+    ObjcId mainBundle = ((ObjcId(*)(ObjcId, ObjcSEL))s_objc_msgSend)((ObjcId)bundleCls, s_sel_registerName("mainBundle"));
+    ObjcId keyStr = ((ObjcId(*)(ObjcId, ObjcSEL, const char*))s_objc_msgSend)((ObjcId)strCls, s_sel_registerName("stringWithUTF8String:"), "NSMicrophoneUsageDescription");
+    ObjcId descObj = mainBundle ? ((ObjcId(*)(ObjcId, ObjcSEL, ObjcId))s_objc_msgSend)(mainBundle, s_sel_registerName("objectForInfoDictionaryKey:"), keyStr) : nullptr;
     if (!descObj) {
         LOGE("[VoiceChat] iOS Info.plist is missing NSMicrophoneUsageDescription! Add it to Info.plist to enable microphone.");
         return false;
     }
 
-    ObjcClass sessCls = objc_getClass("AVAudioSession");
+    ObjcClass sessCls = s_objc_getClass("AVAudioSession");
     if (!sessCls) return false;
-    ObjcId session = ((ObjcId(*)(ObjcId, ObjcSEL))objc_msgSend)((ObjcId)sessCls, sel_registerName("sharedInstance"));
+    ObjcId session = ((ObjcId(*)(ObjcId, ObjcSEL))s_objc_msgSend)((ObjcId)sessCls, s_sel_registerName("sharedInstance"));
     if (!session) return false;
 
-    ObjcId catStr = ((ObjcId(*)(ObjcId, ObjcSEL, const char*))objc_msgSend)((ObjcId)strCls, sel_registerName("stringWithUTF8String:"), "AVAudioSessionCategoryPlayAndRecord");
-    ObjcSEL respSel = sel_registerName("respondsToSelector:");
-    ObjcSEL setCatSel = sel_registerName("setCategory:withOptions:error:");
-    if (((bool(*)(ObjcId, ObjcSEL, ObjcSEL))objc_msgSend)(session, respSel, setCatSel)) {
-        ((bool(*)(ObjcId, ObjcSEL, ObjcId, unsigned long, ObjcId*))objc_msgSend)(session, setCatSel, catStr, 0xDu, nullptr);
+    ObjcId catStr = ((ObjcId(*)(ObjcId, ObjcSEL, const char*))s_objc_msgSend)((ObjcId)strCls, s_sel_registerName("stringWithUTF8String:"), "AVAudioSessionCategoryPlayAndRecord");
+    ObjcSEL respSel = s_sel_registerName("respondsToSelector:");
+    ObjcSEL setCatSel = s_sel_registerName("setCategory:withOptions:error:");
+    if (((bool(*)(ObjcId, ObjcSEL, ObjcSEL))s_objc_msgSend)(session, respSel, setCatSel)) {
+        ((bool(*)(ObjcId, ObjcSEL, ObjcId, unsigned long, ObjcId*))s_objc_msgSend)(session, setCatSel, catStr, 0xDu, nullptr);
     }
-    ObjcSEL setActSel = sel_registerName("setActive:error:");
-    if (((bool(*)(ObjcId, ObjcSEL, ObjcSEL))objc_msgSend)(session, respSel, setActSel)) {
-        ((bool(*)(ObjcId, ObjcSEL, bool, ObjcId*))objc_msgSend)(session, setActSel, true, nullptr);
+    ObjcSEL setActSel = s_sel_registerName("setActive:error:");
+    if (((bool(*)(ObjcId, ObjcSEL, ObjcSEL))s_objc_msgSend)(session, respSel, setActSel)) {
+        ((bool(*)(ObjcId, ObjcSEL, bool, ObjcId*))s_objc_msgSend)(session, setActSel, true, nullptr);
     }
     return true;
 }
@@ -682,6 +697,33 @@ void MobileVoiceChat_Destroy() {
     }
 #endif
     s_bMobileVoiceInitialized = false;
+}
+
+bool MobileVoiceChat_RequestPermission() {
+#if !defined(__APPLE__)
+    return CheckOrRequestAndroidMicPermission();
+#else
+    if (!LoadIOSAudioToolboxSymbols() || !ConfigureIOSAudioSessionForVoice()) return false;
+    // Creating and immediately disposing a test input queue triggers the native iOS Microphone Permission prompt
+    // even when the user selects "Push to Talk" before holding the talk button.
+    if (!s_bMobileVoicePermGranted && !s_iosInputQueue) {
+        IOSAudioStreamBasicDescription fmt{};
+        fmt.mSampleRate = 32000.0;
+        fmt.mFormatID = 0x6C70636Du;
+        fmt.mFormatFlags = 0xCu;
+        fmt.mBytesPerPacket = 2;
+        fmt.mFramesPerPacket = 1;
+        fmt.mBytesPerFrame = 2;
+        fmt.mChannelsPerFrame = 1;
+        fmt.mBitsPerChannel = 16;
+        IOSAudioQueueRef tmpQ = nullptr;
+        if (s_pfnAQNewInput(&fmt, IOSVoiceInputCallback, nullptr, nullptr, nullptr, 0, &tmpQ) == 0 && tmpQ) {
+            s_pfnAQDispose(tmpQ, 1);
+            s_bMobileVoicePermGranted = true;
+        }
+    }
+    return true;
+#endif
 }
 
 bool MobileVoiceChat_StartRecording() {
