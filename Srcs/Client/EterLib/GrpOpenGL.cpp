@@ -719,7 +719,6 @@ namespace {
         "      specInt *= mix(5.5, 0.1, shFactor);\n" \
         "      lightResult += specInt * 0.65 * uPsMatSpecular * uPsSpecularLight;\n" \
         "    }\n" \
-        "    Color.rgb *= lightResult;\n" \
         "    if (uShaderMode == 4 && uColorOp1 == 18 && uAlphaTest == 0 && uHasTexture1 != 0 && Color.a < 0.99 && Color.a > 0.01) {\n" \
         "      vec3 dNdx = dFdx(N);\n" \
         "      vec3 dNdy = dFdy(N);\n" \
