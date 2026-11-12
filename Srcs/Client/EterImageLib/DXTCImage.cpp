@@ -272,6 +272,7 @@ bool CDXTCImage::LoadFromFile(const char * filename)
 
 bool CDXTCImage::LoadHeaderFromMemory(const BYTE* c_pbMap, int iSize)
 {
+	Clear();
 	DWORD dwMagic;
 	if (iSize < (int)(sizeof(DWORD) + sizeof(DDSURFACEDESC2)))
 		return false;
@@ -314,8 +315,8 @@ bool CDXTCImage::LoadHeaderFromMemory(const BYTE* c_pbMap, int iSize)
 
 	DecodePixelFormat(m_strFormat, &m_xddPixelFormat);
 
-	if (m_CompFormat != PF_DXT1 &&
-		m_CompFormat != PF_DXT3 &&
+	if (m_CompFormat != PF_DXT1 && m_CompFormat != PF_DXT2 &&
+		m_CompFormat != PF_DXT3 && m_CompFormat != PF_DXT4 &&
 		m_CompFormat != PF_DXT5)
 	{
 		return false;
@@ -829,7 +830,7 @@ void CDXTCImage::DecompressDXT3(int miplevel, DWORD* pdwDest)
 		{
 			DXTAlphaBlockExplicit * pAlphaBlock = (DXTAlphaBlockExplicit *) pBlock;
 			pBlock++;
-			GetColorBlockColors(pBlock, &col_0, &col_1, &col_2, &col_3, wrd);
+			GetColorBlockColors(pBlock, &col_0, &col_1, &col_2, &col_3, wrd, false);
 			DWORD * pImPos = pBase + x * 4 + (y * 4) * nWidth;
 			DecodeColorBlock(pImPos, pBlock, nWidth, (DWORD *) &col_0, (DWORD *) &col_1, (DWORD *) &col_2, (DWORD *) &col_3);
 			DecodeAlphaExplicit(pImPos, pAlphaBlock, nWidth, alphazero);
@@ -863,7 +864,7 @@ void CDXTCImage::DecompressDXT5(int level, DWORD * pdwDest)
 		{
 			DXTAlphaBlock3BitLinear * pAlphaBlock = (DXTAlphaBlock3BitLinear*) pBlock;
 			pBlock++;
-			GetColorBlockColors(pBlock, &col_0, &col_1, &col_2, &col_3, wrd);
+			GetColorBlockColors(pBlock, &col_0, &col_1, &col_2, &col_3, wrd, false);
 			DWORD * pImPos = pBase + x * 4 + (y * 4) * nWidth;
 			DecodeColorBlock(pImPos, pBlock, nWidth, (DWORD *)&col_0, (DWORD *)&col_1, (DWORD *)&col_2, (DWORD *)&col_3);
 			DecodeAlpha3BitLinear(pImPos, pAlphaBlock, nWidth, alphazero);

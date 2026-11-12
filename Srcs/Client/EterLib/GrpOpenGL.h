@@ -2696,12 +2696,11 @@ inline bool DecodeTGAorBMPFromMemory(const BYTE* data, UINT size, UINT& outW, UI
 		}
 	}
 
-	// 2. Check DDS ('DDS ') - Uncompressed (8/16/24/32-bit), DXT1/2/3/4/5, ATI1/BC4, ATI2/BC5, and DX10
+	// 2. Check DDS ('DDS ') - Uncompressed (8/16/24/32-bit), DXT1/DXT3/DXT5, ATI1/BC4, ATI2/BC5, and DX10
 	if (size >= 128 && data[0] == 'D' && data[1] == 'D' && data[2] == 'S' && data[3] == ' ') {
 		UINT h = ReadU32Unaligned(data + 12);
 		UINT w = ReadU32Unaligned(data + 16);
-		UINT ddpfFlags = ReadU32Unaligned(data + 80);
-		UINT fourCC = (ddpfFlags & 0x4u) ? ReadU32Unaligned(data + 84) : 0;
+		UINT fourCC = ReadU32Unaligned(data + 84);
 		UINT bpp = ReadU32Unaligned(data + 88);
 		UINT rMask = ReadU32Unaligned(data + 92);
 		UINT gMask = ReadU32Unaligned(data + 96);
@@ -2721,11 +2720,8 @@ inline bool DecodeTGAorBMPFromMemory(const BYTE* data, UINT size, UINT& outW, UI
 		}
 		if (w > 0 && h > 0 && w <= 4096 && h <= 4096) {
 			const bool isDXT1 = (fourCC == 0x31545844u); // 'DXT1'
-			const bool isDXT2 = (fourCC == 0x32545844u); // 'DXT2'
-			const bool isDXT3 = (fourCC == 0x33545844u || isDXT2); // 'DXT3'
-			const bool isDXT4 = (fourCC == 0x34545844u); // 'DXT4'
-			const bool isDXT5 = (fourCC == 0x35545844u || isDXT4); // 'DXT5'
-			const bool isPremulDXT = (isDXT2 || isDXT4);
+			const bool isDXT3 = (fourCC == 0x33545844u || fourCC == 0x32545844u); // 'DXT3'/'DXT2'
+			const bool isDXT5 = (fourCC == 0x35545844u || fourCC == 0x34545844u); // 'DXT5'/'DXT4'
 			const bool isATI1 = (fourCC == 0x31495441u || fourCC == 0x55344342u); // 'ATI1' / 'BC4U'
 			const bool isATI2 = (fourCC == 0x32495441u || fourCC == 0x55354342u); // 'ATI2' / 'BC5U'
 			if (isATI1 || isATI2) {
@@ -2821,13 +2817,7 @@ inline bool DecodeTGAorBMPFromMemory(const BYTE* data, UINT size, UINT& outW, UI
 								BYTE pa = a[cIdx];
 								if (isDXT3) pa = ((dxt3Row >> (px * 4)) & 0xF) * 17;
 								else if (isDXT5) pa = aLut[(aBits >> (pIdx * 3)) & 7];
-								DWORD pr = r[cIdx], pg = g[cIdx], pb = b[cIdx];
-								if (isPremulDXT && pa > 0 && pa < 255) {
-									pr = std::min<DWORD>(255u, (pr * 255u) / pa);
-									pg = std::min<DWORD>(255u, (pg * 255u) / pa);
-									pb = std::min<DWORD>(255u, (pb * 255u) / pa);
-								}
-								outBGRA[(size_t)yy * (size_t)w + (size_t)xx] = ((DWORD)pa << 24) | (pr << 16) | (pg << 8) | pb;
+								outBGRA[(size_t)yy * (size_t)w + (size_t)xx] = ((DWORD)pa << 24) | ((DWORD)r[cIdx] << 16) | ((DWORD)g[cIdx] << 8) | (DWORD)b[cIdx];
 							}
 						}
 					}
@@ -2841,14 +2831,13 @@ inline bool DecodeTGAorBMPFromMemory(const BYTE* data, UINT size, UINT& outW, UI
 				size_t bytesPerPixel = bpp / 8;
 				size_t totalPixels = (size_t)w * (size_t)h;
 				const bool isRGBOrder = (rMask == 0x000000FFu);
-				const bool hasAlpha = (bytesPerPixel == 4) && (aMask != 0 || (ddpfFlags & 0x1u) != 0);
 				for (size_t i = 0; i < totalPixels && (dataStart + (i + 1) * bytesPerPixel <= size); ++i) {
 					BYTE c0 = src[i * bytesPerPixel + 0];
 					BYTE g  = src[i * bytesPerPixel + 1];
 					BYTE c2 = src[i * bytesPerPixel + 2];
 					BYTE r  = isRGBOrder ? c0 : c2;
 					BYTE b  = isRGBOrder ? c2 : c0;
-					BYTE a  = hasAlpha ? src[i * 4 + 3] : 0xFF;
+					BYTE a  = (bytesPerPixel == 4 && aMask != 0) ? src[i * 4 + 3] : 0xFF;
 					outBGRA[i] = ((DWORD)a << 24) | ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
 				}
 				return true;
@@ -2858,14 +2847,6 @@ inline bool DecodeTGAorBMPFromMemory(const BYTE* data, UINT size, UINT& outW, UI
 				outBGRA.resize((size_t)w * (size_t)h, 0xFFFFFFFF);
 				const BYTE* src = data + dataStart;
 				size_t totalPixels = (size_t)w * (size_t)h;
-				if ((ddpfFlags & 0x20000u) && aMask == 0xFF00u) { // A8L8
-					for (size_t i = 0; i < totalPixels && (dataStart + (i + 1) * 2 <= size); ++i) {
-						BYTE l = src[i * 2 + 0];
-						BYTE a = src[i * 2 + 1];
-						outBGRA[i] = ((DWORD)a << 24) | ((DWORD)l << 16) | ((DWORD)l << 8) | (DWORD)l;
-					}
-					return true;
-				}
 				for (size_t i = 0; i < totalPixels && (dataStart + (i + 1) * 2 <= size); ++i) {
 					WORD c = ReadU16Unaligned(src + i * 2);
 					BYTE r, g, b, a = 0xFF;
@@ -2879,33 +2860,6 @@ inline bool DecodeTGAorBMPFromMemory(const BYTE* data, UINT size, UINT& outW, UI
 						r = ((c >> 11) & 31) * 255 / 31; g = ((c >> 5) & 63) * 255 / 63; b = (c & 31) * 255 / 31;
 					}
 					outBGRA[i] = ((DWORD)a << 24) | ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
-				}
-				return true;
-			}
-			if (bpp == 8) {
-				outW = w; outH = h;
-				outBGRA.resize((size_t)w * (size_t)h, 0xFFFFFFFF);
-				size_t totalPixels = (size_t)w * (size_t)h;
-				if ((ddpfFlags & 0x20u) || (size >= dataStart + 1024 + totalPixels)) { // P8 indexed palette
-					const BYTE* pal = data + dataStart;
-					const BYTE* idxSrc = data + dataStart + 1024;
-					for (size_t i = 0; i < totalPixels && (dataStart + 1024 + i < size); ++i) {
-						BYTE idx = idxSrc[i];
-						BYTE r = pal[idx * 4 + 0];
-						BYTE g = pal[idx * 4 + 1];
-						BYTE b = pal[idx * 4 + 2];
-						BYTE a = (ddpfFlags & 0x1u) ? pal[idx * 4 + 3] : 0xFF;
-						outBGRA[i] = ((DWORD)a << 24) | ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
-					}
-				} else { // L8 or A8
-					const BYTE* src = data + dataStart;
-					const bool isAlphaOnly = (ddpfFlags == 0x2u) || (aMask == 0xFFu && rMask == 0);
-					for (size_t i = 0; i < totalPixels && (dataStart + i < size); ++i) {
-						BYTE v = src[i];
-						outBGRA[i] = isAlphaOnly
-							? (((DWORD)v << 24) | 0x00FFFFFFu)
-							: (0xFF000000u | ((DWORD)v << 16) | ((DWORD)v << 8) | (DWORD)v);
-					}
 				}
 				return true;
 			}

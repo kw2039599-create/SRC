@@ -223,6 +223,9 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
     view.drawableDepthFormat = GLKViewDrawableDepthFormat24;
     view.drawableStencilFormat = GLKViewDrawableStencilFormat8;
     view.multipleTouchEnabled = YES;
+    view.contentScaleFactor = [[UIScreen mainScreen] nativeScale];
+    view.opaque = YES;
+    view.layer.opaque = YES;
     self.preferredFramesPerSecond = 60;
 
     s_hiddenTextField = [[UITextField alloc] initWithFrame:CGRectMake(-100, -100, 10, 10)];
@@ -252,9 +255,13 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
 - (void)glkView:(GLKView*)view drawInRect:(CGRect)rect {
     [EAGLContext setCurrentContext:self.context];
     if (!_engineInitialized) {
-        CGFloat scale = [[UIScreen mainScreen] nativeScale];
-        int physW = (int)(view.bounds.size.width * scale + 0.5);
-        int physH = (int)(view.bounds.size.height * scale + 0.5);
+        int physW = (int)view.drawableWidth;
+        int physH = (int)view.drawableHeight;
+        if (physW <= 0 || physH <= 0) {
+            CGFloat scale = [[UIScreen mainScreen] nativeScale];
+            physW = (int)(view.bounds.size.width * scale + 0.5);
+            physH = (int)(view.bounds.size.height * scale + 0.5);
+        }
         if (physW > 0 && physH > 0) {
             _engineInitialized = true;
             Java_com_metin2_client_NativeLib_init(nullptr, nullptr, nullptr, physW, physH);

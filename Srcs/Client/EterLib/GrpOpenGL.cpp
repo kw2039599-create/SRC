@@ -719,6 +719,7 @@ namespace {
         "      specInt *= mix(5.5, 0.1, shFactor);\n" \
         "      lightResult += specInt * 0.65 * uPsMatSpecular * uPsSpecularLight;\n" \
         "    }\n" \
+        "    Color.rgb *= lightResult;\n" \
         "    if (uShaderMode == 4 && uColorOp1 == 18 && uAlphaTest == 0 && uHasTexture1 != 0 && Color.a < 0.99 && Color.a > 0.01) {\n" \
         "      vec3 dNdx = dFdx(N);\n" \
         "      vec3 dNdy = dFdy(N);\n" \
@@ -732,7 +733,6 @@ namespace {
         "      float specFactor = pow(specInt, 0.25) * specTex.a * spPow * specAA;\n" \
         "      Color.rgb = clamp(Color.rgb + specTex.rgb * specFactor * Color.a, 0.0, 1.0);\n" \
         "    }\n" \
-        "    Color.rgb *= lightResult;\n" \
         "    if (uFogRange.y > uFogRange.x) {\n" \
         "      float fogFactor = clamp((distance(uPsCameraPos, vWorldPos) - uFogRange.x) / (uFogRange.y - uFogRange.x), 0.0, 1.0);\n" \
         "      Color.rgb = mix(Color.rgb, uFogColor.rgb, fogFactor);\n" \
@@ -1638,10 +1638,14 @@ HRESULT IDirect3DDevice8::Clear(DWORD Count, const D3DRECT* pRects, DWORD Flags,
         mask |= GL_COLOR_BUFFER_BIT;
     }
     if (Flags & D3DCLEAR_ZBUFFER) {
+        glDepthMask(GL_TRUE);
         glClearDepthf(Z);
         mask |= GL_DEPTH_BUFFER_BIT;
     }
     if (mask) glClear(mask);
+    if ((Flags & D3DCLEAR_ZBUFFER) && m_RenderStates[D3DRS_ZWRITEENABLE] == 0) {
+        glDepthMask(GL_FALSE);
+    }
     return S_OK;
 }
 
