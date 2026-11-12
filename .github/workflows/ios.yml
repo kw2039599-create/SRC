@@ -2,6 +2,10 @@ name: Build iPhone IPA
 on:
   workflow_dispatch:
 
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-ios:
     runs-on: macos-15
@@ -31,14 +35,18 @@ jobs:
             cmake -B build_ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
           fi
           set +e
+          (while true; do sleep 15; if [ -f build.log ]; then COUNT=$(grep -c "CompileC " build.log || true); LAST=$(grep "CompileC " build.log | tail -n 1 | awk '{print $3}' | xargs basename 2>/dev/null || true); echo "[Building...] Compiled $COUNT files (latest: $LAST)"; fi; done) &
+          HEARTBEAT_PID=$!
           cmake --build build_ios --config Release -- -sdk iphoneos -jobs 8 -IDEBuildingContinueBuildingAfterErrors=YES -PBXBuildsContinueAfterErrors=YES -continueBuildingAfterErrors=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1
           BUILD_STATUS=$?
           if [ $BUILD_STATUS -ne 0 ]; then
+            echo "[Retry] Clean reconfiguring build_ios..."
             rm -rf build_ios
             cmake -B build_ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
             cmake --build build_ios --config Release -- -sdk iphoneos -jobs 8 -IDEBuildingContinueBuildingAfterErrors=YES -PBXBuildsContinueAfterErrors=YES -continueBuildingAfterErrors=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1
             BUILD_STATUS=$?
           fi
+          kill $HEARTBEAT_PID 2>/dev/null || true
           if [ $BUILD_STATUS -ne 0 ]; then
             grep -E '(: error: |: fatal error: |Undefined symbols|ld: )' build.log | awk '!seen[$0]++'
             tail -n 40 build.log
