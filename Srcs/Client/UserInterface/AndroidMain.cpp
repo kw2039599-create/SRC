@@ -58,6 +58,11 @@ extern "C" {
     void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float volume);
     const char* IOSGetDocumentsDirectory();
 }
+#ifdef __APPLE__
+#include <objc/runtime.h>
+#include <objc/message.h>
+#include <dlfcn.h>
+#endif
 #endif
 #include <IL/il.h>
 #include <SpeedTreeRT.h>
@@ -90,11 +95,123 @@ void metin2_srandom(unsigned long seed) {
     srand((unsigned int)seed);
 }
 
-// Out-of-line base constructor/destructor & vtable for amun::VoiceChat
-#ifdef ENABLE_VOICE_CHAT
-namespace amun {
-    VoiceChat::VoiceChat() {}
-    VoiceChat::~VoiceChat() {}
+#ifdef __APPLE__
+typedef void* ObjcId;
+typedef void* ObjcClass;
+typedef void* ObjcSEL;
+typedef void* ObjcMethod;
+typedef void (*ObjcIMP)(void);
+
+extern "C" {
+    ObjcClass objc_getClass(const char* name);
+    ObjcClass object_getClass(ObjcId obj);
+    ObjcSEL sel_registerName(const char* str);
+    ObjcMethod class_getInstanceMethod(ObjcClass cls, ObjcSEL name);
+    ObjcIMP method_setImplementation(ObjcMethod m, ObjcIMP imp);
+    void objc_msgSend(void);
+}
+
+static ObjcIMP s_origUITextFieldDeleteBackward = nullptr;
+static ObjcIMP s_origUITextViewDeleteBackward = nullptr;
+static ObjcIMP s_origCustomViewDeleteBackward = nullptr;
+static ObjcClass s_hookedCustomKeyInputCls = nullptr;
+static volatile uint32_t s_uIosBackspaceEventCount = 0;
+
+extern "C" void Java_com_metin2_client_NativeLib_keyEvent(JNIEnv* env, jobject obj, jint keyCode, jint unicodeChar);
+
+static void Hooked_UITextField_deleteBackward(ObjcId self, ObjcSEL _cmd) {
+    uint32_t before = s_uIosBackspaceEventCount;
+    if (s_origUITextFieldDeleteBackward) {
+        ((void(*)(ObjcId, ObjcSEL))s_origUITextFieldDeleteBackward)(self, _cmd);
+    }
+    if (s_uIosBackspaceEventCount == before) {
+        Java_com_metin2_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
+    }
+}
+
+static void Hooked_UITextView_deleteBackward(ObjcId self, ObjcSEL _cmd) {
+    uint32_t before = s_uIosBackspaceEventCount;
+    if (s_origUITextViewDeleteBackward) {
+        ((void(*)(ObjcId, ObjcSEL))s_origUITextViewDeleteBackward)(self, _cmd);
+    }
+    if (s_uIosBackspaceEventCount == before) {
+        Java_com_metin2_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
+    }
+}
+
+static void Hooked_CustomView_deleteBackward(ObjcId self, ObjcSEL _cmd) {
+    uint32_t before = s_uIosBackspaceEventCount;
+    if (s_origCustomViewDeleteBackward) {
+        ((void(*)(ObjcId, ObjcSEL))s_origCustomViewDeleteBackward)(self, _cmd);
+    }
+    if (s_uIosBackspaceEventCount == before) {
+        Java_com_metin2_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
+    }
+}
+
+static bool Hooked_UIView_isMultipleTouchEnabled(ObjcId /*self*/, ObjcSEL /*_cmd*/) {
+    return true;
+}
+
+static void EnableIosMultipleTouchOnViewHierarchy(ObjcId view) {
+    if (!view) return;
+    ObjcSEL respSel = sel_registerName("respondsToSelector:");
+    ObjcSEL setMultiSel = sel_registerName("setMultipleTouchEnabled:");
+    if (((bool(*)(ObjcId, ObjcSEL, ObjcSEL))objc_msgSend)(view, respSel, setMultiSel)) {
+        ((void(*)(ObjcId, ObjcSEL, bool))objc_msgSend)(view, setMultiSel, true);
+    }
+    ObjcSEL delSel = sel_registerName("deleteBackward");
+    if (!s_hookedCustomKeyInputCls && ((bool(*)(ObjcId, ObjcSEL, ObjcSEL))objc_msgSend)(view, respSel, delSel)) {
+        ObjcClass cls = object_getClass(view);
+        if (cls && cls != objc_getClass("UITextField") && cls != objc_getClass("UITextView")) {
+            if (ObjcMethod m = class_getInstanceMethod(cls, delSel)) {
+                s_hookedCustomKeyInputCls = cls;
+                s_origCustomViewDeleteBackward = method_setImplementation(m, (ObjcIMP)Hooked_CustomView_deleteBackward);
+            }
+        }
+    }
+    ObjcId subviews = ((ObjcId(*)(ObjcId, ObjcSEL))objc_msgSend)(view, sel_registerName("subviews"));
+    if (subviews) {
+        unsigned long count = ((unsigned long(*)(ObjcId, ObjcSEL))objc_msgSend)(subviews, sel_registerName("count"));
+        ObjcSEL objAtIdxSel = sel_registerName("objectAtIndex:");
+        for (unsigned long i = 0; i < count; ++i) {
+            ObjcId child = ((ObjcId(*)(ObjcId, ObjcSEL, unsigned long))objc_msgSend)(subviews, objAtIdxSel, i);
+            EnableIosMultipleTouchOnViewHierarchy(child);
+        }
+    }
+}
+
+static void InstallIosInputHooks(bool forceRefreshHierarchy = false) {
+    static bool s_bInstalled = false;
+    if (!s_bInstalled) {
+        s_bInstalled = true;
+        ObjcSEL delSel = sel_registerName("deleteBackward");
+        if (ObjcClass tfCls = objc_getClass("UITextField")) {
+            if (ObjcMethod m = class_getInstanceMethod(tfCls, delSel)) {
+                s_origUITextFieldDeleteBackward = method_setImplementation(m, (ObjcIMP)Hooked_UITextField_deleteBackward);
+            }
+        }
+        if (ObjcClass tvCls = objc_getClass("UITextView")) {
+            if (ObjcMethod m = class_getInstanceMethod(tvCls, delSel)) {
+                s_origUITextViewDeleteBackward = method_setImplementation(m, (ObjcIMP)Hooked_UITextView_deleteBackward);
+            }
+        }
+        if (ObjcClass viewCls = objc_getClass("UIView")) {
+            if (ObjcMethod m = class_getInstanceMethod(viewCls, sel_registerName("isMultipleTouchEnabled"))) {
+                method_setImplementation(m, (ObjcIMP)Hooked_UIView_isMultipleTouchEnabled);
+            }
+        }
+        forceRefreshHierarchy = true;
+    }
+    if (forceRefreshHierarchy) {
+        if (ObjcClass appCls = objc_getClass("UIApplication")) {
+            ObjcId sharedApp = ((ObjcId(*)(ObjcId, ObjcSEL))objc_msgSend)((ObjcId)appCls, sel_registerName("sharedApplication"));
+            if (sharedApp) {
+                ObjcId keyWin = ((ObjcId(*)(ObjcId, ObjcSEL))objc_msgSend)(sharedApp, sel_registerName("keyWindow"));
+                EnableIosMultipleTouchOnViewHierarchy(keyWin);
+            }
+        }
+    }
 }
 #endif
 
@@ -113,6 +230,549 @@ int g_AndroidScreenHeight = 720;
 int g_AndroidMouseX = 640;
 int g_AndroidMouseY = 360;
 static JavaVM* g_pJavaVM = nullptr;
+
+#ifdef ENABLE_VOICE_CHAT
+} // temporarily close extern "C" for C++ VoiceChat bridge
+#include <deque>
+#include <pthread.h>
+
+namespace amun {
+    VoiceChat::VoiceChat() {}
+    VoiceChat::~VoiceChat() {}
+}
+
+static pthread_mutex_t s_voiceMutex = PTHREAD_MUTEX_INITIALIZER;
+static std::deque<std::vector<int16_t>> s_capturedVoiceQueue;
+static std::deque<std::vector<int16_t>> s_playbackVoiceQueue;
+static volatile bool s_bMobileVoiceInitialized = false;
+static volatile bool s_bMobileVoiceRecording = false;
+static volatile bool s_bMobileVoicePermGranted = false;
+
+static void PushCapturedVoiceSamples(const int16_t* samples, size_t count) {
+    if (!samples || count == 0) return;
+    pthread_mutex_lock(&s_voiceMutex);
+    if (s_capturedVoiceQueue.size() < 32) {
+        s_capturedVoiceQueue.emplace_back(samples, samples + count);
+    }
+    pthread_mutex_unlock(&s_voiceMutex);
+}
+
+#if !defined(__APPLE__)
+static pthread_t s_androidMicThread;
+static pthread_t s_androidPlayThread;
+static volatile bool s_bAndroidPlayThreadRunning = false;
+
+static jobject GetCurrentAndroidActivity(JNIEnv* env) {
+    if (!env) return nullptr;
+    jclass atCls = env->FindClass("android/app/ActivityThread");
+    if (!atCls) { env->ExceptionClear(); return nullptr; }
+    jmethodID curAtMid = env->GetStaticMethodID(atCls, "currentActivityThread", "()Landroid/app/ActivityThread;");
+    jobject atObj = curAtMid ? env->CallStaticObjectMethod(atCls, curAtMid) : nullptr;
+    env->ExceptionClear();
+    jobject activityObj = nullptr;
+    if (atObj) {
+        jfieldID mActFid = env->GetFieldID(atCls, "mActivities", "Landroid/util/ArrayMap;");
+        env->ExceptionClear();
+        if (!mActFid) {
+            mActFid = env->GetFieldID(atCls, "mActivities", "Ljava/util/Map;");
+            env->ExceptionClear();
+        }
+        jobject mapObj = mActFid ? env->GetObjectField(atObj, mActFid) : nullptr;
+        env->ExceptionClear();
+        if (mapObj) {
+            jclass mapCls = env->FindClass("java/util/Map");
+            jmethodID valuesMid = env->GetMethodID(mapCls, "values", "()Ljava/util/Collection;");
+            jobject colObj = valuesMid ? env->CallObjectMethod(mapObj, valuesMid) : nullptr;
+            env->ExceptionClear();
+            if (colObj) {
+                jclass colCls = env->FindClass("java/util/Collection");
+                jmethodID toArrMid = env->GetMethodID(colCls, "toArray", "()[Ljava/lang/Object;");
+                jobjectArray arr = toArrMid ? (jobjectArray)env->CallObjectMethod(colObj, toArrMid) : nullptr;
+                env->ExceptionClear();
+                if (arr) {
+                    jsize len = env->GetArrayLength(arr);
+                    for (jsize i = 0; i < len; ++i) {
+                        jobject rec = env->GetObjectArrayElement(arr, i);
+                        if (!rec) continue;
+                        jclass recCls = env->GetObjectClass(rec);
+                        jfieldID actFid = env->GetFieldID(recCls, "activity", "Landroid/app/Activity;");
+                        jfieldID pausedFid = env->GetFieldID(recCls, "paused", "Z");
+                        env->ExceptionClear();
+                        if (actFid) {
+                            jobject cand = env->GetObjectField(rec, actFid);
+                            jboolean isPaused = pausedFid ? env->GetBooleanField(rec, pausedFid) : JNI_FALSE;
+                            env->ExceptionClear();
+                            if (cand) {
+                                if (!isPaused || !activityObj) {
+                                    if (activityObj) env->DeleteLocalRef(activityObj);
+                                    activityObj = cand;
+                                    if (!isPaused) {
+                                        env->DeleteLocalRef(recCls);
+                                        env->DeleteLocalRef(rec);
+                                        break;
+                                    }
+                                } else {
+                                    env->DeleteLocalRef(cand);
+                                }
+                            }
+                        }
+                        env->DeleteLocalRef(recCls);
+                        env->DeleteLocalRef(rec);
+                    }
+                    env->DeleteLocalRef(arr);
+                }
+                env->DeleteLocalRef(colCls);
+                env->DeleteLocalRef(colObj);
+            }
+            env->DeleteLocalRef(mapCls);
+            env->DeleteLocalRef(mapObj);
+        }
+        env->DeleteLocalRef(atObj);
+    }
+    env->DeleteLocalRef(atCls);
+    return activityObj;
+}
+
+static bool CheckOrRequestAndroidMicPermission() {
+    if (s_bMobileVoicePermGranted) return true;
+    if (!g_pJavaVM) return false;
+    JNIEnv* env = nullptr;
+    if (g_pJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK || !env) return false;
+
+    jobject activity = GetCurrentAndroidActivity(env);
+    if (!activity) return false;
+
+    jclass actCls = env->GetObjectClass(activity);
+    jmethodID checkMid = env->GetMethodID(actCls, "checkSelfPermission", "(Ljava/lang/String;)I");
+    env->ExceptionClear();
+    bool granted = true;
+    if (checkMid) {
+        jstring permStr = env->NewStringUTF("android.permission.RECORD_AUDIO");
+        jint res = env->CallIntMethod(activity, checkMid, permStr);
+        env->ExceptionClear();
+        granted = (res == 0);
+        if (!granted) {
+            static DWORD s_dwLastPromptMs = 0;
+            DWORD nowMs = ELTimer_GetMSec();
+            if (nowMs - s_dwLastPromptMs > 4000) {
+                s_dwLastPromptMs = nowMs;
+                jmethodID reqMid = env->GetMethodID(actCls, "requestPermissions", "([Ljava/lang/String;I)V");
+                env->ExceptionClear();
+                if (reqMid) {
+                    jclass strCls = env->FindClass("java/lang/String");
+                    jobjectArray permArr = env->NewObjectArray(1, strCls, permStr);
+                    env->CallVoidMethod(activity, reqMid, permArr, (jint)1001);
+                    env->ExceptionClear();
+                    env->DeleteLocalRef(permArr);
+                    env->DeleteLocalRef(strCls);
+                }
+            }
+        }
+        env->DeleteLocalRef(permStr);
+    }
+    env->DeleteLocalRef(actCls);
+    env->DeleteLocalRef(activity);
+    s_bMobileVoicePermGranted = granted;
+    return granted;
+}
+
+static void* AndroidMicCaptureThreadProc(void*) {
+    if (!g_pJavaVM) return nullptr;
+    JNIEnv* env = nullptr;
+    if (g_pJavaVM->AttachCurrentThread(&env, nullptr) != JNI_OK || !env) return nullptr;
+
+    jclass arCls = env->FindClass("android/media/AudioRecord");
+    if (arCls) {
+        jmethodID minBufMid = env->GetStaticMethodID(arCls, "getMinBufferSize", "(III)I");
+        jmethodID ctorMid = env->GetMethodID(arCls, "<init>", "(IIIII)V");
+        jmethodID getStateMid = env->GetMethodID(arCls, "getState", "()I");
+        jmethodID startMid = env->GetMethodID(arCls, "startRecording", "()V");
+        jmethodID readMid = env->GetMethodID(arCls, "read", "([SII)I");
+        jmethodID stopMid = env->GetMethodID(arCls, "stop", "()V");
+        jmethodID relMid = env->GetMethodID(arCls, "release", "()V");
+
+        int rate = 32000;
+        jint minBuf = env->CallStaticIntMethod(arCls, minBufMid, (jint)rate, (jint)16, (jint)2);
+        env->ExceptionClear();
+        if (minBuf <= 0) {
+            rate = 16000;
+            minBuf = env->CallStaticIntMethod(arCls, minBufMid, (jint)rate, (jint)16, (jint)2);
+            env->ExceptionClear();
+        }
+        int bufBytes = std::max<int>((int)minBuf * 2, rate / 5);
+        jobject recorder = env->NewObject(arCls, ctorMid, (jint)1 /*MIC*/, (jint)rate, (jint)16 /*MONO*/, (jint)2 /*PCM_16BIT*/, (jint)bufBytes);
+        env->ExceptionClear();
+
+        if (recorder && env->CallIntMethod(recorder, getStateMid) == 1) {
+            env->CallVoidMethod(recorder, startMid);
+            env->ExceptionClear();
+            const int chunkSamples = (rate == 32000) ? 1600 : 800; // 50ms chunks
+            jshortArray pcmArr = env->NewShortArray(chunkSamples);
+            std::vector<int16_t> tempBuf(chunkSamples);
+            std::vector<int16_t> upsampledBuf(1600);
+
+            while (s_bMobileVoiceRecording) {
+                jint nRead = env->CallIntMethod(recorder, readMid, pcmArr, 0, chunkSamples);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); break; }
+                if (nRead > 0) {
+                    env->GetShortArrayRegion(pcmArr, 0, nRead, tempBuf.data());
+                    if (rate == 32000) {
+                        PushCapturedVoiceSamples(tempBuf.data(), (size_t)nRead);
+                    } else {
+                        size_t outCount = (size_t)nRead * 2;
+                        if (upsampledBuf.size() < outCount) upsampledBuf.resize(outCount);
+                        for (int i = 0; i < nRead; ++i) {
+                            upsampledBuf[i * 2] = tempBuf[i];
+                            upsampledBuf[i * 2 + 1] = (i + 1 < nRead) ? (int16_t)((tempBuf[i] + tempBuf[i + 1]) / 2) : tempBuf[i];
+                        }
+                        PushCapturedVoiceSamples(upsampledBuf.data(), outCount);
+                    }
+                } else {
+                    usleep(10000);
+                }
+            }
+            env->DeleteLocalRef(pcmArr);
+            env->CallVoidMethod(recorder, stopMid);
+            env->ExceptionClear();
+        } else {
+            LOGE("[VoiceChat] Android AudioRecord failed to initialize (check RECORD_AUDIO permission)");
+        }
+        if (recorder) {
+            env->CallVoidMethod(recorder, relMid);
+            env->ExceptionClear();
+            env->DeleteLocalRef(recorder);
+        }
+        env->DeleteLocalRef(arCls);
+    }
+    g_pJavaVM->DetachCurrentThread();
+    return nullptr;
+}
+
+static void* AndroidVoicePlayThreadProc(void*) {
+    if (!g_pJavaVM) return nullptr;
+    JNIEnv* env = nullptr;
+    if (g_pJavaVM->AttachCurrentThread(&env, nullptr) != JNI_OK || !env) return nullptr;
+
+    jclass atCls = env->FindClass("android/media/AudioTrack");
+    if (atCls) {
+        jmethodID minBufMid = env->GetStaticMethodID(atCls, "getMinBufferSize", "(III)I");
+        jmethodID ctorMid = env->GetMethodID(atCls, "<init>", "(IIIIII)V");
+        jmethodID playMid = env->GetMethodID(atCls, "play", "()V");
+        jmethodID writeMid = env->GetMethodID(atCls, "write", "([SII)I");
+        jmethodID stopMid = env->GetMethodID(atCls, "stop", "()V");
+        jmethodID relMid = env->GetMethodID(atCls, "release", "()V");
+
+        jint minBuf = env->CallStaticIntMethod(atCls, minBufMid, (jint)32000, (jint)4 /*OUT_MONO*/, (jint)2 /*PCM_16BIT*/);
+        env->ExceptionClear();
+        int bufBytes = std::max<int>((int)minBuf * 2, 12800);
+        jobject track = env->NewObject(atCls, ctorMid, (jint)3 /*STREAM_MUSIC*/, (jint)32000, (jint)4, (jint)2, (jint)bufBytes, (jint)1 /*MODE_STREAM*/);
+        env->ExceptionClear();
+
+        if (track) {
+            env->CallVoidMethod(track, playMid);
+            env->ExceptionClear();
+            jshortArray outArr = env->NewShortArray(3200);
+
+            while (s_bAndroidPlayThreadRunning) {
+                std::vector<int16_t> chunk;
+                pthread_mutex_lock(&s_voiceMutex);
+                if (!s_playbackVoiceQueue.empty()) {
+                    chunk = std::move(s_playbackVoiceQueue.front());
+                    s_playbackVoiceQueue.pop_front();
+                }
+                pthread_mutex_unlock(&s_voiceMutex);
+
+                if (!chunk.empty()) {
+                    jsize len = (jsize)std::min<size_t>(chunk.size(), 3200);
+                    env->SetShortArrayRegion(outArr, 0, len, chunk.data());
+                    env->CallIntMethod(track, writeMid, outArr, 0, len);
+                    env->ExceptionClear();
+                } else {
+                    usleep(10000);
+                }
+            }
+            env->DeleteLocalRef(outArr);
+            env->CallVoidMethod(track, stopMid);
+            env->CallVoidMethod(track, relMid);
+            env->ExceptionClear();
+            env->DeleteLocalRef(track);
+        }
+        env->DeleteLocalRef(atCls);
+    }
+    g_pJavaVM->DetachCurrentThread();
+    return nullptr;
+}
+#else // __APPLE__
+struct IOSAudioStreamBasicDescription {
+    double mSampleRate;
+    uint32_t mFormatID;
+    uint32_t mFormatFlags;
+    uint32_t mBytesPerPacket;
+    uint32_t mFramesPerPacket;
+    uint32_t mBytesPerFrame;
+    uint32_t mChannelsPerFrame;
+    uint32_t mBitsPerChannel;
+    uint32_t mReserved;
+};
+
+struct IOSAudioQueueBuffer {
+    uint32_t mAudioDataBytesCapacity;
+    void* mAudioData;
+    uint32_t mAudioDataByteSize;
+    void* mUserData;
+    uint32_t mPacketDescriptionCapacity;
+    void* mPacketDescriptions;
+    uint32_t mPacketDescriptionCount;
+};
+
+typedef void* IOSAudioQueueRef;
+typedef IOSAudioQueueBuffer* IOSAudioQueueBufferRef;
+typedef void (*IOSAudioQueueInputCallback)(void*, IOSAudioQueueRef, IOSAudioQueueBufferRef, const void*, uint32_t, const void*);
+typedef void (*IOSAudioQueueOutputCallback)(void*, IOSAudioQueueRef, IOSAudioQueueBufferRef);
+
+typedef int32_t (*PFN_AudioQueueNewInput)(const IOSAudioStreamBasicDescription*, IOSAudioQueueInputCallback, void*, void*, void*, uint32_t, IOSAudioQueueRef*);
+typedef int32_t (*PFN_AudioQueueNewOutput)(const IOSAudioStreamBasicDescription*, IOSAudioQueueOutputCallback, void*, void*, void*, uint32_t, IOSAudioQueueRef*);
+typedef int32_t (*PFN_AudioQueueAllocateBuffer)(IOSAudioQueueRef, uint32_t, IOSAudioQueueBufferRef*);
+typedef int32_t (*PFN_AudioQueueEnqueueBuffer)(IOSAudioQueueRef, IOSAudioQueueBufferRef, uint32_t, const void*);
+typedef int32_t (*PFN_AudioQueueStart)(IOSAudioQueueRef, const void*);
+typedef int32_t (*PFN_AudioQueueStop)(IOSAudioQueueRef, uint8_t);
+typedef int32_t (*PFN_AudioQueueDispose)(IOSAudioQueueRef, uint8_t);
+
+static PFN_AudioQueueNewInput s_pfnAQNewInput = nullptr;
+static PFN_AudioQueueNewOutput s_pfnAQNewOutput = nullptr;
+static PFN_AudioQueueAllocateBuffer s_pfnAQAllocBuf = nullptr;
+static PFN_AudioQueueEnqueueBuffer s_pfnAQEnqueueBuf = nullptr;
+static PFN_AudioQueueStart s_pfnAQStart = nullptr;
+static PFN_AudioQueueStop s_pfnAQStop = nullptr;
+static PFN_AudioQueueDispose s_pfnAQDispose = nullptr;
+
+static IOSAudioQueueRef s_iosInputQueue = nullptr;
+static IOSAudioQueueRef s_iosOutputQueue = nullptr;
+
+static bool LoadIOSAudioToolboxSymbols() {
+    static bool s_bTried = false;
+    if (s_bTried) return (s_pfnAQNewInput != nullptr);
+    s_bTried = true;
+    void* h = dlopen("/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox", RTLD_LAZY);
+    if (!h) h = RTLD_DEFAULT;
+    s_pfnAQNewInput   = (PFN_AudioQueueNewInput)dlsym(h, "AudioQueueNewInput");
+    s_pfnAQNewOutput  = (PFN_AudioQueueNewOutput)dlsym(h, "AudioQueueNewOutput");
+    s_pfnAQAllocBuf   = (PFN_AudioQueueAllocateBuffer)dlsym(h, "AudioQueueAllocateBuffer");
+    s_pfnAQEnqueueBuf = (PFN_AudioQueueEnqueueBuffer)dlsym(h, "AudioQueueEnqueueBuffer");
+    s_pfnAQStart      = (PFN_AudioQueueStart)dlsym(h, "AudioQueueStart");
+    s_pfnAQStop       = (PFN_AudioQueueStop)dlsym(h, "AudioQueueStop");
+    s_pfnAQDispose    = (PFN_AudioQueueDispose)dlsym(h, "AudioQueueDispose");
+    return (s_pfnAQNewInput && s_pfnAQNewOutput && s_pfnAQAllocBuf && s_pfnAQEnqueueBuf && s_pfnAQStart && s_pfnAQStop && s_pfnAQDispose);
+}
+
+static bool ConfigureIOSAudioSessionForVoice() {
+    ObjcClass bundleCls = objc_getClass("NSBundle");
+    ObjcClass strCls = objc_getClass("NSString");
+    if (!bundleCls || !strCls) return false;
+    ObjcId mainBundle = ((ObjcId(*)(ObjcId, ObjcSEL))objc_msgSend)((ObjcId)bundleCls, sel_registerName("mainBundle"));
+    ObjcId keyStr = ((ObjcId(*)(ObjcId, ObjcSEL, const char*))objc_msgSend)((ObjcId)strCls, sel_registerName("stringWithUTF8String:"), "NSMicrophoneUsageDescription");
+    ObjcId descObj = mainBundle ? ((ObjcId(*)(ObjcId, ObjcSEL, ObjcId))objc_msgSend)(mainBundle, sel_registerName("objectForInfoDictionaryKey:"), keyStr) : nullptr;
+    if (!descObj) {
+        LOGE("[VoiceChat] iOS Info.plist is missing NSMicrophoneUsageDescription! Add it to Info.plist to enable microphone.");
+        return false;
+    }
+
+    ObjcClass sessCls = objc_getClass("AVAudioSession");
+    if (!sessCls) return false;
+    ObjcId session = ((ObjcId(*)(ObjcId, ObjcSEL))objc_msgSend)((ObjcId)sessCls, sel_registerName("sharedInstance"));
+    if (!session) return false;
+
+    ObjcId catStr = ((ObjcId(*)(ObjcId, ObjcSEL, const char*))objc_msgSend)((ObjcId)strCls, sel_registerName("stringWithUTF8String:"), "AVAudioSessionCategoryPlayAndRecord");
+    ObjcSEL respSel = sel_registerName("respondsToSelector:");
+    ObjcSEL setCatSel = sel_registerName("setCategory:withOptions:error:");
+    if (((bool(*)(ObjcId, ObjcSEL, ObjcSEL))objc_msgSend)(session, respSel, setCatSel)) {
+        ((bool(*)(ObjcId, ObjcSEL, ObjcId, unsigned long, ObjcId*))objc_msgSend)(session, setCatSel, catStr, 0xDu, nullptr);
+    }
+    ObjcSEL setActSel = sel_registerName("setActive:error:");
+    if (((bool(*)(ObjcId, ObjcSEL, ObjcSEL))objc_msgSend)(session, respSel, setActSel)) {
+        ((bool(*)(ObjcId, ObjcSEL, bool, ObjcId*))objc_msgSend)(session, setActSel, true, nullptr);
+    }
+    return true;
+}
+
+static void IOSVoiceInputCallback(void*, IOSAudioQueueRef inAQ, IOSAudioQueueBufferRef inBuffer, const void*, uint32_t, const void*) {
+    if (!s_bMobileVoiceRecording) return;
+    if (inBuffer && inBuffer->mAudioData && inBuffer->mAudioDataByteSize >= 2) {
+        PushCapturedVoiceSamples((const int16_t*)inBuffer->mAudioData, inBuffer->mAudioDataByteSize / sizeof(int16_t));
+    }
+    if (s_bMobileVoiceRecording && s_pfnAQEnqueueBuf) {
+        s_pfnAQEnqueueBuf(inAQ, inBuffer, 0, nullptr);
+    }
+}
+
+static void IOSVoiceOutputCallback(void*, IOSAudioQueueRef outAQ, IOSAudioQueueBufferRef outBuffer) {
+    if (!outBuffer || !outBuffer->mAudioData) return;
+    std::vector<int16_t> chunk;
+    pthread_mutex_lock(&s_voiceMutex);
+    if (!s_playbackVoiceQueue.empty()) {
+        chunk = std::move(s_playbackVoiceQueue.front());
+        s_playbackVoiceQueue.pop_front();
+    }
+    pthread_mutex_unlock(&s_voiceMutex);
+
+    if (!chunk.empty()) {
+        uint32_t copyBytes = std::min<uint32_t>((uint32_t)(chunk.size() * sizeof(int16_t)), outBuffer->mAudioDataBytesCapacity);
+        memcpy(outBuffer->mAudioData, chunk.data(), copyBytes);
+        outBuffer->mAudioDataByteSize = copyBytes;
+    } else {
+        memset(outBuffer->mAudioData, 0, 1600 * sizeof(int16_t));
+        outBuffer->mAudioDataByteSize = 1600 * sizeof(int16_t);
+    }
+    if (s_pfnAQEnqueueBuf) {
+        s_pfnAQEnqueueBuf(outAQ, outBuffer, 0, nullptr);
+    }
+}
+#endif // __APPLE__
+
+extern "C" {
+
+bool MobileVoiceChat_Init(uint32_t /*sampleRate*/, uint8_t /*channelCount*/) {
+    if (s_bMobileVoiceInitialized) return true;
+#if !defined(__APPLE__)
+    s_bAndroidPlayThreadRunning = true;
+    pthread_create(&s_androidPlayThread, nullptr, AndroidVoicePlayThreadProc, nullptr);
+    pthread_detach(s_androidPlayThread);
+#else
+    if (LoadIOSAudioToolboxSymbols()) {
+        IOSAudioStreamBasicDescription fmt{};
+        fmt.mSampleRate = 32000.0;
+        fmt.mFormatID = 0x6C70636Du; // 'lpcm'
+        fmt.mFormatFlags = 0xCu;     // SignedInteger | Packed
+        fmt.mBytesPerPacket = 2;
+        fmt.mFramesPerPacket = 1;
+        fmt.mBytesPerFrame = 2;
+        fmt.mChannelsPerFrame = 1;
+        fmt.mBitsPerChannel = 16;
+        if (s_pfnAQNewOutput(&fmt, IOSVoiceOutputCallback, nullptr, nullptr, nullptr, 0, &s_iosOutputQueue) == 0 && s_iosOutputQueue) {
+            for (int i = 0; i < 3; ++i) {
+                IOSAudioQueueBufferRef buf = nullptr;
+                if (s_pfnAQAllocBuf(s_iosOutputQueue, 3200 * sizeof(int16_t), &buf) == 0 && buf) {
+                    memset(buf->mAudioData, 0, 1600 * sizeof(int16_t));
+                    buf->mAudioDataByteSize = 1600 * sizeof(int16_t);
+                    s_pfnAQEnqueueBuf(s_iosOutputQueue, buf, 0, nullptr);
+                }
+            }
+            s_pfnAQStart(s_iosOutputQueue, nullptr);
+        }
+    }
+#endif
+    s_bMobileVoiceInitialized = true;
+    return true;
+}
+
+void MobileVoiceChat_Destroy() {
+    s_bMobileVoiceRecording = false;
+#if !defined(__APPLE__)
+    s_bAndroidPlayThreadRunning = false;
+#else
+    if (s_iosInputQueue && s_pfnAQStop && s_pfnAQDispose) {
+        s_pfnAQStop(s_iosInputQueue, 1);
+        s_pfnAQDispose(s_iosInputQueue, 1);
+        s_iosInputQueue = nullptr;
+    }
+    if (s_iosOutputQueue && s_pfnAQStop && s_pfnAQDispose) {
+        s_pfnAQStop(s_iosOutputQueue, 1);
+        s_pfnAQDispose(s_iosOutputQueue, 1);
+        s_iosOutputQueue = nullptr;
+    }
+#endif
+    s_bMobileVoiceInitialized = false;
+}
+
+bool MobileVoiceChat_StartRecording() {
+    if (s_bMobileVoiceRecording) return true;
+#if !defined(__APPLE__)
+    if (!CheckOrRequestAndroidMicPermission()) return false;
+    s_bMobileVoiceRecording = true;
+    if (pthread_create(&s_androidMicThread, nullptr, AndroidMicCaptureThreadProc, nullptr) == 0) {
+        pthread_detach(s_androidMicThread);
+        return true;
+    }
+    s_bMobileVoiceRecording = false;
+    return false;
+#else
+    if (!LoadIOSAudioToolboxSymbols() || !ConfigureIOSAudioSessionForVoice()) return false;
+    IOSAudioStreamBasicDescription fmt{};
+    fmt.mSampleRate = 32000.0;
+    fmt.mFormatID = 0x6C70636Du; // 'lpcm'
+    fmt.mFormatFlags = 0xCu;     // SignedInteger | Packed
+    fmt.mBytesPerPacket = 2;
+    fmt.mFramesPerPacket = 1;
+    fmt.mBytesPerFrame = 2;
+    fmt.mChannelsPerFrame = 1;
+    fmt.mBitsPerChannel = 16;
+
+    if (s_pfnAQNewInput(&fmt, IOSVoiceInputCallback, nullptr, nullptr, nullptr, 0, &s_iosInputQueue) != 0 || !s_iosInputQueue) {
+        LOGE("[VoiceChat] iOS AudioQueueNewInput failed");
+        return false;
+    }
+    s_bMobileVoiceRecording = true;
+    for (int i = 0; i < 3; ++i) {
+        IOSAudioQueueBufferRef buf = nullptr;
+        if (s_pfnAQAllocBuf(s_iosInputQueue, 1600 * sizeof(int16_t), &buf) == 0 && buf) {
+            s_pfnAQEnqueueBuf(s_iosInputQueue, buf, 0, nullptr);
+        }
+    }
+    if (s_pfnAQStart(s_iosInputQueue, nullptr) != 0) {
+        s_bMobileVoiceRecording = false;
+        s_pfnAQDispose(s_iosInputQueue, 1);
+        s_iosInputQueue = nullptr;
+        return false;
+    }
+    return true;
+#endif
+}
+
+void MobileVoiceChat_StopRecording() {
+    if (!s_bMobileVoiceRecording) return;
+    s_bMobileVoiceRecording = false;
+#ifdef __APPLE__
+    if (s_iosInputQueue && s_pfnAQStop && s_pfnAQDispose) {
+        s_pfnAQStop(s_iosInputQueue, 1);
+        s_pfnAQDispose(s_iosInputQueue, 1);
+        s_iosInputQueue = nullptr;
+    }
+#endif
+}
+
+void MobileVoiceChat_AddPlaybackSamples(const int16_t* samples, size_t count, float volumePercent) {
+    if (!samples || count == 0 || volumePercent <= 0.01f) return;
+    float gain = volumePercent / 100.0f;
+    std::vector<int16_t> scaled(count);
+    for (size_t i = 0; i < count; ++i) {
+        int32_t v = (int32_t)(samples[i] * gain);
+        if (v > 32767) v = 32767;
+        else if (v < -32768) v = -32768;
+        scaled[i] = (int16_t)v;
+    }
+    pthread_mutex_lock(&s_voiceMutex);
+    if (s_playbackVoiceQueue.size() < 40) {
+        s_playbackVoiceQueue.push_back(std::move(scaled));
+    }
+    pthread_mutex_unlock(&s_voiceMutex);
+}
+
+void MobileVoiceChat_PollCapturedSamples(VoiceChat* pVoiceChat) {
+    if (!pVoiceChat) return;
+    while (true) {
+        std::vector<int16_t> chunk;
+        pthread_mutex_lock(&s_voiceMutex);
+        if (!s_capturedVoiceQueue.empty()) {
+            chunk = std::move(s_capturedVoiceQueue.front());
+            s_capturedVoiceQueue.pop_front();
+        }
+        pthread_mutex_unlock(&s_voiceMutex);
+        if (chunk.empty()) break;
+        pVoiceChat->onCaptureSamples(chunk.data(), (uint32_t)chunk.size());
+    }
+}
+
+#endif // ENABLE_VOICE_CHAT
 
 bool AndroidDecodeImageFromMemory(const void* data, unsigned int size, unsigned int* outW, unsigned int* outH, std::vector<uint32_t>& outBGRA) {
 #ifdef __APPLE__
@@ -1820,6 +2480,7 @@ void AndroidToggleSoftKeyboard(bool show) {
     );
 
 #ifdef __APPLE__
+    InstallIosInputHooks();
     IOSToggleSoftKeyboard(show);
     return;
 #else
@@ -2067,6 +2728,23 @@ static PyObject* mobileInput_IsUiTouchDown(PyObject* self, PyObject* args) {
     return Py_BuildValue("i", s_bUiTouchDown ? 1 : 0);
 }
 
+extern "C" bool AndroidGetJoystickMoveDir(float* outDeg) {
+    if (!s_bJoyActive) return false;
+    float mag = hypotf(s_fJoyNormX, s_fJoyNormY);
+    if (mag <= 0.15f) return false;
+    if (outDeg) {
+        float vx = s_fJoyNormX / mag;
+        float vy = s_fJoyNormY / mag;
+        float dot = -vy;
+        if (dot < -1.0f) dot = -1.0f;
+        else if (dot > 1.0f) dot = 1.0f;
+        float ret = acosf(dot) * (180.0f / 3.14159265f);
+        if (vx < 0.0f) ret = 360.0f - ret;
+        *outDeg = 360.0f - ret;
+    }
+    return true;
+}
+
 static PyObject* mobileInput_IsRectTouchHeld(PyObject* self, PyObject* args) {
     int rx = 0, ry = 0, rw = 0, rh = 0;
     if (!PyArg_ParseTuple(args, "iiii", &rx, &ry, &rw, &rh))
@@ -2074,9 +2752,10 @@ static PyObject* mobileInput_IsRectTouchHeld(PyObject* self, PyObject* args) {
     for (int i = 0; i < 4; ++i) {
         if (!s_pointers[i].active || s_pointers[i].role == TOUCH_ROLE_JOYSTICK)
             continue;
-        int sx = s_pointers[i].startX;
-        int sy = s_pointers[i].startY;
-        if (sx >= rx && sx < (rx + rw) && sy >= ry && sy < (ry + rh))
+        int sx = s_pointers[i].startX, sy = s_pointers[i].startY;
+        int cx = s_pointers[i].curX,   cy = s_pointers[i].curY;
+        if ((sx >= rx && sx < (rx + rw) && sy >= ry && sy < (ry + rh)) ||
+            (cx >= rx && cx < (rx + rw) && cy >= ry && cy < (ry + rh)))
             return Py_BuildValue("i", 1);
     }
     return Py_BuildValue("i", 0);
@@ -2261,24 +2940,36 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                 continue;
             }
 
+            #ifdef __APPLE__
+            InstallIosInputHooks();
+#endif
             if (maskedAction == 0 || maskedAction == 5) { // ACTION_DOWN or ACTION_POINTER_DOWN
-                if (maskedAction == 0) {
-                    for (int i = 0; i < 4; ++i) {
-                        s_pointers[i].active = false;
-                        s_pointers[i].role = TOUCH_ROLE_NONE;
-                        s_pointers[i].isDraggingCamera = false;
-                    }
-                    s_bUiTouchDown = false;
-                    s_fLastPinchSpan = -1.0f;
-                    if (s_bJoyActive) ResetJoystickState();
-                } else if (s_pointers[pid].active) {
-                    for (int i = 0; i < 4; ++i) {
-                        if (!s_pointers[i].active) {
-                            pid = i;
+                // Find if a slot near this touch is already active, or allocate a free slot without wiping other fingers!
+                int assignedPid = -1;
+                for (int i = 0; i < 4; ++i) {
+                    if (s_pointers[i].active) {
+                        int dx = ev.x - s_pointers[i].curX;
+                        int dy = ev.y - s_pointers[i].curY;
+                        if (dx * dx + dy * dy <= 3600) {
+                            assignedPid = i;
                             break;
                         }
                     }
                 }
+                if (assignedPid < 0) {
+                    if (!s_pointers[pid].active) {
+                        assignedPid = pid;
+                    } else {
+                        for (int i = 0; i < 4; ++i) {
+                            if (!s_pointers[i].active) {
+                                assignedPid = i;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (assignedPid < 0) assignedPid = pid;
+                pid = assignedPid;
 
                 SMobilePointerSlot& slot = s_pointers[pid];
                 slot.active = true;
@@ -2310,7 +3001,6 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                 // 3. 3D World (Orbit / Pinch-to-Zoom / Fast-Tap)
                 else {
                     slot.role = TOUCH_ROLE_WORLD;
-                    // Stop existing coasting inertia when placing a finger on the world
                     s_fCamVelRoll *= 0.25f;
                     s_fCamVelPitch *= 0.25f;
                     if (!s_bUiTouchDown) {
@@ -2393,21 +3083,10 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                     }
                 }
             }
-            else if (maskedAction == 6) { // ACTION_POINTER_UP
+            else if (maskedAction == 6 || maskedAction == 1) { // ACTION_POINTER_UP or ACTION_UP
                 int targetSlot = FindBestActiveSlotForPoint(pid, ev.x, ev.y, false);
                 if (targetSlot >= 0) {
-                    ReleasePointerSlot(targetSlot, ev.x, ev.y, 6);
-                }
-            }
-            else if (maskedAction == 1) { // ACTION_UP
-                int primarySlot = FindBestActiveSlotForPoint(pid, ev.x, ev.y, false);
-                if (primarySlot >= 0) {
-                    ReleasePointerSlot(primarySlot, ev.x, ev.y, 1);
-                }
-                for (int i = 0; i < 4; ++i) {
-                    if (s_pointers[i].active) {
-                        ReleasePointerSlot(i, s_pointers[i].curX, s_pointers[i].curY, 1);
-                    }
+                    ReleasePointerSlot(targetSlot, ev.x, ev.y, maskedAction);
                 }
             }
 #endif
@@ -2511,9 +3190,6 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                 if (vx < 0.0f) ret = 360.0f - ret;
                 float fDeg = 360.0f - ret;
 
-                if (!s_bJoyMovingPlayer) {
-                    rkPlayer.__ClearAutoAttackTargetActorID();
-                }
                 if (!pMain->IsUsingSkill()) {
                     rkPlayer.NEW_MoveToDirection(fDeg);
                 }
@@ -2575,7 +3251,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
             AndroidKeyEvt kev = s_keyQueue[s_keyTail];
             s_keyTail = (s_keyTail + 1) & 63;
             pthread_mutex_unlock(&s_inputQueueMutex);
-            if (kev.keyCode == 67 || kev.unicodeChar == 8) {
+            if (kev.keyCode == 67 || kev.keyCode == 8 || kev.unicodeChar == 8 || kev.unicodeChar == 127) {
                 PyRun_SimpleString("import ime\nime.PasteBackspace()\n");
                 UI::CWindowManager::Instance().RunIMEUpdate();
             } else if (kev.keyCode == 66 || kev.keyCode == 160 || kev.unicodeChar == 10 || kev.unicodeChar == 13) {
@@ -2869,6 +3545,11 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_multiTouchEvent(JNIEnv* 
 }
 
 JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_keyEvent(JNIEnv* env, jobject obj, jint keyCode, jint unicodeChar) {
+#ifdef __APPLE__
+    if (keyCode == 67 || keyCode == 8 || unicodeChar == 8 || unicodeChar == 127) {
+        __atomic_fetch_add(&s_uIosBackspaceEventCount, 1, __ATOMIC_RELAXED);
+    }
+#endif
     pthread_mutex_lock(&s_inputQueueMutex);
     int next = (s_keyHead + 1) & 63;
     if (next != s_keyTail) {

@@ -4,6 +4,10 @@
 
 #include "../eterlib/Camera.h"
 
+#ifdef __ANDROID__
+extern "C" bool AndroidGetJoystickMoveDir(float* outDeg);
+#endif
+
 void CPythonPlayer::NEW_SetMouseMoveState(int eMBS)
 {
 	if (MBS_PRESS==eMBS)
@@ -414,6 +418,17 @@ void CPythonPlayer::NEW_RefreshMouseWalkingDirection()
 
 	if (m_isDirKey)
 		NEW_SetMultiDirKeyState(m_isLeft, m_isRight, m_isUp, m_isDown);
+#ifdef __ANDROID__
+	else
+	{
+		float fMobileJoyDir = 0.0f;
+		if (AndroidGetJoystickMoveDir(&fMobileJoyDir))
+		{
+			if (!pkInstMain->IsUsingSkill())
+				NEW_MoveToDirection(fMobileJoyDir);
+		}
+	}
+#endif
 
 	if (m_isAtkKey)
 		NEW_Attack();

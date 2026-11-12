@@ -6,7 +6,9 @@
 #include "../eterbase/Timer.h"
 
 #include <map>
-
+#ifdef __ANDROID__
+extern "C" bool AndroidGetJoystickMoveDir(float* outDeg);
+#endif
 static std::map<DWORD, DWORD> s_RequestedPickups;
 
 const int c_iFastestSendingCount = 3;
@@ -587,6 +589,13 @@ void CPythonPlayer::NEW_Attack()
 	if (!pkInstMain)
 		return;
 
+#ifdef __ANDROID__
+	float fMobileJoyDir = 0.0f;
+	const bool bHasMobileJoyDir = AndroidGetJoystickMoveDir(&fMobileJoyDir);
+#else
+	const bool bHasMobileJoyDir = false;
+#endif
+
 	if (pkInstMain->IsBowMode())
 	{
 		//CPythonPlayerEventHandler& rkPlayerEventHandler=CPythonPlayerEventHandler::GetSingleton();
@@ -621,10 +630,15 @@ void CPythonPlayer::NEW_Attack()
 			return;
 		}
 	}
-	else if (m_isDirKey)
+	else if (m_isDirKey || bHasMobileJoyDir)
 	{
 		float fDirRot=0.0f;
-		NEW_GetMultiKeyDirRotation(m_isLeft, m_isRight, m_isUp, m_isDown, &fDirRot);
+#ifdef __ANDROID__
+		if (bHasMobileJoyDir)
+			fDirRot = fMobileJoyDir;
+		else
+#endif
+			NEW_GetMultiKeyDirRotation(m_isLeft, m_isRight, m_isUp, m_isDown, &fDirRot);
 
 		CCamera* pkCmrCur=CCameraManager::Instance().GetCurrentCamera();
 		if (pkCmrCur)
