@@ -1820,7 +1820,7 @@ static void WriteTopBarButtonTGA(const char* path, int iconType, bool isPressed)
     if (access(path, F_OK) == 0)
         return;
 
-    const int size = 40;
+    const int size = 52;
     FILE* fp = fopen(path, "wb");
     if (!fp) return;
 
@@ -1830,121 +1830,105 @@ static void WriteTopBarButtonTGA(const char* path, int iconType, bool isPressed)
 
     std::vector<uint8_t> pix((size_t)size * (size_t)size * 4, 0);
     float half = size * 0.5f;
+    float s = size / 40.0f;
     size_t idx = 0;
 
     for (int y = 0; y < size; ++y) {
-        float py = (y + 0.5f) - half;
+        float py = ((y + 0.5f) - half) / s;
         for (int x = 0; x < size; ++x) {
-            float px = (x + 0.5f) - half;
-            // Chamfered octagonal-square distance (distinct from circular buttons)
+            float px = ((x + 0.5f) - half) / s;
             float ax = fabsf(px), ay = fabsf(py);
-            float octDist = fmaxf(fmaxf(ax, ay), (ax + ay) * 0.76f);
-            float outerR = 17.5f;
+            float d = hypotf(px, py);
 
-            float r = 10.0f, g = 12.0f, b = 16.0f, a = 0.0f;
-
-            // 1. Soft dark outer shadow
-            if (octDist < outerR + 2.0f) {
-                float sh = 1.0f - SmoothStepF(outerR - 0.5f, outerR + 2.0f, octDist);
-                a = sh * 110.0f;
-            }
-
-            // 2. Matte-black / obsidian interior
-            if (octDist <= outerR) {
-                float bodyMask = 1.0f - SmoothStepF(outerR - 1.0f, outerR + 0.3f, octDist);
-                float sheen = fmaxf(0.0f, (-px - py) / (2.0f * outerR));
+            // Soft, transparent dark-glasstint aura (no heavy box border, matching Royal2 top-right icons)
+            float r = 12.0f, g = 10.0f, b = 8.0f, a = 0.0f;
+            if (d < 18.5f) {
+                float radial = 1.0f - SmoothStepF(6.0f, 18.5f, d);
+                a = radial * (isPressed ? 145.0f : 68.0f);
                 if (isPressed) {
-                    r = 48.0f + sheen * 45.0f;
-                    g = 54.0f + sheen * 48.0f;
-                    b = 66.0f + sheen * 55.0f;
-                    a = fmaxf(a, bodyMask * 235.0f);
-                } else {
-                    r = 14.0f + sheen * 22.0f;
-                    g = 16.0f + sheen * 24.0f;
-                    b = 20.0f + sheen * 28.0f;
-                    a = fmaxf(a, bodyMask * 205.0f);
+                    r = 45.0f; g = 38.0f; b = 28.0f;
                 }
             }
 
-            // 3. Crisp White/Silver double-bevel border
-            float rimDist = fabsf(octDist - (outerR - 1.4f));
-            if (rimDist < 1.5f) {
-                float rimMask = 1.0f - SmoothStepF(0.4f, 1.5f, rimDist);
-                float silver = isPressed ? 255.0f : (215.0f + 35.0f * (1.0f - (float)(x + y) / (2.0f * size)));
-                r = r * (1.0f - rimMask) + silver * rimMask;
-                g = g * (1.0f - rimMask) + silver * rimMask;
-                b = b * (1.0f - rimMask) + fminf(255.0f, silver + 8.0f) * rimMask;
-                a = fmaxf(a, rimMask * 248.0f);
-            }
-
-            // 4. Pure White Vector Glyph
+            // Crisp warm-ivory vector glyph (scaled up for high visibility)
             float ic = 0.0f;
             if (iconType == TICON_COLLAPSE) {
-                // '>' Chevron
-                float d1 = DistToSegF(px, py, -3.5f, -6.5f, 4.0f, 0.0f);
-                float d2 = DistToSegF(px, py, 4.0f, 0.0f, -3.5f, 6.5f);
-                float md = fminf(d1, d2);
-                if (md < 2.0f) ic = 1.0f - SmoothStepF(0.8f, 2.0f, md);
+                // Sleek '>' wing arrow
+                float d1 = DistToSegF(px, py, -5.0f, -6.5f, 5.5f, 0.0f);
+                float d2 = DistToSegF(px, py, 5.5f, 0.0f, -5.0f, 6.5f);
+                float d3 = DistToSegF(px, py, -1.5f, -3.5f, 5.5f, 0.0f);
+                float d4 = DistToSegF(px, py, 5.5f, 0.0f, -1.5f, 3.5f);
+                float md = fminf(fminf(d1, d2), fminf(d3, d4));
+                if (md < 2.2f) ic = 1.0f - SmoothStepF(0.9f, 2.2f, md);
             } else if (iconType == TICON_EXPAND) {
-                // '<' Chevron
-                float d1 = DistToSegF(px, py, 3.5f, -6.5f, -4.0f, 0.0f);
-                float d2 = DistToSegF(px, py, -4.0f, 0.0f, 3.5f, 6.5f);
+                // Sleek '<' wing arrow
+                float d1 = DistToSegF(px, py, 5.0f, -6.5f, -5.5f, 0.0f);
+                float d2 = DistToSegF(px, py, -5.5f, 0.0f, 5.0f, 6.5f);
                 float md = fminf(d1, d2);
-                if (md < 2.0f) ic = 1.0f - SmoothStepF(0.8f, 2.0f, md);
+                if (md < 2.2f) ic = 1.0f - SmoothStepF(0.9f, 2.2f, md);
             } else if (iconType == TICON_SYS) {
-                // Hamburger Menu (3 horizontal bars)
-                if (ax < 7.5f && (fabsf(py + 5.5f) < 1.3f || fabsf(py) < 1.3f || fabsf(py - 5.5f) < 1.3f))
-                    ic = 0.96f;
+                // Hamburger Menu (3 crisp horizontal bars)
+                if (ax < 8.5f && (fabsf(py + 6.0f) < 1.45f || fabsf(py) < 1.45f || fabsf(py - 6.0f) < 1.45f))
+                    ic = 0.98f;
             } else if (iconType == TICON_CHAR) {
-                // Character / Crowned Helmet silhouette
-                float headD = hypotf(px, py + 4.2f);
-                if (headD < 3.6f) ic = 1.0f - SmoothStepF(2.6f, 3.6f, headD);
-                float shD = hypotf(px * 0.75f, py - 4.8f);
-                if (py > 0.5f && py < 8.5f && shD < 6.2f)
-                    ic = fmaxf(ic, 1.0f - SmoothStepF(5.0f, 6.2f, shD));
-            } else if (iconType == TICON_INVEN) {
-                // Inventory Chest / Bag
-                if (ax < 7.0f && py > -4.5f && py < 7.5f) {
-                    float edge = fmaxf(ax - 5.5f, fmaxf(-py - 3.0f, py - 6.0f));
-                    if (edge > -1.8f || fabsf(py + 0.5f) < 1.1f) ic = 0.95f;
+                // Spartan / Warrior Helmet silhouette (matching reference image)
+                float dome = hypotf(px, py + 1.0f);
+                if (dome < 7.8f && py < 5.5f) {
+                    if (!(fabsf(px) < 2.2f && py > -1.0f) && !(py > -2.5f && py < -0.5f && fabsf(px) >= 1.5f && fabsf(px) <= 5.2f))
+                        ic = 1.0f - SmoothStepF(6.8f, 7.8f, dome);
                 }
-                float hnd = fabsf(hypotf(px, py + 4.5f) - 3.5f);
-                if (py <= -4.5f && hnd < 1.4f) ic = fmaxf(ic, 0.92f);
+            } else if (iconType == TICON_INVEN) {
+                // Treasure Chest silhouette
+                if (ax < 7.8f && py >= -5.5f && py <= 6.8f) {
+                    if (fabsf(py + 1.0f) > 0.9f && !(ax < 1.6f && fabsf(py + 1.0f) < 2.4f))
+                        ic = 0.96f;
+                }
             } else if (iconType == TICON_COMM) {
-                // Community / 2 People
-                float h1 = hypotf(px + 3.2f, py + 3.8f);
-                float h2 = hypotf(px - 3.8f, py + 2.8f);
-                if (h1 < 2.8f || h2 < 2.4f) ic = 0.95f;
-                if (py > 0.5f && py < 7.5f) {
-                    if (hypotf((px + 3.2f) * 0.8f, py - 4.5f) < 4.5f || hypotf((px - 3.8f) * 0.85f, py - 5.0f) < 3.8f)
-                        ic = 0.95f;
+                // Community / 2 People silhouette
+                float h1 = hypotf(px + 2.8f, py + 4.2f);
+                float h2 = hypotf(px - 4.2f, py + 3.0f);
+                if (h1 < 3.1f || h2 < 2.6f) ic = 0.98f;
+                if (py > 0.5f && py < 7.8f) {
+                    if (hypotf((px + 2.8f) * 0.78f, py - 4.8f) < 4.8f || hypotf((px - 4.2f) * 0.82f, py - 5.2f) < 4.0f)
+                        ic = 0.98f;
                 }
             } else if (iconType == TICON_SHOP) {
-                // Shop / Storefront / Scales
-                if (ax < 7.5f && py >= -6.5f && py <= -2.5f) ic = 0.95f;
-                if (ax < 6.2f && py > -1.5f && py < 7.5f && (ax > 4.4f || py > 5.5f)) ic = 0.95f;
-            } else if (iconType == TICON_AUTOHUNT) {
-                // Crossed Swords (like Royal2 top bar)
-                float d1 = DistToSegF(px, py, -6.5f, 6.5f, 6.5f, -6.5f);
-                float d2 = DistToSegF(px, py, 6.5f, 6.5f, -6.5f, -6.5f);
-                float md = fminf(d1, d2);
-                if (md < 1.7f) ic = 1.0f - SmoothStepF(0.7f, 1.7f, md);
-            } else if (iconType == TICON_DS) {
-                // Dragon Soul Diamond
-                float dia = ax * 1.15f + ay * 0.85f;
-                if (dia < 8.0f) {
-                    if (dia > 5.6f || dia < 3.0f) ic = 1.0f - SmoothStepF(7.2f, 8.0f, dia);
+                // Scroll / Market List with checkmark
+                if (ax < 6.8f && py >= -7.2f && py <= 7.2f) {
+                    float border = fmaxf(ax - 5.2f, fabsf(py) - 5.6f);
+                    float chk1 = DistToSegF(px, py, -3.0f, 0.5f, -0.5f, 3.0f);
+                    float chk2 = DistToSegF(px, py, -0.5f, 3.0f, 3.8f, -2.5f);
+                    if (border > -1.6f || fminf(chk1, chk2) < 1.5f)
+                        ic = 0.96f;
                 }
+            } else if (iconType == TICON_AUTOHUNT) {
+                // Crossed Swords
+                float d1 = DistToSegF(px, py, -7.2f, 7.2f, 7.2f, -7.2f);
+                float d2 = DistToSegF(px, py, 7.2f, 7.2f, -7.2f, -7.2f);
+                float g1 = DistToSegF(px, py, -7.2f, 2.2f, -2.2f, 7.2f);
+                float g2 = DistToSegF(px, py, 2.2f, 7.2f, 7.2f, 2.2f);
+                float md = fminf(fminf(d1, d2), fminf(g1, g2) * 1.15f);
+                if (md < 1.9f) ic = 1.0f - SmoothStepF(0.8f, 1.9f, md);
+            } else if (iconType == TICON_DS) {
+                // Dragon Soul Faceted Diamond
+                float dia = ax * 1.12f + ay * 0.85f;
+                if (dia < 8.4f && (dia > 5.8f || dia < 3.4f))
+                    ic = 1.0f - SmoothStepF(7.6f, 8.4f, dia);
             } else if (iconType == TICON_UTIL) {
-                // 4-Square Utility Grid
-                if (ax >= 1.8f && ax <= 6.8f && ay >= 1.8f && ay <= 6.8f)
-                    ic = 0.95f;
+                // Bell / Utility Icon (matching reference top bar)
+                float bellW = (py >= -5.5f && py <= 4.2f) ? (3.2f + (py + 5.5f) * 0.45f) : 0.0f;
+                if (bellW > 0.0f && ax <= bellW) ic = 1.0f - SmoothStepF(bellW - 1.0f, bellW, ax);
+                if (fabsf(py - 4.5f) < 1.2f && ax < 8.2f) ic = 0.98f;
+                if (hypotf(px, py + 6.5f) < 1.8f || hypotf(px, py - 6.8f) < 2.2f) ic = fmaxf(ic, 0.96f);
             }
 
             if (ic > 0.0f) {
-                r = r * (1.0f - ic) + 255.0f * ic;
-                g = g * (1.0f - ic) + 255.0f * ic;
-                b = b * (1.0f - ic) + 255.0f * ic;
+                float icR = isPressed ? 255.0f : 244.0f;
+                float icG = isPressed ? 225.0f : 239.0f;
+                float icB = isPressed ? 155.0f : 228.0f;
+                r = r * (1.0f - ic) + icR * ic;
+                g = g * (1.0f - ic) + icG * ic;
+                b = b * (1.0f - ic) + icB * ic;
                 a = fmaxf(a, ic * 255.0f);
             }
 
@@ -1956,6 +1940,68 @@ static void WriteTopBarButtonTGA(const char* path, int iconType, bool isPressed)
         }
     }
 
+    fwrite(pix.data(), 1, pix.size(), fp);
+    fclose(fp);
+}
+
+static void WriteExpSphereTGA(const char* path, bool isFilled, float cr, float cg, float cb) {
+    if (access(path, F_OK) == 0)
+        return;
+    const int size = 28;
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return;
+
+    uint8_t hdr[18] = {0};
+    hdr[2] = 2; hdr[12] = size; hdr[14] = size; hdr[16] = 32; hdr[17] = 0x28;
+    fwrite(hdr, 1, 18, fp);
+
+    std::vector<uint8_t> pix((size_t)size * (size_t)size * 4, 0);
+    float half = size * 0.5f;
+    float outerR = 12.2f;
+    float innerR = 10.2f;
+
+    for (int y = 0; y < size; ++y) {
+        float py = (y + 0.5f) - half;
+        for (int x = 0; x < size; ++x) {
+            float px = (x + 0.5f) - half;
+            float d = hypotf(px, py);
+            size_t i = ((size_t)y * size + (size_t)x) * 4;
+
+            float r = 10.0f, g = 12.0f, b = 16.0f, a = 0.0f;
+            if (d <= outerR + 1.2f) {
+                float mask = 1.0f - SmoothStepF(outerR - 0.6f, outerR + 1.2f, d);
+                if (!isFilled) {
+                    // Empty recessed dark socket + classic bronze/gold rim
+                    r = 16.0f; g = 18.0f; b = 22.0f;
+                    a = mask * 215.0f;
+                    float rimD = fabsf(d - (outerR - 1.0f));
+                    if (rimD < 1.5f) {
+                        float rm = 1.0f - rimD / 1.5f;
+                        float grad = 0.65f + 0.35f * (1.0f - (float)(x + y) / (2.0f * size));
+                        r = r * (1.0f - rm) + (185.0f * grad) * rm;
+                        g = g * (1.0f - rm) + (148.0f * grad) * rm;
+                        b = b * (1.0f - rm) + (82.0f * grad) * rm;
+                        a = fmaxf(a, rm * 245.0f);
+                    }
+                } else if (d <= innerR + 0.6f) {
+                    // Glowing 3D liquid sphere with top-left specular highlight
+                    float fillMask = 1.0f - SmoothStepF(innerR - 0.6f, innerR + 0.6f, d);
+                    float sphereZ = sqrtf(fmaxf(0.0f, 1.0f - (d * d) / (innerR * innerR)));
+                    float spec = powf(fmaxf(0.0f, (-0.45f * px - 0.55f * py) / innerR + sphereZ * 0.65f), 3.0f) * 95.0f;
+                    float core = 0.55f + 0.45f * sphereZ;
+                    r = fminf(255.0f, cr * core + spec);
+                    g = fminf(255.0f, cg * core + spec);
+                    b = fminf(255.0f, cb * core + spec * 0.7f);
+                    a = fillMask * 250.0f;
+                }
+            }
+
+            pix[i + 0] = ClampU8(b);
+            pix[i + 1] = ClampU8(g);
+            pix[i + 2] = ClampU8(r);
+            pix[i + 3] = ClampU8(a);
+        }
+    }
     fwrite(pix.data(), 1, pix.size(), fp);
     fclose(fp);
 }
@@ -1985,12 +2031,10 @@ static void WritePortraitRingTGA(const char* path) {
 
             float r = 12.0f, g = 15.0f, b = 22.0f, a = 0.0f;
 
-            // Soft outer drop shadow
             if (d >= innerR && d < outerR + 2.5f) {
                 float sh = 1.0f - SmoothStepF(outerR - 0.5f, outerR + 2.5f, d);
                 a = sh * 120.0f;
             }
-            // Brushed metallic gold & silver double bezel around the face window
             if (d >= innerR - 1.0f && d <= outerR) {
                 float inMask  = SmoothStepF(innerR - 1.0f, innerR + 0.8f, d);
                 float outMask = 1.0f - SmoothStepF(outerR - 1.0f, outerR + 0.4f, d);
@@ -2016,70 +2060,12 @@ static void WritePortraitRingTGA(const char* path) {
     fclose(fp);
 }
 
-static void WriteEnergyCrystalTGA(const char* path, float cr, float cg, float cb) {
-    if (access(path, F_OK) == 0)
-        return;
-    const int size = 32;
-    FILE* fp = fopen(path, "wb");
-    if (!fp) return;
-
-    uint8_t hdr[18] = {0};
-    hdr[2] = 2; hdr[12] = size; hdr[14] = size; hdr[16] = 32; hdr[17] = 0x28;
-    fwrite(hdr, 1, 18, fp);
-
-    std::vector<uint8_t> pix((size_t)size * (size_t)size * 4, 0);
-    float half = size * 0.5f;
-    float outerR = 13.5f;
-
-    for (int y = 0; y < size; ++y) {
-        float py = (y + 0.5f) - half;
-        for (int x = 0; x < size; ++x) {
-            float px = (x + 0.5f) - half;
-            float d = hypotf(px, py);
-            size_t i = ((size_t)y * size + (size_t)x) * 4;
-
-            float r = 14.0f, g = 18.0f, b = 26.0f, a = 0.0f;
-            if (d <= outerR + 1.5f) {
-                float mask = 1.0f - SmoothStepF(outerR - 0.8f, outerR + 1.2f, d);
-                a = mask * 215.0f;
-
-                // Faceted diamond crystal core
-                float dia = fabsf(px) * 1.25f + fabsf(py) * 0.9f;
-                if (dia < 8.5f) {
-                    float coreGlow = 1.0f - (dia / 8.5f);
-                    float spec = (px < 0.0f && py < 0.0f) ? 55.0f : 0.0f;
-                    r = fminf(255.0f, cr * (0.55f + 0.65f * coreGlow) + spec);
-                    g = fminf(255.0f, cg * (0.55f + 0.65f * coreGlow) + spec);
-                    b = fminf(255.0f, cb * (0.55f + 0.65f * coreGlow) + spec);
-                    a = 248.0f;
-                }
-
-                // Brushed gold outer rim
-                float rimDist = fabsf(d - (outerR - 1.2f));
-                if (rimDist < 1.4f) {
-                    float rm = 1.0f - rimDist / 1.4f;
-                    r = r * (1.0f - rm) + 220.0f * rm;
-                    g = g * (1.0f - rm) + 185.0f * rm;
-                    b = b * (1.0f - rm) + 110.0f * rm;
-                    a = fmaxf(a, rm * 250.0f);
-                }
-            }
-            pix[i + 0] = ClampU8(b);
-            pix[i + 1] = ClampU8(g);
-            pix[i + 2] = ClampU8(r);
-            pix[i + 3] = ClampU8(a);
-        }
-    }
-    fwrite(pix.data(), 1, pix.size(), fp);
-    fclose(fp);
-}
-
 static void WriteMobileStatusHUDTextures() {
     WriteMobileRingTGA("mark/m_portrait_bg.tga", 64, 28.5f, 2.2f, 195.0f, 218,182,108, 110,210,255, MICON_NONE, false);
     WritePortraitRingTGA("mark/m_portrait_ring.tga");
-    WriteEnergyCrystalTGA("mark/m_energy_empty.tga",   95.0f, 105.0f, 120.0f);
-    WriteEnergyCrystalTGA("mark/m_energy_hungry.tga", 255.0f, 165.0f,  40.0f);
-    WriteEnergyCrystalTGA("mark/m_energy_full.tga",    65.0f, 205.0f, 255.0f);
+    WriteExpSphereTGA("mark/m_exp_orb_empty_v3.tga", false, 0.0f, 0.0f, 0.0f);
+    WriteExpSphereTGA("mark/m_exp_orb_full_v3.tga",  true, 255.0f, 200.0f, 25.0f);
+    WriteExpSphereTGA("mark/m_exp_orb_conq_v3.tga",  true,  45.0f, 210.0f, 255.0f);
 }
 
 void GenerateMobileHUDTextures() {
@@ -2134,6 +2120,26 @@ void GenerateMobileHUDTextures() {
     WriteTopBarButtonTGA("mark/m_top_sys_down.tga",      TICON_SYS,      true);
     WriteSquaredMiniMapTextures();
 	WriteMobileStatusHUDTextures();
+	WriteTopBarButtonTGA("mark/m_top_collapse_norm_v3.tga", TICON_COLLAPSE, false);
+    WriteTopBarButtonTGA("mark/m_top_collapse_down_v3.tga", TICON_COLLAPSE, true);
+    WriteTopBarButtonTGA("mark/m_top_expand_norm_v3.tga",   TICON_EXPAND,   false);
+    WriteTopBarButtonTGA("mark/m_top_expand_down_v3.tga",   TICON_EXPAND,   true);
+    WriteTopBarButtonTGA("mark/m_top_char_norm_v3.tga",     TICON_CHAR,     false);
+    WriteTopBarButtonTGA("mark/m_top_char_down_v3.tga",     TICON_CHAR,     true);
+    WriteTopBarButtonTGA("mark/m_top_inven_norm_v3.tga",    TICON_INVEN,    false);
+    WriteTopBarButtonTGA("mark/m_top_inven_down_v3.tga",    TICON_INVEN,    true);
+    WriteTopBarButtonTGA("mark/m_top_comm_norm_v3.tga",     TICON_COMM,     false);
+    WriteTopBarButtonTGA("mark/m_top_comm_down_v3.tga",     TICON_COMM,     true);
+    WriteTopBarButtonTGA("mark/m_top_shop_norm_v3.tga",     TICON_SHOP,     false);
+    WriteTopBarButtonTGA("mark/m_top_shop_down_v3.tga",     TICON_SHOP,     true);
+    WriteTopBarButtonTGA("mark/m_top_auto_norm_v3.tga",     TICON_AUTOHUNT, false);
+    WriteTopBarButtonTGA("mark/m_top_auto_down_v3.tga",     TICON_AUTOHUNT, true);
+    WriteTopBarButtonTGA("mark/m_top_ds_norm_v3.tga",       TICON_DS,       false);
+    WriteTopBarButtonTGA("mark/m_top_ds_down_v3.tga",       TICON_DS,       true);
+    WriteTopBarButtonTGA("mark/m_top_util_norm_v3.tga",     TICON_UTIL,     false);
+    WriteTopBarButtonTGA("mark/m_top_util_down_v3.tga",     TICON_UTIL,     true);
+    WriteTopBarButtonTGA("mark/m_top_sys_norm_v3.tga",      TICON_SYS,      false);
+    WriteTopBarButtonTGA("mark/m_top_sys_down_v3.tga",      TICON_SYS,      true);
 }
 
 // ============================================================================
@@ -2185,6 +2191,7 @@ static DWORD s_dwLastKeyboardOpenMs = 0;
 static jobject s_pLiveEditText = nullptr;
 static std::u16string s_u16LastEditText;
 static volatile bool s_bResetLiveEditTextPending = false;
+static volatile DWORD s_dwLastTouchDownMs = 0;
 
 static void EnsureAndroidLiveEditTextOnUiThread(JNIEnv* env) {
 #if !defined(__APPLE__)
@@ -2326,7 +2333,7 @@ static void EnsureAndroidLiveEditTextOnUiThread(JNIEnv* env) {
         jclass etCls = env->FindClass("android/widget/EditText");
         if (s_bResetLiveEditTextPending) {
             s_bResetLiveEditTextPending = false;
-            jstring padStr = env->NewStringUTF("                                "); // 32 spaces so backspace works on existing text
+            jstring padStr = env->NewStringUTF("                                ");
             jclass tvCls = env->FindClass("android/widget/TextView");
             jmethodID setTextMid = env->GetMethodID(tvCls, "setText", "(Ljava/lang/CharSequence;)V");
             if (setTextMid) env->CallVoidMethod(s_pLiveEditText, setTextMid, padStr);
@@ -2338,11 +2345,13 @@ static void EnsureAndroidLiveEditTextOnUiThread(JNIEnv* env) {
             env->DeleteLocalRef(tvCls);
             env->DeleteLocalRef(padStr);
         }
-        jclass viewCls = env->FindClass("android/view/View");
-        jmethodID reqFocMid = env->GetMethodID(viewCls, "requestFocus", "()Z");
-        if (reqFocMid) env->CallBooleanMethod(s_pLiveEditText, reqFocMid);
-        env->ExceptionClear();
-        env->DeleteLocalRef(viewCls);
+        if (s_bSoftKeyboardVisible) {
+            jclass viewCls = env->FindClass("android/view/View");
+            jmethodID reqFocMid = env->GetMethodID(viewCls, "requestFocus", "()Z");
+            if (reqFocMid) env->CallBooleanMethod(s_pLiveEditText, reqFocMid);
+            env->ExceptionClear();
+            env->DeleteLocalRef(viewCls);
+        }
         env->DeleteLocalRef(etCls);
     }
 #endif
@@ -2473,16 +2482,21 @@ static bool PollAndroidLiveEditText(JNIEnv* env) {
 
 void AndroidToggleSoftKeyboard(bool show) {
     if (show) {
-        s_dwLastKeyboardOpenMs = ELTimer_GetMSec();
+        DWORD nowMs = ELTimer_GetMSec();
+        // Ignore automatic SetFocus() calls when a window opens if the player didn't tap the screen
+        if (s_dwLastTouchDownMs == 0 || (nowMs - s_dwLastTouchDownMs > 550)) {
+            return;
+        }
+        s_dwLastKeyboardOpenMs = nowMs;
     } else {
         s_bResetLiveEditTextPending = true;
     }
     s_bSoftKeyboardVisible = show;
 
-    // Dynamic ThinBoard TOP_MOST preview showing ONLY the text inside the input
+    // Dynamic ThinBoard TOP_MOST preview with larger 18px bold font
     PyRun_SimpleString(show ?
         "try:\n"
-        "    import ui, wndMgr\n"
+        "    import ui, wndMgr, localeInfo\n"
         "    if not hasattr(ui, '_g_mobileKbBar') or ui._g_mobileKbBar is None:\n"
         "        class _MobileKbPreview(ui.ThinBoard):\n"
         "            def __init__(self):\n"
@@ -2490,6 +2504,11 @@ void AndroidToggleSoftKeyboard(bool show) {
         "                self.AddFlag('not_pick')\n"
         "                self.txt = ui.TextLine()\n"
         "                self.txt.SetParent(self)\n"
+        "                try:\n"
+        "                    baseFnt = getattr(localeInfo, 'UI_DEF_FONT', 'Tahoma:12').split(':')[0]\n"
+        "                    self.txt.SetFontName(baseFnt + ':18b')\n"
+        "                except:\n"
+        "                    pass\n"
         "                self.txt.SetHorizontalAlignCenter()\n"
         "                self.txt.SetVerticalAlignCenter()\n"
         "                self.txt.SetOutline()\n"
@@ -2501,8 +2520,8 @@ void AndroidToggleSoftKeyboard(bool show) {
         "                disp = ('*' * len(val)) if isSecret else (val if val else '')\n"
         "                self.txt.SetText(disp)\n"
         "                tw, th = self.txt.GetTextSize()\n"
-        "                bw = max(48, tw + 24)\n"
-        "                bh = max(30, th + 14)\n"
+        "                bw = max(96, tw + 36)\n"
+        "                bh = max(38, th + 18)\n"
         "                sw = wndMgr.GetScreenWidth()\n"
         "                self.SetSize(bw, bh)\n"
         "                self.SetPosition((sw - bw) / 2, 10)\n"
@@ -3553,7 +3572,10 @@ static inline int MapPhysYToLogical(float y) {
 JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_touchEvent(JNIEnv* env, jobject obj, jint action, jfloat x, jfloat y) {
     int pid = (action >> 8) & 0x3;
     int masked = (int)(action & 0xFF);
-    if (masked == 0) EnsureAndroidLiveEditTextOnUiThread(env);
+    if (masked == 0 || masked == 5) {
+        s_dwLastTouchDownMs = ELTimer_GetMSec();
+        EnsureAndroidLiveEditTextOnUiThread(env);
+    }
     int lx = MapPhysXToLogical(x);
     int ly = MapPhysYToLogical(y);
     pthread_mutex_lock(&s_inputQueueMutex);
@@ -3571,7 +3593,10 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_touchEvent(JNIEnv* env, 
 JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_multiTouchEvent(JNIEnv* env, jobject obj, jint pointerId, jint action, jfloat x, jfloat y) {
     int pid = (int)(pointerId & 3);
     int masked = (int)(action & 0xFF);
-    if (masked == 0) EnsureAndroidLiveEditTextOnUiThread(env);
+    if (masked == 0 || masked == 5) {
+        s_dwLastTouchDownMs = ELTimer_GetMSec();
+        EnsureAndroidLiveEditTextOnUiThread(env);
+    }
     int lx = MapPhysXToLogical(x);
     int ly = MapPhysYToLogical(y);
     pthread_mutex_lock(&s_inputQueueMutex);
