@@ -259,8 +259,7 @@ static CDXTCImage image;
 		return (CreateDDSTexture(image, (const BYTE*)c_pvBuf));
 #endif
 	}
-	else
-	{
+		{
 		D3DXIMAGE_INFO imageInfo;
 
 		if (FAILED(D3DXGetImageInfoFromFileInMemory(c_pvBuf, bufSize, &imageInfo)))
@@ -430,8 +429,7 @@ bool CGraphicImageTexture::CreateFromMemoryFile(UINT bufSize, const void* c_pvBu
 		return (CreateDDSTexture(image, (const BYTE*)c_pvBuf));
 #endif
 	}
-	else
-	{
+		{
 		D3DXIMAGE_INFO imageInfo;
 		if (FAILED(D3DXCreateTextureFromFileInMemoryEx(
 			ms_lpd3dDevice,
