@@ -41,21 +41,22 @@ cur_hdr_hash = hdr_hasher.hexdigest()
 
 if mode == 'restore':
     shutil.rmtree('build_ios/Release-iphoneos/M2WorldOnline.app', ignore_errors=True)
+    now_ts = time.time() + 5.0
+    for p, (h, mt) in cur_files.items():
+        if p in old_files and old_files[p][0] == h:
+            os.utime(p, (old_files[p][1], old_files[p][1]))
+        else:
+            os.utime(p, (now_ts, now_ts))
+
     if old_epoch != CACHE_EPOCH:
         print(f'[ios_cache_helper] Cache epoch updated ({old_epoch} -> {CACHE_EPOCH}). Performing clean rebuild of build_ios...')
         shutil.rmtree('build_ios/build/world_mobile.build', ignore_errors=True)
         shutil.rmtree('build_ios/build/XCBuildData', ignore_errors=True)
     elif old_hdr_hash != cur_hdr_hash:
-        print('[ios_cache_helper] Header/CMakeLists change detected! Clearing world_mobile object files...')
+        print('[ios_cache_helper] Header/CMakeLists change detected! Clearing world_mobile object files (keeping Extern cache)...')
         shutil.rmtree('build_ios/build/world_mobile.build', ignore_errors=True)
         shutil.rmtree('build_ios/build/XCBuildData', ignore_errors=True)
     else:
-        now_ts = time.time() + 5.0
-        for p, (h, mt) in cur_files.items():
-            if p in old_files and old_files[p][0] == h:
-                os.utime(p, (old_files[p][1], old_files[p][1]))
-            else:
-                os.utime(p, (now_ts, now_ts))
         if changed_sources and os.path.exists('build_ios/build'):
             for r, d, fls in os.walk('build_ios/build'):
                 for f in fls:
