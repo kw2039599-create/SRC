@@ -56,6 +56,7 @@ extern "C" {
     void IOSSetMusicVolume(float volume);
     void IOSStopMusic();
     void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float volume);
+    void IOSPlayAudioFile3D(const char* diskPath, float volume, float pan, float rate);
     const char* IOSGetDocumentsDirectory();
 }
 #endif
@@ -1424,26 +1425,39 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
     env->GetJavaVM(&g_pJavaVM);
 #endif
 
-    if (width > 0 && height > 0 && access("worldonline.cfg", F_OK) != 0) {
-        if (FILE* cfgFp = fopen("worldonline.cfg", "wb")) {
-            fprintf(cfgFp, "WIDTH\t\t\t\t\t\t%d\nHEIGHT\t\t\t\t\t\t%d\nBPP\t\t\t\t\t\t32\nFREQUENCY\t\t\t\t\t60\nSOFTWARE_CURSOR\t\t\t0\nSOFTWARE_TILING\t\t\t0\nOBJECT_CULLING\t\t\t\t1\nVISIBILITY\t\t\t\t\t3\nMUSIC_VOLUME\t\t\t\t0.000\nVOICE_VOLUME\t\t\t\t0\nGAMMA\t\t\t\t\t\t3\nIS_SAVE_ID\t\t\t\t\t0\nSAVE_ID\t\t\t\t\t0\nDECOMPRESSED_TEXTURE\t\t0\nWINDOWED\t\t\t\t\t1\n", (int)width, (int)height);
-            fclose(cfgFp);
-        }
-    }
-	if (access("audio_init_v1.flag", F_OK) != 0) {
-        if (FILE* f = fopen("audio_init_v1.flag", "wb")) fclose(f);
-        if (FILE* cfgFp = fopen("worldonline.cfg", "rb")) {
-            char buf[2048] = {0};
-            size_t n = fread(buf, 1, sizeof(buf) - 1, cfgFp);
-            fclose(cfgFp);
-            std::string s(buf, n);
-            size_t posM = s.find("MUSIC_VOLUME\t\t\t\t\t0.000");
-            if (posM != std::string::npos) s.replace(posM, 23, "MUSIC_VOLUME\t\t\t\t\t0.500");
-            size_t posV = s.find("VOICE_VOLUME\t\t\t\t\t0");
-            if (posV != std::string::npos) s.replace(posV, 19, "VOICE_VOLUME\t\t\t\t\t3");
-            if (FILE* outFp = fopen("worldonline.cfg", "wb")) {
-                fwrite(s.data(), 1, s.size(), outFp);
-                fclose(outFp);
+    if (width > 0 && height > 0 && (access("worldonline.cfg", F_OK) != 0 || access("cfg_defaults_v3.flag", F_OK) != 0)) {
+        if (FILE* f = fopen("cfg_defaults_v3.flag", "wb")) fclose(f);
+        if (access("worldonline.cfg", F_OK) != 0) {
+            if (FILE* cfgFp = fopen("worldonline.cfg", "wb")) {
+                fprintf(cfgFp,
+                    "WIDTH\t\t\t\t\t\t%d\n"
+                    "HEIGHT\t\t\t\t\t\t%d\n"
+                    "BPP\t\t\t\t\t\t32\n"
+                    "FREQUENCY\t\t\t\t\t60\n"
+                    "SOFTWARE_CURSOR\t\t\t0\n"
+                    "SOFTWARE_TILING\t\t\t0\n"
+                    "OBJECT_CULLING\t\t\t\t1\n"
+                    "VISIBILITY\t\t\t\t\t3\n"
+                    "MUSIC_VOLUME\t\t\t\t0.100\n"
+                    "VOICE_VOLUME\t\t\t\t1\n"
+                    "GAMMA\t\t\t\t\t\t3\n"
+                    "IS_SAVE_ID\t\t\t\t\t0\n"
+                    "SAVE_ID\t\t\t\t\t0\n"
+                    "DECOMPRESSED_TEXTURE\t\t0\n"
+                    "WINDOWED\t\t\t\t\t1\n"
+                    "FOG_MODE_ON\t\t\t\t1\n"
+                    "NIGHT_MODE_ON\t\t\t0\n"
+                    "SNOW_MODE_ON\t\t\t0\n"
+                    "SNOW_TEXTURE_MODE\t\t0\n"
+                    "RAIN_MODE_ON\t\t\t0\n"
+                    "GRAPHICS_LEVEL\t\t\t\t0\n"
+                    "SHADOW_QUALITY_LEVEL\t\t0\n"
+                    "TERRAIN_SHADOW\t\t\t\t0\n"
+                    "SHADOW_DETAILS\t\t\t\t0\n"
+                    "SHADOW_LEVEL\t\t\t\t0\n"
+                    "RAIN_LEVEL\t\t\t\t\t0\n",
+                    (int)width, (int)height);
+                fclose(cfgFp);
             }
         }
     }
@@ -1594,7 +1608,7 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
             "sys.modules['logging'] = _log_mod\n"
         );
 #ifdef ENABLE_OPENGL
-        initmobileInput(); PyEval_SetProfile(MobilePyProfileTracer, NULL); g_szCrashStage = "Init: RunMainScript (system.py)";
+        initmobileInput(); g_szCrashStage = "Init: RunMainScript (system.py)";
 #endif
         Tracen("worldonline Mobile: Running RunMainScript (system.py)...");
         if (!RunMainScript(s_pyLauncher, "")) {
@@ -1635,7 +1649,7 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
         "__builtin__.__import__ = _fast_import\n"
     );
 
-    PyEval_SetProfile(MobilePyProfileTracer, NULL); g_szCrashStage = "Engine Ready / Render Loop"; s_bEngineReady = true;
+    g_szCrashStage = "Engine Ready / Render Loop"; s_bEngineReady = true;
     Tracen("worldonline Mobile: Engine Initialized Successfully!");
     LOGI("worldonline Mobile Engine Initialized Successfully");
 }
@@ -3889,7 +3903,7 @@ static PyObject* mobileInput_FindNearestEnemyVID(PyObject* self, PyObject* args)
     return Py_BuildValue("i", (int)chosenVID);
 }
 
-#define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
+//#define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
 
 #ifdef ENABLE_MOBILE_PERF_DEBUGGER
 #include <time.h>
@@ -5163,18 +5177,53 @@ void AndroidStopMusic() {
 #endif
 }
 
-void AndroidPlayAudioFile(const char* c_szFileName, bool isLoopMusic, float volume) {
+struct SPendingSfxPlay {
+    int soundId;
+    float leftVol;
+    float rightVol;
+    float rate;
+    DWORD readyAtMs;
+};
+static std::vector<SPendingSfxPlay> s_pendingSfxPlays;
+static jobject s_soundPool = nullptr;
+static jmethodID s_spPlayMid = nullptr;
+
+static void FlushPendingAndroidSfx() {
+#ifndef __APPLE__
+    if (s_pendingSfxPlays.empty() || !g_pJavaVM || !s_soundPool || !s_spPlayMid)
+        return;
+    JNIEnv* env = nullptr;
+    if (g_pJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK || !env)
+        return;
+    DWORD nowMs = ELTimer_GetMSec();
+    for (size_t i = 0; i < s_pendingSfxPlays.size(); ) {
+        if (nowMs >= s_pendingSfxPlays[i].readyAtMs) {
+            const SPendingSfxPlay& p = s_pendingSfxPlays[i];
+            env->CallIntMethod(s_soundPool, s_spPlayMid, (jint)p.soundId, (jfloat)p.leftVol, (jfloat)p.rightVol, 1, 0, (jfloat)p.rate);
+            env->ExceptionClear();
+            s_pendingSfxPlays.erase(s_pendingSfxPlays.begin() + i);
+        } else {
+            ++i;
+        }
+    }
+#endif
+}
+
+static void AndroidPlayAudioInternal(const char* c_szFileName, bool isLoopMusic, float volume, float pan) {
 #ifndef __APPLE__
     if (!g_pJavaVM) return;
 #endif
     if (!c_szFileName || !*c_szFileName) return;
+    FlushPendingAndroidSfx();
+
     if (volume <= 0.001f) {
         if (isLoopMusic) AndroidSetMusicVolume(0.0f);
         return;
     }
     if (volume > 1.0f) volume = 1.0f;
+    if (pan < -1.0f) pan = -1.0f;
+    else if (pan > 1.0f) pan = 1.0f;
 
-    // Rate-limit sound effects BEFORE any EterPack decompression or file I/O!
     DWORD nowMs = ELTimer_GetMSec();
     if (!isLoopMusic) {
         static DWORD s_lastFrameMs = 0;
@@ -5183,7 +5232,7 @@ void AndroidPlayAudioFile(const char* c_szFileName, bool isLoopMusic, float volu
             s_lastFrameMs = nowMs;
             s_soundsThisWindow = 0;
         }
-        if (++s_soundsThisWindow > 3) return;
+        if (++s_soundsThisWindow > 4) return;
     }
 
 #ifndef __APPLE__
@@ -5203,7 +5252,7 @@ void AndroidPlayAudioFile(const char* c_szFileName, bool isLoopMusic, float volu
     if (itPath != s_resolvedPaths.end()) {
         diskPath = itPath->second;
     } else {
-        // Throttle new audio file disk extractions to at most 1 per 60ms to prevent lag-spike I/O freezes
+        // Throttle new audio file disk extractions to at most 1 per 60ms to prevent I/O lag spikes
         static DWORD s_lastExtractMs = 0;
         if (!isLoopMusic && (nowMs - s_lastExtractMs < 60))
             return;
@@ -5226,7 +5275,7 @@ void AndroidPlayAudioFile(const char* c_szFileName, bool isLoopMusic, float volu
             if (CEterPackManager::Instance().Get(file, c_szFileName, &pData) ||
                 CEterPackManager::Instance().Get(file, lowerPath.c_str(), &pData) ||
                 CEterPackManager::Instance().Get(file, dPath.c_str(), &pData)) {
-                if (pData && file.Size() > 0 && file.Size() < (isLoopMusic ? (32 * 1024 * 1024) : (512 * 1024))) {
+                if (pData && file.Size() > 0 && file.Size() < (isLoopMusic ? (48 * 1024 * 1024) : (512 * 1024))) {
                     if (FILE* fp = fopen(flatAbs.c_str(), "wb")) {
                         fwrite(pData, 1, file.Size(), fp);
                         fclose(fp);
@@ -5235,15 +5284,25 @@ void AndroidPlayAudioFile(const char* c_szFileName, bool isLoopMusic, float volu
                 }
             }
         }
+        // Always cache even when empty ("") so missing sound files never search EterPack again!
         s_resolvedPaths[lowerPath] = diskPath;
     }
     if (diskPath.empty()) return;
 
+    // Equal-power 3D stereo panning (Left / Right ear balance)
+    float leftVol  = volume * (pan > 0.0f ? (1.0f - pan * 0.75f) : 1.0f);
+    float rightVol = volume * (pan < 0.0f ? (1.0f + pan * 0.75f) : 1.0f);
+    static uint32_t s_pitchJitterCounter = 0;
+
 #ifdef __APPLE__
-    IOSPlayAudioFile(diskPath.c_str(), isLoopMusic, volume);
+    if (isLoopMusic) {
+        IOSPlayAudioFile(diskPath.c_str(), true, volume);
+    } else {
+        float rate = 1.0f + ((int)((++s_pitchJitterCounter) % 5) - 2) * 0.012f;
+        IOSPlayAudioFile3D(diskPath.c_str(), volume, pan, rate);
+    }
     return;
 #else
-
     if (isLoopMusic) {
         if (s_bgmPlayer && s_curBgmPath == diskPath) {
             AndroidSetMusicVolume(volume);
@@ -5253,17 +5312,49 @@ void AndroidPlayAudioFile(const char* c_szFileName, bool isLoopMusic, float volu
             AndroidStopMusic();
         }
         jclass mpCls = env->FindClass("android/media/MediaPlayer");
-        if (!mpCls) { env->ExceptionClear(); return; }
+        jclass fisCls = env->FindClass("java/io/FileInputStream");
+        if (!mpCls || !fisCls) {
+            env->ExceptionClear();
+            if (mpCls) env->DeleteLocalRef(mpCls);
+            if (fisCls) env->DeleteLocalRef(fisCls);
+            return;
+        }
         jobject mp = env->NewObject(mpCls, env->GetMethodID(mpCls, "<init>", "()V"));
         if (env->ExceptionCheck() || !mp) {
             env->ExceptionClear();
+            env->DeleteLocalRef(fisCls);
             env->DeleteLocalRef(mpCls);
             return;
         }
+
+        // Open FileInputStream in our app process and pass FileDescriptor so Android 10+ Scoped Storage never blocks MediaPlayer!
         jstring jpath = env->NewStringUTF(diskPath.c_str());
-        env->CallVoidMethod(mp, env->GetMethodID(mpCls, "setDataSource", "(Ljava/lang/String;)V"), jpath);
-        bool err = env->ExceptionCheck();
+        jmethodID fisCtor = env->GetMethodID(fisCls, "<init>", "(Ljava/lang/String;)V");
+        jmethodID getFdMid = env->GetMethodID(fisCls, "getFD", "()Ljava/io/FileDescriptor;");
+        jmethodID closeFisMid = env->GetMethodID(fisCls, "close", "()V");
+        jobject fisObj = fisCtor ? env->NewObject(fisCls, fisCtor, jpath) : nullptr;
+        bool err = env->ExceptionCheck() || !fisObj;
         env->ExceptionClear();
+
+        if (!err && fisObj) {
+            jobject fdObj = env->CallObjectMethod(fisObj, getFdMid);
+            err = env->ExceptionCheck() || !fdObj;
+            env->ExceptionClear();
+            if (!err && fdObj) {
+                jmethodID setDsFdMid = env->GetMethodID(mpCls, "setDataSource", "(Ljava/io/FileDescriptor;)V");
+                env->CallVoidMethod(mp, setDsFdMid, fdObj);
+                err = env->ExceptionCheck();
+                env->ExceptionClear();
+                env->DeleteLocalRef(fdObj);
+            }
+            env->CallVoidMethod(fisObj, closeFisMid);
+            env->ExceptionClear();
+            env->DeleteLocalRef(fisObj);
+        } else {
+            env->CallVoidMethod(mp, env->GetMethodID(mpCls, "setDataSource", "(Ljava/lang/String;)V"), jpath);
+            err = env->ExceptionCheck();
+            env->ExceptionClear();
+        }
         env->DeleteLocalRef(jpath);
 
         if (!err) {
@@ -5285,20 +5376,20 @@ void AndroidPlayAudioFile(const char* c_szFileName, bool isLoopMusic, float volu
             env->ExceptionClear();
         }
         env->DeleteLocalRef(mp);
+        env->DeleteLocalRef(fisCls);
         env->DeleteLocalRef(mpCls);
     } else {
-        struct SSfxEntry { int soundId; DWORD loadTimeMs; DWORD lastPlayMs; };
+        struct SSfxEntry { int soundId; DWORD loadTimeMs; DWORD lastPlayMs; int overlapCount; };
         static std::unordered_map<std::string, SSfxEntry> s_sfxMap;
-        static jobject s_soundPool = nullptr;
         static jmethodID s_loadMid = nullptr;
-        static jmethodID s_playMid = nullptr;
         static jmethodID s_unloadMid = nullptr;
 
         if (!s_soundPool) {
             jclass spCls = env->FindClass("android/media/SoundPool");
             if (!spCls) { env->ExceptionClear(); return; }
             jmethodID spCtor = env->GetMethodID(spCls, "<init>", "(III)V");
-            jobject sp = env->NewObject(spCls, spCtor, 8, 3, 0);
+            // 24 concurrent channels so multi-hit sword swings, skills, and monster sounds layer smoothly
+            jobject sp = env->NewObject(spCls, spCtor, 24, 3, 0);
             if (env->ExceptionCheck() || !sp) {
                 env->ExceptionClear();
                 env->DeleteLocalRef(spCls);
@@ -5306,7 +5397,7 @@ void AndroidPlayAudioFile(const char* c_szFileName, bool isLoopMusic, float volu
             }
             s_soundPool = env->NewGlobalRef(sp);
             s_loadMid = env->GetMethodID(spCls, "load", "(Ljava/lang/String;I)I");
-            s_playMid = env->GetMethodID(spCls, "play", "(IFFIIF)I");
+            s_spPlayMid = env->GetMethodID(spCls, "play", "(IFFIIF)I");
             s_unloadMid = env->GetMethodID(spCls, "unload", "(I)Z");
             env->DeleteLocalRef(sp);
             env->DeleteLocalRef(spCls);
@@ -5314,33 +5405,66 @@ void AndroidPlayAudioFile(const char* c_szFileName, bool isLoopMusic, float volu
 
         auto it = s_sfxMap.find(diskPath);
         if (it == s_sfxMap.end()) {
-            // Prevent SoundPool 1 MB internal AudioFlinger heap exhaustion by evicting stale samples
-            if (s_sfxMap.size() >= 48 && s_unloadMid) {
-                for (auto& kv : s_sfxMap) {
-                    if (kv.second.soundId > 0)
-                        env->CallBooleanMethod(s_soundPool, s_unloadMid, (jint)kv.second.soundId);
+            // LRU eviction of oldest single sound when cache reaches 80 entries (never wipe all sounds at once)
+            if (s_sfxMap.size() >= 80 && s_unloadMid) {
+                auto oldestIt = s_sfxMap.begin();
+                for (auto curIt = s_sfxMap.begin(); curIt != s_sfxMap.end(); ++curIt) {
+                    if (curIt->second.lastPlayMs < oldestIt->second.lastPlayMs)
+                        oldestIt = curIt;
                 }
-                env->ExceptionClear();
-                s_sfxMap.clear();
+                if (oldestIt->second.soundId > 0) {
+                    env->CallBooleanMethod(s_soundPool, s_unloadMid, (jint)oldestIt->second.soundId);
+                    env->ExceptionClear();
+                }
+                s_sfxMap.erase(oldestIt);
             }
             jstring jpath = env->NewStringUTF(diskPath.c_str());
             int id = (int)env->CallIntMethod(s_soundPool, s_loadMid, jpath, 1);
             env->ExceptionClear();
             env->DeleteLocalRef(jpath);
-            s_sfxMap[diskPath] = { id, nowMs, 0 };
+            s_sfxMap[diskPath] = { id, nowMs, nowMs, 0 };
+            if (id > 0 && s_pendingSfxPlays.size() < 16) {
+                s_pendingSfxPlays.push_back({ id, leftVol, rightVol, 1.0f, nowMs + 55 });
+            }
             return;
         }
 
         SSfxEntry& entry = it->second;
         if (entry.soundId <= 0) return;
-        if (nowMs - entry.loadTimeMs < 80) return;
-        if (nowMs - entry.lastPlayMs < 75) return;
+
+        DWORD dtMs = nowMs - entry.lastPlayMs;
+        // Only suppress exact duplicate triggers within < 10ms; allow colliding hits (10ms..70ms) to layer naturally!
+        if (dtMs < 10) return;
+
+        float rate = 1.0f;
+        if (dtMs < 85) {
+            entry.overlapCount = (entry.overlapCount + 1) & 3;
+            static const float s_overlapRates[4] = { 0.975f, 1.022f, 0.988f, 1.012f };
+            rate = s_overlapRates[entry.overlapCount];
+        } else {
+            entry.overlapCount = 0;
+        }
         entry.lastPlayMs = nowMs;
 
-        env->CallIntMethod(s_soundPool, s_playMid, (jint)entry.soundId, (jfloat)volume, (jfloat)volume, 1, 0, 1.0f);
+        if (nowMs - entry.loadTimeMs < 55) {
+            if (s_pendingSfxPlays.size() < 16) {
+                s_pendingSfxPlays.push_back({ entry.soundId, leftVol, rightVol, rate, entry.loadTimeMs + 55 });
+            }
+            return;
+        }
+
+        env->CallIntMethod(s_soundPool, s_spPlayMid, (jint)entry.soundId, (jfloat)leftVol, (jfloat)rightVol, 1, 0, (jfloat)rate);
         env->ExceptionClear();
     }
 #endif
+}
+
+void AndroidPlayAudioFile(const char* c_szFileName, bool isLoopMusic, float volume) {
+    AndroidPlayAudioInternal(c_szFileName, isLoopMusic, volume, 0.0f);
+}
+
+void AndroidPlayAudioFile3D(const char* c_szFileName, float volume, float pan) {
+    AndroidPlayAudioInternal(c_szFileName, false, volume, pan);
 }
 
 } // extern "C"

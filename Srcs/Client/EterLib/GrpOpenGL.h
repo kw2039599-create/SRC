@@ -2469,7 +2469,7 @@ inline HRESULT IDirect3DTexture8::UnlockRect(UINT Level) {
 		GLuint prevTex = (GetCurrentGLDevice() && GetCurrentGLDevice()->m_pBoundTextures[0])
 			? ((IDirect3DTexture8*)GetCurrentGLDevice()->m_pBoundTextures[0])->glId : 0;
 #ifdef __ANDROID__
-		const bool bNeedFullAlloc = (contextGen != g_AndroidGLContextGen || !glIsTexture(glId));
+		const bool bNeedFullAlloc = (contextGen != g_AndroidGLContextGen);
 		if (bNeedFullAlloc) {
 			glGenTextures(1, &glId);
 			if (GetCurrentGLDevice()) GetCurrentGLDevice()->m_BoundGLTexId[0] = 0xFFFFFFFFu;

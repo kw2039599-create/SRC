@@ -18,7 +18,7 @@ extern "C" int g_AndroidPhysWidth;
 extern "C" int g_AndroidPhysHeight;
 extern "C" uint32_t g_AndroidGLContextGen = 1;
 
-#define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
+//#define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
 
 #ifdef ENABLE_MOBILE_PERF_DEBUGGER
 #include <time.h>
@@ -1182,27 +1182,8 @@ namespace {
     }
 
     void EnsureProgramInitialized() {
-        if (s_bProgramsInitialized) {
-            if (s_progs[0].prog != 0 && glIsProgram(s_progs[0].prog))
-                return;
-            // OpenGL ES context was recreated (e.g. split-screen / surface resize)!
-            ++g_AndroidGLContextGen;
-            s_curProg = NULL;
-            s_enabledAttribMask = 0;
-            s_curArrayBuffer = 0;
-            s_curElementArrayBuffer = 0;
-            s_lastAttrVbo = 0;
-            s_lastAttrFvf = 0xFFFFFFFFu;
-            s_lastAttrStride = 0xFFFFFFFFu;
-            s_upVbo = 0;
-            s_upIbo = 0;
-            if (IDirect3DDevice8* dev = GetCurrentGLDevice()) {
-                dev->m_pCurrentRenderTargetTex = NULL;
-                for (int i = 0; i < 8; ++i) dev->m_BoundGLTexId[i] = 0xFFFFFFFFu;
-                dev->m_DirtyFlags = 0xFFFFFFFFu;
-            }
-            LOGI("OpenGL ES context recreation detected (gen=%u) — rebuilding shaders & GPU resources", g_AndroidGLContextGen);
-        }
+        if (s_bProgramsInitialized)
+            return;
         s_bProgramsInitialized = true;
 
         GLuint vs0 = CompileShader(GL_VERTEX_SHADER, vShaderMode0);
@@ -1651,11 +1632,8 @@ HRESULT IDirect3DDevice8::SetRenderTarget(LPDIRECT3DSURFACE8 pRenderTarget, LPDI
             tex->glFbo = 0;
             tex->glDepthRbo = 0;
             tex->contextGen = g_AndroidGLContextGen;
-        } else if (tex->glFbo && !glIsFramebuffer(tex->glFbo)) {
-            tex->glFbo = 0;
-            tex->glDepthRbo = 0;
         }
-        if (!tex->glId || !glIsTexture(tex->glId)) {
+        if (!tex->glId) {
             int w = (tex->width > 0 && tex->width <= 8192) ? tex->width : 256;
             int h = (tex->height > 0 && tex->height <= 8192) ? tex->height : 256;
             glActiveTexture(GL_TEXTURE0);
@@ -1924,7 +1902,7 @@ HRESULT IDirect3DDevice8::SetTexture(DWORD Stage, LPDIRECT3DBaseTexture8 pTextur
     if (Stage >= 8) return S_OK;
 
     IDirect3DTexture8* tex = (IDirect3DTexture8*)pTexture;
-    if (tex && (tex->contextGen != g_AndroidGLContextGen || !tex->glId || !glIsTexture(tex->glId))) {
+    if (tex && (tex->contextGen != g_AndroidGLContextGen || !tex->glId)) {
         if (!tex->m_rgbaBackup.empty()) {
             int w = (tex->width > 0 && tex->width <= 8192) ? tex->width : 256;
             int h = (tex->height > 0 && tex->height <= 8192) ? tex->height : 256;

@@ -349,12 +349,23 @@ void CPythonSystem::SetDefaultConfig()
 #ifdef ENABLE_OFFLINESHOP_SYSTEM
 	m_Config.shopnames_range = 10.0f;
 #endif
+	#ifdef __ANDROID__
+	m_Config.music_volume		= 0.1f;
+	m_Config.voice_volume		= 1;
+	m_Config.iGraphicsLevel		= 0;
+	m_Config.iShadowQualityLevel = 0;
+	m_Config.iTerrainShadow		= 0;
+	m_Config.iTreeShadow		= 0;
+	m_Config.iRainLevel			= 0;
+	m_Config.iShadowLevel		= 0;
+#else
 	m_Config.music_volume		= 1.0f;
 	m_Config.voice_volume		= 5;
+	m_Config.iShadowLevel		= 3;
+#endif
 
 	m_Config.bDecompressDDS		= 0;
 	m_Config.bSoftwareTiling	= 0;
-	m_Config.iShadowLevel		= 3;
 #ifdef ENABLE_FOV_OPTION
     m_Config.iFOVLevel            = 30.0f;
 #endif
@@ -371,10 +382,17 @@ void CPythonSystem::SetDefaultConfig()
 	m_Config.bIsFogModeEnabled	= true;
 #endif
 #if defined(__BL_ENVIRONMENT_EFFECT_OPTION__)
+#ifdef __ANDROID__
+	m_Config.bNightMode			= false;
+	m_Config.bSnowMode			= false;
+	m_Config.bSnowTextureMode	= false;
+	m_Config.bRainMode			= false;
+#else
 	m_Config.bNightMode			= true;
 	m_Config.bSnowMode			= true;
 	m_Config.bSnowTextureMode	= true;
 	m_Config.bRainMode			= false;
+#endif
 #endif
 #if defined(WJ_SHOW_MOB_INFO) && defined(ENABLE_SHOW_MOBAIFLAG)
 	m_Config.bShowMobAIFlag		= true;

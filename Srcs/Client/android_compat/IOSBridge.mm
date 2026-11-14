@@ -164,43 +164,60 @@ extern "C" void IOSStopMusic() {
     }
 }
 
-extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float volume) {
-    if (!diskPath || !*diskPath) return;
+extern "C" void IOSPlayAudioFile3D(const char* diskPath, float volume, float pan, float rate) {
+    if (!diskPath || !*diskPath || volume <= 0.001f) return;
     @autoreleasepool {
         NSString* pathStr = [NSString stringWithUTF8String:diskPath];
         NSURL* url = [NSURL fileURLWithPath:pathStr];
         if (!url) return;
 
-        if (isLoopMusic) {
-            if (s_bgmAudioPlayer && s_curBgmPath && [s_curBgmPath isEqualToString:pathStr]) {
-                s_bgmAudioPlayer.volume = volume;
-                return;
+        if (!s_activeSfxPlayers) s_activeSfxPlayers = [[NSMutableArray alloc] init];
+        for (NSInteger i = (NSInteger)s_activeSfxPlayers.count - 1; i >= 0; --i) {
+            if (!s_activeSfxPlayers[i].isPlaying) {
+                [s_activeSfxPlayers removeObjectAtIndex:i];
             }
-            IOSStopMusic();
-            NSError* err = nil;
-            s_bgmAudioPlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:url error:&err];
-            if (s_bgmAudioPlayer && !err) {
-                s_bgmAudioPlayer.numberOfLoops = -1;
-                s_bgmAudioPlayer.volume = volume;
-                [s_bgmAudioPlayer prepareToPlay];
-                [s_bgmAudioPlayer play];
-                s_curBgmPath = pathStr;
+        }
+        if (s_activeSfxPlayers.count >= 24) return;
+        NSError* err = nil;
+        AVAudioPlayer* sfx = [[AVAudioPlayer alloc] initWithContentsOfURL:url error:&err];
+        if (sfx && !err) {
+            sfx.volume = (volume > 1.0f) ? 1.0f : volume;
+            sfx.pan = (pan < -1.0f) ? -1.0f : ((pan > 1.0f) ? 1.0f : pan);
+            if (fabsf(rate - 1.0f) > 0.005f) {
+                sfx.enableRate = YES;
+                sfx.rate = rate;
             }
-        } else {
-            if (!s_activeSfxPlayers) s_activeSfxPlayers = [[NSMutableArray alloc] init];
-            for (NSInteger i = (NSInteger)s_activeSfxPlayers.count - 1; i >= 0; --i) {
-                if (!s_activeSfxPlayers[i].isPlaying) {
-                    [s_activeSfxPlayers removeObjectAtIndex:i];
-                }
-            }
-            if (s_activeSfxPlayers.count >= 8) return;
-            NSError* err = nil;
-            AVAudioPlayer* sfx = [[AVAudioPlayer alloc] initWithContentsOfURL:url error:&err];
-            if (sfx && !err) {
-                sfx.volume = volume;
-                [sfx play];
-                [s_activeSfxPlayers addObject:sfx];
-            }
+            [sfx play];
+            [s_activeSfxPlayers addObject:sfx];
+        }
+    }
+}
+
+extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float volume) {
+    if (!diskPath || !*diskPath) return;
+    if (!isLoopMusic) {
+        IOSPlayAudioFile3D(diskPath, volume, 0.0f, 1.0f);
+        return;
+    }
+    @autoreleasepool {
+        NSString* pathStr = [NSString stringWithUTF8String:diskPath];
+        NSURL* url = [NSURL fileURLWithPath:pathStr];
+        if (!url) return;
+
+        if (s_bgmAudioPlayer && s_curBgmPath && [s_curBgmPath isEqualToString:pathStr]) {
+            s_bgmAudioPlayer.volume = volume;
+            if (!s_bgmAudioPlayer.isPlaying) [s_bgmAudioPlayer play];
+            return;
+        }
+        IOSStopMusic();
+        NSError* err = nil;
+        s_bgmAudioPlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:url error:&err];
+        if (s_bgmAudioPlayer && !err) {
+            s_bgmAudioPlayer.numberOfLoops = -1;
+            s_bgmAudioPlayer.volume = volume;
+            [s_bgmAudioPlayer prepareToPlay];
+            [s_bgmAudioPlayer play];
+            s_curBgmPath = pathStr;
         }
     }
 }

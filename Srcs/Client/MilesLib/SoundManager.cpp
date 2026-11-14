@@ -10,8 +10,11 @@ CSoundManager3D CSoundManager::ms_SoundManager3D;
 CSoundManagerStream CSoundManager::ms_SoundManagerStream;
 #ifdef __ANDROID__
 extern "C" void AndroidPlayAudioFile(const char* c_szFileName, bool isLoopMusic, float volume);
+extern "C" void AndroidPlayAudioFile3D(const char* c_szFileName, float volume, float pan);
 extern "C" void AndroidSetMusicVolume(float volume);
 extern "C" void AndroidStopMusic();
+static float s_fAndroidListenerDirX = 0.0f;
+static float s_fAndroidListenerDirY = 1.0f;
 #endif
 
 CSoundManager::CSoundManager()
@@ -84,6 +87,13 @@ void CSoundManager::SetPosition(float fx, float fy, float fz)
 
 void CSoundManager::SetDirection(float fxDir, float fyDir, float fzDir, float fxUp, float fyUp, float fzUp)
 {
+#ifdef __ANDROID__
+	float fLen = sqrtf(fxDir * fxDir + fyDir * fyDir);
+	if (fLen > 0.001f) {
+		s_fAndroidListenerDirX = fxDir / fLen;
+		s_fAndroidListenerDirY = fyDir / fLen;
+	}
+#endif
 	ms_SoundManager3D.SetListenerDirection(fxDir, fyDir, fzDir, fxUp, fyUp, fzUp);
 }
 
@@ -110,11 +120,15 @@ void CSoundManager::Update()
 					rMusicInstance.MusicState = MUSIC_STATE_PLAY;
 				}
 
+#ifdef __ANDROID__
+				AndroidSetMusicVolume(rMusicInstance.fVolume);
+#else
 				{
 					CSoundInstanceStream * pInstance = ms_SoundManagerStream.GetInstance(i);
 					if (pInstance)
 						pInstance->SetVolume(rMusicInstance.fVolume);
 				}
+#endif
 				break;
 
 			case MUSIC_STATE_FADE_LIMIT_OUT:
@@ -125,11 +139,15 @@ void CSoundManager::Update()
 					rMusicInstance.fVolumeSpeed = 0.0f;
 					rMusicInstance.MusicState = MUSIC_STATE_PLAY;
 				}
+#ifdef __ANDROID__
+				AndroidSetMusicVolume(rMusicInstance.fVolume);
+#else
 				{
 					CSoundInstanceStream * pInstance = ms_SoundManagerStream.GetInstance(i);
 					if (pInstance)
 						pInstance->SetVolume(rMusicInstance.fVolume);
 				}
+#endif
 				break;
 			case MUSIC_STATE_FADE_OUT:
 				rMusicInstance.fVolume -= rMusicInstance.fVolumeSpeed;
@@ -141,11 +159,18 @@ void CSoundManager::Update()
 
 					StopMusic(i);
 				}
+#ifdef __ANDROID__
+				else
+				{
+					AndroidSetMusicVolume(rMusicInstance.fVolume);
+				}
+#else
 				{
 					CSoundInstanceStream * pInstance = ms_SoundManagerStream.GetInstance(i);
 					if (pInstance)
 						pInstance->SetVolume(rMusicInstance.fVolume);
 				}
+#endif
 				break;
 		}
 	}
@@ -335,16 +360,46 @@ void CSoundManager::PlaySound2D(const char * c_szFileName)
 	pInstance->Play(1);
 }
 
+#ifdef __ANDROID__
+static void PlayMobilePositional3DSound(float fx, float fy, float fz, float lx, float ly, float lz, float scale, float baseVol, const char* c_szFileName)
+{
+	if (baseVol <= 0.001f || !c_szFileName || !*c_szFileName)
+		return;
+	float fdx = fx - lx;
+	float fdy = fy - ly;
+	float fdz = fz - lz;
+	float fDist = sqrtf(fdx * fdx + fdy * fdy + fdz * fdz);
+	float maxDist = (scale > 500.0f) ? 3500.0f : 2600.0f;
+	if (fDist > maxDist)
+		return;
+
+	// Miles Fast 2D Positional Audio distance curve: full volume inside minDist, smooth inverse-distance rolloff outside
+	float minDist = (scale > 500.0f) ? 350.0f : 220.0f;
+	float effDist = (fDist > minDist) ? (fDist - minDist) : 0.0f;
+	float rolloff = 1.0f / (1.0f + (effDist / (minDist * 2.2f)) * (effDist / (minDist * 2.2f)));
+	float linearFade = 1.0f - (fDist / maxDist);
+	float fAtten = rolloff * linearFade;
+	if (fAtten <= 0.01f)
+		return;
+
+	// Compute 3D stereo pan (-0.75 left .. +0.75 right) from camera right vector (s_fAndroidListenerDirY, -s_fAndroidListenerDirX)
+	float rightX = s_fAndroidListenerDirY;
+	float rightY = -s_fAndroidListenerDirX;
+	float sideProj = fdx * rightX + fdy * rightY;
+	float pan = sideProj / 650.0f;
+	if (pan < -0.75f) pan = -0.75f;
+	else if (pan > 0.75f) pan = 0.75f;
+
+	AndroidPlayAudioFile3D(c_szFileName, baseVol * fAtten, pan);
+}
+#endif
+
 void CSoundManager::PlaySound3D(float fx, float fy, float fz, const char * c_szFileName, int iPlayCount)
 {
 	if (0.0f == GetSoundVolume())
 		return;
 #ifdef __ANDROID__
-	float fdx = fx - m_fxPosition, fdy = fy - m_fyPosition, fdz = fz - m_fzPosition;
-	float fDistSq = fdx * fdx + fdy * fdy + fdz * fdz;
-	if (fDistSq > 2500.0f * 2500.0f) return;
-	float fAtten = 1.0f / (1.0f + fDistSq / (350.0f * 350.0f));
-	AndroidPlayAudioFile(c_szFileName, false, GetSoundVolume() * fAtten);
+	PlayMobilePositional3DSound(fx, fy, fz, m_fxPosition, m_fyPosition, m_fzPosition, m_fSoundScale, GetSoundVolume(), c_szFileName);
 	return;
 #endif
 
@@ -368,6 +423,9 @@ int CSoundManager::PlayAmbienceSound3D(float fx, float fy, float fz, const char 
 {
 	if (0.0f == GetSoundVolume())
 		return -1;
+#ifdef __ANDROID__
+	return -1;
+#endif
 
 	int iIndex = ms_SoundManager3D.SetInstance(c_szFileName);
 	if (-1 == iIndex)
@@ -405,7 +463,7 @@ void CSoundManager::PlayCharacterSound3D(float fx, float fy, float fz, const cha
 		if (m_PlaySoundHistoryMap.end() != itor)
 		{
 			float fTime = itor->second;
-			if (CTimer::Instance().GetCurrentSecond() - fTime < 0.3f)
+			if (CTimer::Instance().GetCurrentSecond() - fTime < 0.04f)
 			{
 				return;
 			}
@@ -416,11 +474,7 @@ void CSoundManager::PlayCharacterSound3D(float fx, float fy, float fz, const cha
 	}
 
 #ifdef __ANDROID__
-	float fdx = fx - m_fxPosition, fdy = fy - m_fyPosition, fdz = fz - m_fzPosition;
-	float fDistSq = fdx * fdx + fdy * fdy + fdz * fdz;
-	if (fDistSq > 2500.0f * 2500.0f) return;
-	float fAtten = 1.0f / (1.0f + fDistSq / (350.0f * 350.0f));
-	AndroidPlayAudioFile(c_szFileName, false, GetSoundVolume() * fAtten);
+	PlayMobilePositional3DSound(fx, fy, fz, m_fxPosition, m_fyPosition, m_fzPosition, m_fSoundScale, GetSoundVolume(), c_szFileName);
 	return;
 #endif
 
@@ -613,9 +667,20 @@ void CSoundManager::PlayMusic(DWORD dwIndex, const char * c_szFileName, float fV
 	if (dwIndex >= CSoundManagerStream::MUSIC_INSTANCE_MAX_NUM)
 		return;
 #ifdef __ANDROID__
-	AndroidPlayAudioFile(c_szFileName, true, GetMusicVolume());
+	for (int i = 0; i < CSoundManagerStream::MUSIC_INSTANCE_MAX_NUM; ++i)
+	{
+		if ((DWORD)i != dwIndex)
+		{
+			m_MusicInstances[i].fVolume = 0.0f;
+			m_MusicInstances[i].fVolumeSpeed = 0.0f;
+			m_MusicInstances[i].MusicState = MUSIC_STATE_OFF;
+			m_MusicInstances[i].dwMusicFileNameCRC = 0;
+		}
+	}
+	float targetVol = GetMusicVolume();
+	AndroidPlayAudioFile(c_szFileName, true, targetVol);
 	TMusicInstance & rAndroidMusicInst = m_MusicInstances[dwIndex];
-	rAndroidMusicInst.fVolume = GetMusicVolume();
+	rAndroidMusicInst.fVolume = targetVol;
 	rAndroidMusicInst.fVolumeSpeed = fVolumeSpeed;
 	rAndroidMusicInst.MusicState = MUSIC_STATE_PLAY;
 	std::string strAndroidFileName;
@@ -655,12 +720,24 @@ void CSoundManager::StopMusic(DWORD dwIndex)
 	if (dwIndex >= CSoundManagerStream::MUSIC_INSTANCE_MAX_NUM)
 		return;
 #ifdef __ANDROID__
-	AndroidStopMusic();
 	TMusicInstance & rAndroidMusicInstance = m_MusicInstances[dwIndex];
 	rAndroidMusicInstance.fVolume = 0.0f;
 	rAndroidMusicInstance.fVolumeSpeed = 0.0f;
 	rAndroidMusicInstance.MusicState = MUSIC_STATE_OFF;
 	rAndroidMusicInstance.dwMusicFileNameCRC = 0;
+
+	bool anyOtherPlaying = false;
+	for (int i = 0; i < CSoundManagerStream::MUSIC_INSTANCE_MAX_NUM; ++i)
+	{
+		if (m_MusicInstances[i].MusicState == MUSIC_STATE_PLAY ||
+			m_MusicInstances[i].MusicState == MUSIC_STATE_FADE_IN)
+		{
+			anyOtherPlaying = true;
+			break;
+		}
+	}
+	if (!anyOtherPlaying)
+		AndroidStopMusic();
 	return;
 #endif
 

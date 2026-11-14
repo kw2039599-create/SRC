@@ -328,6 +328,13 @@ void CActorInstance::SetLoopMotion(DWORD dwMotion, float fBlendTime, float fSpee
 	}
 
 	MOTION_KEY dwMotionKey;
+#ifdef __ANDROID__
+	if (dwMotion == CRaceMotionData::NAME_INTRO_WAIT)
+	{
+		if (!m_pkCurRaceData->GetMotionKey(m_wcurMotionMode, dwMotion, &dwMotionKey) || !CheckMotionThingIndex(dwMotionKey))
+			dwMotion = CRaceMotionData::NAME_WAIT;
+	}
+#endif
 	if (!m_pkCurRaceData->GetMotionKey(m_wcurMotionMode, dwMotion, &dwMotionKey))
 	{
 		#ifdef ENABLE_WALK_RUN_ANI_ALTERNATIVE
@@ -335,17 +342,10 @@ void CActorInstance::SetLoopMotion(DWORD dwMotion, float fBlendTime, float fSpee
 		#endif
 		{
 #ifdef __ANDROID__
-			const WORD wFallbackMode = __IsMountingHorse() ? CRaceMotionData::MODE_HORSE : m_wcurMotionMode;
-			bool bFoundFallback = m_pkCurRaceData->GetMotionKey(wFallbackMode, dwMotion, &dwMotionKey);
-			if (!bFoundFallback && (m_kCurMotNode.iMotionType == MOTION_TYPE_NONE || dwMotion == CRaceMotionData::NAME_WAIT))
-			{
-				bFoundFallback = m_pkCurRaceData->GetMotionKey(wFallbackMode, CRaceMotionData::NAME_WAIT, &dwMotionKey);
-				if (!bFoundFallback && !__IsMountingHorse())
-					bFoundFallback = m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey);
-			}
-			if (!bFoundFallback)
+			if (!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, dwMotion, &dwMotionKey) &&
+				!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey))
 #endif
-				return;
+			return;
 		}
 		#ifdef ENABLE_WALK_RUN_ANI_ALTERNATIVE
 		else if (m_pkCurRaceData->GetMotionKey(CRaceMotionData::NAME_RUN, dwMotion, &dwMotionKey))
@@ -359,17 +359,8 @@ void CActorInstance::SetLoopMotion(DWORD dwMotion, float fBlendTime, float fSpee
 #ifdef __ANDROID__
 	if (GetMotionDuration(dwMotionKey) <= 0.001f)
 	{
-		const WORD wFallbackMode = __IsMountingHorse() ? CRaceMotionData::MODE_HORSE : m_wcurMotionMode;
-		if (!m_pkCurRaceData->GetMotionKey(wFallbackMode, dwMotion, &dwMotionKey) || GetMotionDuration(dwMotionKey) <= 0.001f)
-		{
-			if (m_kCurMotNode.iMotionType != MOTION_TYPE_NONE && dwMotion != CRaceMotionData::NAME_WAIT)
-				return;
-			if (!m_pkCurRaceData->GetMotionKey(wFallbackMode, CRaceMotionData::NAME_WAIT, &dwMotionKey) || GetMotionDuration(dwMotionKey) <= 0.001f)
-			{
-				if (__IsMountingHorse() || !m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey))
-					return;
-			}
-		}
+		if (!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, dwMotion, &dwMotionKey) || GetMotionDuration(dwMotionKey) <= 0.001f)
+			m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey);
 	}
 #endif
 
@@ -409,38 +400,25 @@ bool CActorInstance::InterceptMotion(EMotionPushType iMotionType, WORD wMotion, 
 	if (!m_pkCurRaceData->GetMotionKey(m_wcurMotionMode, wMotion, &dwMotionKey))
 	{
 #ifdef __ANDROID__
-		const WORD wFallbackMode = __IsMountingHorse() ? CRaceMotionData::MODE_HORSE : m_wcurMotionMode;
-		bool bFoundFallback = (wMotion != CRaceMotionData::NAME_SPAWN) &&
-		                      m_pkCurRaceData->GetMotionKey(wFallbackMode, wMotion, &dwMotionKey) &&
-		                      (GetMotionDuration(dwMotionKey) > 0.001f);
-
-		if (!bFoundFallback && (m_kCurMotNode.iMotionType == MOTION_TYPE_NONE || wMotion == CRaceMotionData::NAME_WAIT))
+		if (wMotion == CRaceMotionData::NAME_SPAWN)
 		{
 			iMotionType = MOTION_TYPE_LOOP;
 			wMotion = CRaceMotionData::NAME_WAIT;
-			bFoundFallback = m_pkCurRaceData->GetMotionKey(wFallbackMode, CRaceMotionData::NAME_WAIT, &dwMotionKey);
-			if (!bFoundFallback && !__IsMountingHorse())
-				bFoundFallback = m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey);
 		}
-		if (!bFoundFallback)
+		if (!m_pkCurRaceData->GetMotionKey(m_wcurMotionMode, wMotion, &dwMotionKey) &&
+			!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, wMotion, &dwMotionKey) &&
+			!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey))
 #endif
-			return false;
+		return false;
 	}
 #ifdef __ANDROID__
 	if (GetMotionDuration(dwMotionKey) <= 0.001f)
 	{
-		const WORD wFallbackMode = __IsMountingHorse() ? CRaceMotionData::MODE_HORSE : m_wcurMotionMode;
-		if (!m_pkCurRaceData->GetMotionKey(wFallbackMode, wMotion, &dwMotionKey) || GetMotionDuration(dwMotionKey) <= 0.001f)
+		if (!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, wMotion, &dwMotionKey) || GetMotionDuration(dwMotionKey) <= 0.001f)
 		{
-			if (m_kCurMotNode.iMotionType != MOTION_TYPE_NONE && wMotion != CRaceMotionData::NAME_WAIT && wMotion != CRaceMotionData::NAME_SPAWN)
-				return false;
 			iMotionType = MOTION_TYPE_LOOP;
 			wMotion = CRaceMotionData::NAME_WAIT;
-			if (!m_pkCurRaceData->GetMotionKey(wFallbackMode, CRaceMotionData::NAME_WAIT, &dwMotionKey) || GetMotionDuration(dwMotionKey) <= 0.001f)
-			{
-				if (__IsMountingHorse() || !m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey))
-					return false;
-			}
+			m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey);
 		}
 	}
 #endif
@@ -801,26 +779,6 @@ DWORD CActorInstance::__SetMotion(const SSetMotionData& c_rkSetMotData, DWORD dw
 	{
 		WORD wMotionIndex = GET_MOTION_INDEX(dwMotKey);
 		WORD wMotionSubIndex = GET_MOTION_SUB_INDEX(dwMotKey);
-#ifdef __ANDROID__
-#ifdef ENABLE_STANDING_MOUNT
-		if (!IS_SURFBOARD(m_pkHorse->GetRace()) && GET_MOTION_MODE(dwMotKey) == CRaceMotionData::MODE_GENERAL && m_pkCurRaceData)
-#else
-		if (GET_MOTION_MODE(dwMotKey) == CRaceMotionData::MODE_GENERAL && m_pkCurRaceData)
-#endif
-		{
-			const WORD wHorseMode = (m_wcurMotionMode != CRaceMotionData::MODE_GENERAL) ? m_wcurMotionMode : (WORD)CRaceMotionData::MODE_HORSE;
-			MOTION_KEY dwHorseRiderKey = 0;
-			if ((m_pkCurRaceData->GetMotionKey(wHorseMode, wMotionIndex, &dwHorseRiderKey) && GetMotionDuration(dwHorseRiderKey) > 0.001f) ||
-				(m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_HORSE, wMotionIndex, &dwHorseRiderKey) && GetMotionDuration(dwHorseRiderKey) > 0.001f) ||
-				(m_pkCurRaceData->GetMotionKey(wHorseMode, CRaceMotionData::NAME_WAIT, &dwHorseRiderKey) && GetMotionDuration(dwHorseRiderKey) > 0.001f) ||
-				m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_HORSE, CRaceMotionData::NAME_WAIT, &dwHorseRiderKey))
-			{
-				dwMotKey = GetRandomMotionKey(dwHorseRiderKey);
-				wMotionIndex = GET_MOTION_INDEX(dwMotKey);
-				wMotionSubIndex = GET_MOTION_SUB_INDEX(dwMotKey);
-			}
-		}
-#endif
 		DWORD dwChildMotKey = MAKE_RANDOM_MOTION_KEY(m_pkHorse->m_wcurMotionMode, wMotionIndex, wMotionSubIndex);
 
 		if (CRaceMotionData::NAME_DEAD == wMotionIndex)
