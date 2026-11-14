@@ -78,8 +78,13 @@ def prepare_bundle():
     os.makedirs('Assets.xcassets/AppIcon.appiconset', exist_ok=True)
     icons = [('icon40.png',40,'iphone','20x20','2x'),('icon60.png',60,'iphone','20x20','3x'),('icon58.png',58,'iphone','29x29','2x'),('icon87.png',87,'iphone','29x29','3x'),('icon80.png',80,'iphone','40x40','2x'),('icon120a.png',120,'iphone','40x40','3x'),('icon120.png',120,'iphone','60x60','2x'),('icon180.png',180,'iphone','60x60','3x'),('icon76.png',76,'ipad','76x76','1x'),('icon152.png',152,'ipad','76x76','2x'),('icon167.png',167,'ipad','83.5x83.5','2x'),('icon1024.png',1024,'ios-marketing','1024x1024','1x')]
     imgs = []
+    src_icon = 'app_icon.png' if os.path.exists('app_icon.png') else ('app_icon.jpg' if os.path.exists('app_icon.jpg') else None)
     for fn, sz, idiom, size_s, scale in icons:
-        open(f'Assets.xcassets/AppIcon.appiconset/{fn}', 'wb').write(make_png(sz, sz))
+        out_p = f'Assets.xcassets/AppIcon.appiconset/{fn}'
+        if src_icon:
+            subprocess.check_call(['/usr/bin/sips', '-s', 'format', 'png', '-z', str(sz), str(sz), src_icon, '--out', out_p], stdout=subprocess.DEVNULL)
+        else:
+            open(out_p, 'wb').write(make_png(sz, sz))
         imgs.append({'filename': fn, 'idiom': idiom, 'size': size_s, 'scale': scale})
     open('Assets.xcassets/AppIcon.appiconset/Contents.json', 'w').write(json.dumps({'images': imgs, 'info': {'version': 1, 'author': 'xcode'}}))
     subprocess.check_call(['xcrun', 'actool', 'Assets.xcassets', '--compile', APP_PATH, '--platform', 'iphoneos', '--minimum-deployment-target', '15.0', '--app-icon', 'AppIcon', '--output-partial-info-plist', 'partial_icons.plist'])

@@ -25,7 +25,6 @@ extern "C" {
 
 @implementation WorldOnlineHiddenTextField
 - (void)deleteBackward {
-    [super deleteBackward];
     Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
 }
 @end
@@ -360,13 +359,9 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
 }
 
 - (BOOL)textField:(UITextField*)textField shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString*)string {
-    if (string.length == 0) {
-        Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
-    } else {
-        for (NSUInteger i = 0; i < string.length; ++i) {
-            unichar ch = [string characterAtIndex:i];
-            Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 0, (int)ch);
-        }
+    for (NSUInteger i = 0; i < string.length; ++i) {
+        unichar ch = [string characterAtIndex:i];
+        Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 0, (int)ch);
     }
     return NO;
 }
