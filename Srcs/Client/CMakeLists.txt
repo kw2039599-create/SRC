@@ -1,13 +1,13 @@
 cmake_minimum_required(VERSION 3.10.2)
-project("Metin2Mobile")
+project("WorldOnline")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector -fsigned-char -fms-extensions -fno-autolink -ferror-limit=0 -Wno-pragma-pack -Wno-invalid-token-paste -Wno-register")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector -fsigned-char -fms-extensions -fno-autolink -ferror-limit=0 -Wno-pragma-pack -Wno-invalid-token-paste")
-set(CMAKE_C_FLAGS_DEBUG "-O3 -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector" CACHE STRING "" FORCE)
-set(CMAKE_CXX_FLAGS_DEBUG "-O3 -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector" CACHE STRING "" FORCE)
-add_compile_options(-O3 -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -g0 -fvisibility=hidden -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector -fsigned-char -fms-extensions -fno-autolink -ferror-limit=0 -Wno-pragma-pack -Wno-invalid-token-paste -Wno-register")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g0 -fvisibility=hidden -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector -fsigned-char -fms-extensions -fno-autolink -ferror-limit=0 -Wno-pragma-pack -Wno-invalid-token-paste")
+set(CMAKE_C_FLAGS_DEBUG "-O3 -g0 -fvisibility=hidden -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_DEBUG "-O3 -g0 -fvisibility=hidden -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector" CACHE STRING "" FORCE)
+add_compile_options(-O3 -g0 -fvisibility=hidden -fno-strict-aliasing -fno-math-errno -fno-trapping-math -fno-stack-protector)
 
 add_definitions(-DENABLE_OPENGL)
 add_definitions(-DENABLE_MOBILE_CONTROLS)
@@ -519,7 +519,7 @@ file(GLOB SPEED_TREE_LIB_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/SpeedTreeLib/*.cpp
 file(GLOB PR_TERRAIN_LIB_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/PRTerrainLib/*.cpp")
 file(GLOB ETER_LOCALE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/EterLocale/*.cpp")
 
-set(METIN2_ALL_SOURCES
+set(WORLDONLINE_ALL_SOURCES
     ${USER_INTERFACE_SOURCES}
     ${ETER_BASE_SOURCES}
     ${ETER_LIB_SOURCES}
@@ -540,7 +540,7 @@ set(METIN2_ALL_SOURCES
 if(APPLE)
     set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     set(MOBILE_TARGET world_mobile)
-    add_executable(${MOBILE_TARGET} MACOSX_BUNDLE ${METIN2_ALL_SOURCES})
+    add_executable(${MOBILE_TARGET} MACOSX_BUNDLE ${WORLDONLINE_ALL_SOURCES})
 
     # Bundle trailer.mp4 directly into the iOS .app for instant first-boot playback
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/trailer.mp4")
@@ -551,10 +551,10 @@ if(APPLE)
     endif()
 
     set_target_properties(world_mobile PROPERTIES
-        OUTPUT_NAME "M2WorldOnline"
+        OUTPUT_NAME "WorldOnline"
         XCODE_ATTRIBUTE_GCC_STRICT_ALIASING NO
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.m2world.online"
-        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.m2world.online"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.worldonline.client"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.worldonline.client"
         MACOSX_BUNDLE_BUNDLE_NAME "World Online"
         XCODE_ATTRIBUTE_INFOPLIST_KEY_CFBundleDisplayName "World Online"
         XCODE_ATTRIBUTE_INFOPLIST_KEY_NSMicrophoneUsageDescription "Microphone access is required for in-game voice chat."
@@ -571,8 +571,8 @@ if(APPLE)
         "XCODE_ATTRIBUTE_INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=ipad*]" "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     )
 else()
-    set(MOBILE_TARGET metin2_mobile)
-    add_library(${MOBILE_TARGET} SHARED ${METIN2_ALL_SOURCES})
+    set(MOBILE_TARGET worldonline)
+    add_library(${MOBILE_TARGET} SHARED ${WORLDONLINE_ALL_SOURCES})
 
     # Automatically copy trailer.mp4 into Android's assets/ folder during build
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/trailer.mp4")
@@ -654,7 +654,7 @@ if(ANDROID)
         z
         m
     )
-    target_link_options(${MOBILE_TARGET} PRIVATE "-Wl,-error-limit=0" "-Wl,--export-dynamic")
+    target_link_options(${MOBILE_TARGET} PRIVATE "-Wl,-error-limit=0" "-Wl,--strip-all")
 elseif(APPLE)
     set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     target_link_libraries(${MOBILE_TARGET}
@@ -672,6 +672,8 @@ elseif(APPLE)
         "-framework CoreMedia"
         "-framework AudioToolbox"
         "-Wl,-no_fixup_chains"
+        "-Wl,-S"
+        "-Wl,-x"
         z
         m
     )

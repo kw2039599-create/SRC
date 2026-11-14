@@ -390,7 +390,13 @@ void CPythonApplication::RenderGame()
 		++s_dwAndroidOffscreenPassTick;
 
 		// 1. Render offscreen reflections & shadow maps BEFORE starting PostProcessing or pushing main game state
-		if (Frustum::instance().graphicsWaterLevel == 2)
+#ifdef __ANDROID__
+		if (Frustum::Instance().graphicsLevel > 0 && Frustum::Instance().graphicsWaterLevel < 2)
+			Frustum::Instance().graphicsWaterLevel = 2;
+		else if (Frustum::Instance().graphicsLevel == 0)
+			Frustum::Instance().graphicsWaterLevel = 0;
+#endif
+		if (Frustum::Instance().graphicsWaterLevel == 2)
 		{
 			m_pyBackground.GetUnderwaterCamera();
 #ifdef __ANDROID__
@@ -413,6 +419,23 @@ void CPythonApplication::RenderGame()
 		}
 
 		STATEMANAGER.SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+#ifdef __ANDROID__
+		if (Frustum::instance().graphicsLevel != 0)
+		{
+			m_pyBackground.RenderCharacterShadowToTexture();
+			m_pyBackground.RenderCharacterShadowToTexture3();
+			m_pyBackground.RenderCharacterShadowToTexture4();
+		}
+		else
+		{
+			if (CCamera* pCurCam = CCameraManager::Instance().GetCurrentCamera())
+			{
+				pCurCam->SetViewParams(pCurCam->GetEye(), pCurCam->GetTarget(), pCurCam->GetUp());
+				STATEMANAGER.SetTransform(D3DTS_VIEW, &pCurCam->GetViewMatrix());
+			}
+			m_pyBackground.RenderCharacterShadowToTextureOriginal();
+		}
+#else
 		m_pyBackground.RenderCharacterShadowToTexture();
 		if (Frustum::instance().graphicsLevel != 0)
 		{
@@ -423,6 +446,7 @@ void CPythonApplication::RenderGame()
 		{
 			m_pyBackground.RenderCharacterShadowToTextureOriginal();
 		}
+#endif
 		STATEMANAGER.SetRenderState(D3DRS_CULLMODE, D3DCULL_CW);
 
 

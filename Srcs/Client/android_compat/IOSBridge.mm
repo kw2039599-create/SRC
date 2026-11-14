@@ -14,23 +14,23 @@
 #include <stdint.h>
 
 extern "C" {
-    void Java_com_metin2_client_NativeLib_init(void* env, void* obj, void* assetManager, int width, int height);
-    void Java_com_metin2_client_NativeLib_render(void* env, void* obj);
-    void Java_com_metin2_client_NativeLib_multiTouchEvent(void* env, void* obj, int pointerId, int action, float x, float y);
-    void Java_com_metin2_client_NativeLib_keyEvent(void* env, void* obj, int keyCode, int unicodeChar);
+    void Java_com_worldonline_client_NativeLib_init(void* env, void* obj, void* assetManager, int width, int height);
+    void Java_com_worldonline_client_NativeLib_render(void* env, void* obj);
+    void Java_com_worldonline_client_NativeLib_multiTouchEvent(void* env, void* obj, int pointerId, int action, float x, float y);
+    void Java_com_worldonline_client_NativeLib_keyEvent(void* env, void* obj, int keyCode, int unicodeChar);
 }
 
-@interface Metin2HiddenTextField : UITextField
+@interface WorldOnlineHiddenTextField : UITextField
 @end
 
-@implementation Metin2HiddenTextField
+@implementation WorldOnlineHiddenTextField
 - (void)deleteBackward {
     [super deleteBackward];
-    Java_com_metin2_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
+    Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
 }
 @end
 
-static Metin2HiddenTextField* s_hiddenTextField = nil;
+static WorldOnlineHiddenTextField* s_hiddenTextField = nil;
 static AVAudioPlayer* s_bgmAudioPlayer = nil;
 static NSString* s_curBgmPath = nil;
 static NSMutableArray<AVAudioPlayer*>* s_activeSfxPlayers = nil;
@@ -209,11 +209,11 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
 // ============================================================================
 // iOS GLKViewController Hosting OpenGL ES 3.0 + Multi-Touch Forwarding
 // ============================================================================
-@interface Metin2IOSViewController : GLKViewController <UITextFieldDelegate>
+@interface WorldOnlineIOSViewController : GLKViewController <UITextFieldDelegate>
 @property (strong, nonatomic) EAGLContext* context;
 @end
 
-@implementation Metin2IOSViewController {
+@implementation WorldOnlineIOSViewController {
     UITouch* _touchSlots[4];
     bool _engineInitialized;
 }
@@ -237,7 +237,7 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
     view.layer.opaque = YES;
     self.preferredFramesPerSecond = 60;
 
-    s_hiddenTextField = [[Metin2HiddenTextField alloc] initWithFrame:CGRectMake(-100, -100, 10, 10)];
+    s_hiddenTextField = [[WorldOnlineHiddenTextField alloc] initWithFrame:CGRectMake(-100, -100, 10, 10)];
     s_hiddenTextField.delegate = self;
     s_hiddenTextField.autocorrectionType = UITextAutocorrectionTypeNo;
     s_hiddenTextField.autocapitalizationType = UITextAutocapitalizationTypeNone;
@@ -294,11 +294,11 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
         }
         if (physW > 0 && physH > 0) {
             _engineInitialized = true;
-            Java_com_metin2_client_NativeLib_init(nullptr, nullptr, nullptr, physW, physH);
+            Java_com_worldonline_client_NativeLib_init(nullptr, nullptr, nullptr, physW, physH);
         }
         return;
     }
-    Java_com_metin2_client_NativeLib_render(nullptr, nullptr);
+    Java_com_worldonline_client_NativeLib_render(nullptr, nullptr);
 }
 
 - (int)slotForTouch:(UITouch*)touch allocate:(bool)alloc {
@@ -329,7 +329,7 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
         int pid = [self slotForTouch:t allocate:true];
         CGPoint pt = [t locationInView:self.view];
         int action = (prevCount == 0) ? 0 : 5;
-        Java_com_metin2_client_NativeLib_multiTouchEvent(nullptr, nullptr, pid, action, (float)(pt.x * scale), (float)(pt.y * scale));
+        Java_com_worldonline_client_NativeLib_multiTouchEvent(nullptr, nullptr, pid, action, (float)(pt.x * scale), (float)(pt.y * scale));
     }
 }
 
@@ -338,7 +338,7 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
     for (UITouch* t in touches) {
         int pid = [self slotForTouch:t allocate:false];
         CGPoint pt = [t locationInView:self.view];
-        Java_com_metin2_client_NativeLib_multiTouchEvent(nullptr, nullptr, pid, 2, (float)(pt.x * scale), (float)(pt.y * scale));
+        Java_com_worldonline_client_NativeLib_multiTouchEvent(nullptr, nullptr, pid, 2, (float)(pt.x * scale), (float)(pt.y * scale));
     }
 }
 
@@ -350,29 +350,29 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
         int remCount = [self activeTouchCount];
         CGPoint pt = [t locationInView:self.view];
         int action = (remCount == 0) ? 1 : 6;
-        Java_com_metin2_client_NativeLib_multiTouchEvent(nullptr, nullptr, pid, action, (float)(pt.x * scale), (float)(pt.y * scale));
+        Java_com_worldonline_client_NativeLib_multiTouchEvent(nullptr, nullptr, pid, action, (float)(pt.x * scale), (float)(pt.y * scale));
     }
 }
 
 - (void)touchesCancelled:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
     for (int i = 0; i < 4; ++i) _touchSlots[i] = nil;
-    Java_com_metin2_client_NativeLib_multiTouchEvent(nullptr, nullptr, 0, 3, 0.0f, 0.0f);
+    Java_com_worldonline_client_NativeLib_multiTouchEvent(nullptr, nullptr, 0, 3, 0.0f, 0.0f);
 }
 
 - (BOOL)textField:(UITextField*)textField shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString*)string {
     if (string.length == 0) {
-        Java_com_metin2_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
+        Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
     } else {
         for (NSUInteger i = 0; i < string.length; ++i) {
             unichar ch = [string characterAtIndex:i];
-            Java_com_metin2_client_NativeLib_keyEvent(nullptr, nullptr, 0, (int)ch);
+            Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 0, (int)ch);
         }
     }
     return NO;
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField*)textField {
-    Java_com_metin2_client_NativeLib_keyEvent(nullptr, nullptr, 66, 13);
+    Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 66, 13);
     [textField resignFirstResponder];
     return YES;
 }
@@ -381,18 +381,19 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
 // ============================================================================
 // World Online iOS Patcher (Fullscreen Looping trailer.mp4 + Arabic UI)
 // ============================================================================
-static UIColor* Metin2ColorHex(unsigned int rgb) {
+static UIColor* WorldOnlineColorHex(unsigned int rgb) {
     return [UIColor colorWithRed:((rgb >> 16) & 0xFF) / 255.0f
                            green:((rgb >> 8) & 0xFF) / 255.0f
                             blue:(rgb & 0xFF) / 255.0f
                            alpha:1.0f];
 }
+#define Metin2ColorHex WorldOnlineColorHex
 
 static NSString* const kPatchBaseUrl = @"https://pub-9d9b6f14e1f345c98cb2d231a3471077.r2.dev/";
-static NSString* const kPatchCachePrefKey = @"metin2_patch_cache_v1";
+static NSString* const kPatchCachePrefKey = @"worldonline_patch_cache_v1";
 static NSString* const kTrailerFileName = @"trailer.mp4";
 
-@interface Metin2PatcherViewController : UIViewController
+@interface WorldOnlinePatcherViewController : UIViewController
 @property (nonatomic, strong) AVPlayer* videoPlayer;
 @property (nonatomic, strong) AVPlayerLayer* videoLayer;
 @property (nonatomic, strong) CAGradientLayer* vignetteLayer;
@@ -404,7 +405,7 @@ static NSString* const kTrailerFileName = @"trailer.mp4";
 @property (nonatomic, assign) BOOL isWorkerRunning;
 @end
 
-@implementation Metin2PatcherViewController
+@implementation WorldOnlinePatcherViewController
 
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -849,7 +850,7 @@ static NSString* const kTrailerFileName = @"trailer.mp4";
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250000000LL), dispatch_get_main_queue(), ^{
         chdir([base UTF8String]);
-        setenv("METIN2_IOS_DOCS_DIR", [base UTF8String], 1);
+        setenv("WORLDONLINE_IOS_DOCS_DIR", [base UTF8String], 1);
         NSString* crashPath = [base stringByAppendingPathComponent:@"crash_report.txt"];
         if ([[NSFileManager defaultManager] fileExistsAtPath:crashPath]) {
             NSData* d = [NSData dataWithContentsOfFile:crashPath];
@@ -865,7 +866,7 @@ static NSString* const kTrailerFileName = @"trailer.mp4";
                 [[NSFileManager defaultManager] removeItemAtPath:crashPath error:nil];
                 [self stopAndReleaseVideo];
                 UIWindow* w = [UIApplication sharedApplication].delegate.window ?: [UIApplication sharedApplication].windows.firstObject;
-                w.rootViewController = [[Metin2IOSViewController alloc] init];
+                w.rootViewController = [[WorldOnlineIOSViewController alloc] init];
                 [w makeKeyAndVisible];
             }]];
             [self presentViewController:al animated:YES completion:nil];
@@ -874,7 +875,7 @@ static NSString* const kTrailerFileName = @"trailer.mp4";
         [self stopAndReleaseVideo];
         UIWindow* w = [UIApplication sharedApplication].delegate.window;
         if (!w) w = [UIApplication sharedApplication].windows.firstObject;
-        w.rootViewController = [[Metin2IOSViewController alloc] init];
+        w.rootViewController = [[WorldOnlineIOSViewController alloc] init];
         [w makeKeyAndVisible];
     });
 }
@@ -883,17 +884,17 @@ static NSString* const kTrailerFileName = @"trailer.mp4";
 - (BOOL)prefersStatusBarHidden { return YES; }
 @end
 
-@interface Metin2AppDelegate : UIResponder <UIApplicationDelegate>
+@interface WorldOnlineAppDelegate : UIResponder <UIApplicationDelegate>
 @property (nonatomic, strong) UIWindow* window;
 @end
 
-@implementation Metin2AppDelegate
+@implementation WorldOnlineAppDelegate
 - (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
     NSString* docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
     chdir([docs UTF8String]);
-    setenv("METIN2_IOS_DOCS_DIR", [docs UTF8String], 1);
+    setenv("WORLDONLINE_IOS_DOCS_DIR", [docs UTF8String], 1);
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    self.window.rootViewController = [[Metin2PatcherViewController alloc] init];
+    self.window.rootViewController = [[WorldOnlinePatcherViewController alloc] init];
     [self.window makeKeyAndVisible];
     return YES;
 }
@@ -905,7 +906,7 @@ static NSString* const kTrailerFileName = @"trailer.mp4";
 
 int main(int argc, char* argv[]) {
     @autoreleasepool {
-        return UIApplicationMain(argc, argv, nil, NSStringFromClass([Metin2AppDelegate class]));
+        return UIApplicationMain(argc, argv, nil, NSStringFromClass([WorldOnlineAppDelegate class]));
     }
 }
 #endif

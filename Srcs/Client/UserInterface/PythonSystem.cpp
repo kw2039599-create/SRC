@@ -618,11 +618,17 @@ bool CPythonSystem::IsUseDefaultIME()
 	return m_Config.bUseDefaultIME;
 }
 
+#ifdef __ANDROID__
+static const char* kSystemConfigFileName = "worldonline.cfg";
+#else
+static const char* kSystemConfigFileName = "metin2.cfg";
+#endif
+
 bool CPythonSystem::LoadConfig()
 {
 	FILE * fp = NULL;
 
-	if (NULL == (fp = fopen("metin2.cfg", "rt")))
+	if (NULL == (fp = fopen(kSystemConfigFileName, "rt")))
 		return false;
 
 	char buf[256];
@@ -795,7 +801,7 @@ bool CPythonSystem::SaveConfig()
 {
 	FILE *fp;
 
-	if (NULL == (fp = fopen("metin2.cfg", "wt")))
+	if (NULL == (fp = fopen(kSystemConfigFileName, "wt")))
 		return false;
 
 	fprintf(fp, "WIDTH						%d\n"

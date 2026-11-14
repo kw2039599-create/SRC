@@ -979,8 +979,13 @@ void CGraphicTextInstance::Render(RECT * pClipRect)
 			}
 #endif
 
+#ifdef __ANDROID__
+			fFontSx = floorf(fCurX);
+			fFontSy = floorf(fCurY);
+#else
 			fFontSx = fCurX - 0.5f;
 			fFontSy = fCurY - 0.5f;
+#endif
 			fFontEx = fFontSx + fFontWidth;
 			fFontEy = fFontSy + fFontHeight;
 

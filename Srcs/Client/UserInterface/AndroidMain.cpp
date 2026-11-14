@@ -32,7 +32,7 @@
 #include <android/log.h>
 #include <android/asset_manager.h>
 #include <android/asset_manager_jni.h>
-#define LOG_TAG "Metin2Mobile"
+#define LOG_TAG "WorldOnline"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #else
@@ -44,10 +44,10 @@ typedef float jfloat;
 typedef unsigned char jboolean;
 typedef void JavaVM;
 typedef void AAssetManager;
-#define JNIEXPORT extern "C"
+#define JNIEXPORT extern "C" __attribute__((visibility("default")))
 #define JNICALL
-#define LOGI(...) do { fprintf(stdout, "[Metin2iOS] "); fprintf(stdout, __VA_ARGS__); fprintf(stdout, "\n"); } while(0)
-#define LOGE(...) do { fprintf(stderr, "[Metin2iOS ERR] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
+#define LOGI(...) do { fprintf(stdout, "[WorldOnline] "); fprintf(stdout, __VA_ARGS__); fprintf(stdout, "\n"); } while(0)
+#define LOGE(...) do { fprintf(stderr, "[WorldOnline ERR] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
 
 extern "C" {
     bool IOSDecodeImageFromMemory(const void* data, unsigned int size, unsigned int* outW, unsigned int* outH, std::vector<uint32_t>& outBGRA);
@@ -130,7 +130,7 @@ static ObjcIMP s_origCustomViewDeleteBackward = nullptr;
 static ObjcClass s_hookedCustomKeyInputCls = nullptr;
 static volatile uint32_t s_uIosBackspaceEventCount = 0;
 
-extern "C" void Java_com_metin2_client_NativeLib_keyEvent(JNIEnv* env, jobject obj, jint keyCode, jint unicodeChar);
+extern "C" void Java_com_worldonline_client_NativeLib_keyEvent(JNIEnv* env, jobject obj, jint keyCode, jint unicodeChar);
 
 static void Hooked_UITextField_deleteBackward(ObjcId self, ObjcSEL _cmd) {
     uint32_t before = s_uIosBackspaceEventCount;
@@ -138,7 +138,7 @@ static void Hooked_UITextField_deleteBackward(ObjcId self, ObjcSEL _cmd) {
         ((void(*)(ObjcId, ObjcSEL))s_origUITextFieldDeleteBackward)(self, _cmd);
     }
     if (s_uIosBackspaceEventCount == before) {
-        Java_com_metin2_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
+        Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
     }
 }
 
@@ -148,7 +148,7 @@ static void Hooked_UITextView_deleteBackward(ObjcId self, ObjcSEL _cmd) {
         ((void(*)(ObjcId, ObjcSEL))s_origUITextViewDeleteBackward)(self, _cmd);
     }
     if (s_uIosBackspaceEventCount == before) {
-        Java_com_metin2_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
+        Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
     }
 }
 
@@ -158,7 +158,7 @@ static void Hooked_CustomView_deleteBackward(ObjcId self, ObjcSEL _cmd) {
         ((void(*)(ObjcId, ObjcSEL))s_origCustomViewDeleteBackward)(self, _cmd);
     }
     if (s_uIosBackspaceEventCount == before) {
-        Java_com_metin2_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
+        Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
     }
 }
 
@@ -699,13 +699,49 @@ void MobileVoiceChat_Destroy() {
     s_bMobileVoiceInitialized = false;
 }
 
+#ifdef __APPLE__
+extern "C" void* _NSConcreteGlobalBlock[];
+struct IOSPermBlockDescriptor {
+    unsigned long reserved;
+    unsigned long size;
+};
+struct IOSPermBlockLiteral {
+    void* isa;
+    int flags;
+    int reserved;
+    void (*invoke)(void*, bool);
+    const IOSPermBlockDescriptor* descriptor;
+};
+static void OnIOSRecordPermBlockInvoke(void* /*block*/, bool granted) {
+    s_bMobileVoicePermGranted = granted;
+}
+static const IOSPermBlockDescriptor s_iosPermBlockDesc = { 0, sizeof(IOSPermBlockLiteral) };
+static IOSPermBlockLiteral s_iosPermBlock = {
+    _NSConcreteGlobalBlock,
+    (1 << 28) | (1 << 29), // BLOCK_IS_GLOBAL
+    0,
+    OnIOSRecordPermBlockInvoke,
+    &s_iosPermBlockDesc
+};
+#endif
+
 bool MobileVoiceChat_RequestPermission() {
 #if !defined(__APPLE__)
     return CheckOrRequestAndroidMicPermission();
 #else
     if (!LoadIOSAudioToolboxSymbols() || !ConfigureIOSAudioSessionForVoice()) return false;
-    // Creating and immediately disposing a test input queue triggers the native iOS Microphone Permission prompt
-    // even when the user selects "Push to Talk" before holding the talk button.
+    if (EnsureObjcRuntimeLoaded()) {
+        if (ObjcClass sessCls = s_objc_getClass("AVAudioSession")) {
+            ObjcId session = ((ObjcId(*)(ObjcId, ObjcSEL))s_objc_msgSend)((ObjcId)sessCls, s_sel_registerName("sharedInstance"));
+            if (session) {
+                ObjcSEL respSel = s_sel_registerName("respondsToSelector:");
+                ObjcSEL reqPermSel = s_sel_registerName("requestRecordPermission:");
+                if (((bool(*)(ObjcId, ObjcSEL, ObjcSEL))s_objc_msgSend)(session, respSel, reqPermSel)) {
+                    ((void(*)(ObjcId, ObjcSEL, void*))s_objc_msgSend)(session, reqPermSel, (void*)&s_iosPermBlock);
+                }
+            }
+        }
+    }
     if (!s_bMobileVoicePermGranted && !s_iosInputQueue) {
         IOSAudioStreamBasicDescription fmt{};
         fmt.mSampleRate = 32000.0;
@@ -718,6 +754,12 @@ bool MobileVoiceChat_RequestPermission() {
         fmt.mBitsPerChannel = 16;
         IOSAudioQueueRef tmpQ = nullptr;
         if (s_pfnAQNewInput(&fmt, IOSVoiceInputCallback, nullptr, nullptr, nullptr, 0, &tmpQ) == 0 && tmpQ) {
+            IOSAudioQueueBufferRef buf = nullptr;
+            if (s_pfnAQAllocBuf(tmpQ, 1600 * sizeof(int16_t), &buf) == 0 && buf) {
+                s_pfnAQEnqueueBuf(tmpQ, buf, 0, nullptr);
+            }
+            s_pfnAQStart(tmpQ, nullptr);
+            s_pfnAQStop(tmpQ, 1);
             s_pfnAQDispose(tmpQ, 1);
             s_bMobileVoicePermGranted = true;
         }
@@ -884,6 +926,8 @@ bool AndroidDecodeImageFromMemory(const void* data, unsigned int size, unsigned 
 #endif
 }
 
+LOGFONTA g_AndroidActiveLogFont = { -12, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, "Tahoma" };
+
 bool AndroidRenderCharGlyph(int fontSize, unsigned short ch, int* outW, int* outH, int* outAdv, uint32_t* outPixels64) {
 #ifndef __APPLE__
     if (!g_pJavaVM) return false;
@@ -894,12 +938,16 @@ bool AndroidRenderCharGlyph(int fontSize, unsigned short ch, int* outW, int* out
     if (pxSize < 11) pxSize = 12;
     if (pxSize > 40) pxSize = 40;
 
+    const bool bIsBold  = (g_AndroidActiveLogFont.lfWeight >= 600);
+    const bool bIsArial = (strcasestr(g_AndroidActiveLogFont.lfFaceName, "Arial") != nullptr);
+    const uint32_t styleMask = (bIsBold ? 0x8000u : 0u) | (bIsArial ? 0x4000u : 0u);
+
     struct SGlyphCacheEntry {
         int w, h, adv;
         std::vector<uint32_t> rows; // 64 * h pixels
     };
     static std::unordered_map<uint32_t, SGlyphCacheEntry> s_glyphCache;
-    uint32_t key = ((uint32_t)pxSize << 16) | (uint32_t)ch;
+    uint32_t key = (((uint32_t)pxSize | styleMask) << 16) | (uint32_t)ch;
     auto it = s_glyphCache.find(key);
     if (it != s_glyphCache.end()) {
         const SGlyphCacheEntry& e = it->second;
@@ -920,21 +968,53 @@ bool AndroidRenderCharGlyph(int fontSize, unsigned short ch, int* outW, int* out
     if (g_pJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK || !env) return false;
 
     static jobject s_paint = nullptr, s_bmp = nullptr, s_canvas = nullptr;
+    static jobject s_tfTahomaNorm = nullptr, s_tfTahomaBold = nullptr;
+    static jobject s_tfArialNorm = nullptr, s_tfArialBold = nullptr;
     static jintArray s_pixArr = nullptr;
-    static jmethodID s_setTextSize = nullptr, s_measureText = nullptr, s_ascent = nullptr, s_descent = nullptr;
+    static jmethodID s_setTextSize = nullptr, s_setFakeBoldText = nullptr, s_setTypeface = nullptr;
+    static jmethodID s_measureText = nullptr, s_ascent = nullptr, s_descent = nullptr;
     static jmethodID s_drawText = nullptr, s_eraseColor = nullptr, s_getPixels = nullptr;
     static int s_lastPxSize = -1;
+    static uint32_t s_lastStyleMask = 0xFFFFFFFFu;
 
     if (!s_paint) {
         jclass paintCls = env->FindClass("android/graphics/Paint");
         jmethodID paintCtor = env->GetMethodID(paintCls, "<init>", "(I)V");
-        jobject p = env->NewObject(paintCls, paintCtor, 1 | 128); // ANTI_ALIAS_FLAG | SUBPIXEL_TEXT_FLAG
+        // Use ANTI_ALIAS_FLAG (1) ONLY — do NOT set SUBPIXEL_TEXT_FLAG (128) so FreeType stem hinting stays razor-sharp
+        jobject p = env->NewObject(paintCls, paintCtor, 1);
         env->CallVoidMethod(p, env->GetMethodID(paintCls, "setColor", "(I)V"), (jint)0xFFFFFFFF);
+        jmethodID setHintingMid = env->GetMethodID(paintCls, "setHinting", "(I)V");
+        if (setHintingMid) env->CallVoidMethod(p, setHintingMid, (jint)1); // HINTING_ON
+        env->ExceptionClear();
+
         s_paint = env->NewGlobalRef(p);
         s_setTextSize = env->GetMethodID(paintCls, "setTextSize", "(F)V");
+        s_setFakeBoldText = env->GetMethodID(paintCls, "setFakeBoldText", "(Z)V");
+        s_setTypeface = env->GetMethodID(paintCls, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;");
         s_measureText = env->GetMethodID(paintCls, "measureText", "(Ljava/lang/String;)F");
         s_ascent = env->GetMethodID(paintCls, "ascent", "()F");
         s_descent = env->GetMethodID(paintCls, "descent", "()F");
+
+        jclass tfCls = env->FindClass("android/graphics/Typeface");
+        if (tfCls) {
+            jmethodID createMid = env->GetStaticMethodID(tfCls, "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;");
+            if (createMid) {
+                jstring jTahoma = env->NewStringUTF("sans-serif");
+                jstring jArial  = env->NewStringUTF("sans-serif");
+                jobject tfTN = env->CallStaticObjectMethod(tfCls, createMid, jTahoma, (jint)0);
+                jobject tfTB = env->CallStaticObjectMethod(tfCls, createMid, jTahoma, (jint)1);
+                jobject tfAN = env->CallStaticObjectMethod(tfCls, createMid, jArial,  (jint)0);
+                jobject tfAB = env->CallStaticObjectMethod(tfCls, createMid, jArial,  (jint)1);
+                if (tfTN) { s_tfTahomaNorm = env->NewGlobalRef(tfTN); env->DeleteLocalRef(tfTN); }
+                if (tfTB) { s_tfTahomaBold = env->NewGlobalRef(tfTB); env->DeleteLocalRef(tfTB); }
+                if (tfAN) { s_tfArialNorm  = env->NewGlobalRef(tfAN); env->DeleteLocalRef(tfAN); }
+                if (tfAB) { s_tfArialBold  = env->NewGlobalRef(tfAB); env->DeleteLocalRef(tfAB); }
+                env->DeleteLocalRef(jTahoma);
+                env->DeleteLocalRef(jArial);
+                env->ExceptionClear();
+            }
+            env->DeleteLocalRef(tfCls);
+        }
 
         jclass bmpCls = env->FindClass("android/graphics/Bitmap");
         jclass cfgCls = env->FindClass("android/graphics/Bitmap$Config");
@@ -961,6 +1041,19 @@ bool AndroidRenderCharGlyph(int fontSize, unsigned short ch, int* outW, int* out
         s_lastPxSize = pxSize;
         env->CallVoidMethod(s_paint, s_setTextSize, (jfloat)pxSize);
     }
+    if (s_lastStyleMask != styleMask) {
+        s_lastStyleMask = styleMask;
+        if (s_setFakeBoldText)
+            env->CallVoidMethod(s_paint, s_setFakeBoldText, (jboolean)(bIsBold ? JNI_TRUE : JNI_FALSE));
+        jobject targetTf = bIsArial ? (bIsBold ? s_tfArialBold : s_tfArialNorm)
+                                    : (bIsBold ? s_tfTahomaBold : s_tfTahomaNorm);
+        if (s_setTypeface && targetTf) {
+            jobject prevTf = env->CallObjectMethod(s_paint, s_setTypeface, targetTf);
+            if (prevTf) env->DeleteLocalRef(prevTf);
+        }
+        env->ExceptionClear();
+    }
+
     jchar jc = (jchar)ch;
     jstring jstr = env->NewString(&jc, 1);
     jfloat adv = env->CallFloatMethod(s_paint, s_measureText, jstr);
@@ -977,7 +1070,7 @@ bool AndroidRenderCharGlyph(int fontSize, unsigned short ch, int* outW, int* out
     *outAdv = (int)ceilf(adv);
 
     env->CallVoidMethod(s_bmp, s_eraseColor, (jint)0);
-    env->CallVoidMethod(s_canvas, s_drawText, jstr, 0.5f, -ascent + 0.5f, s_paint);
+    env->CallVoidMethod(s_canvas, s_drawText, jstr, 0.0f, ceilf(-ascent), s_paint);
     env->CallVoidMethod(s_bmp, s_getPixels, s_pixArr, 0, 64, 0, 0, 64, h);
     env->GetIntArrayRegion(s_pixArr, 0, 64 * h, (jint*)outPixels64);
 
@@ -1104,7 +1197,7 @@ static void AndroidCrashHandler(int sig, siginfo_t* info, void* ucontext) {
     int fd = open("crash_report.txt", O_WRONLY | O_CREAT | O_TRUNC, 0666);
 
     WriteCrashLine(fd, "====================================================");
-    WriteCrashLine(fd, "=== METIN2 iOS NATIVE CRASH & MEMORY DEBUG REPORT ===");
+    WriteCrashLine(fd, "=== WORLD ONLINE NATIVE CRASH & MEMORY REPORT ===");
     WriteCrashLine(fd, "====================================================");
     WriteCrashLine(fd, "Signal      : %d -> %s", sig, SignalName(sig, info ? info->si_code : 0));
     WriteCrashLine(fd, "Fault Addr  : %p (si_code=%d, errno=%d)", info ? info->si_addr : nullptr, info ? info->si_code : 0, info ? info->si_errno : 0);
@@ -1228,12 +1321,70 @@ static const char* GetMobileBaseDir() {
 #ifdef __APPLE__
     return IOSGetDocumentsDirectory();
 #else
-    return "/sdcard/Android/data/com.metin2.client/files";
+    static std::string s_cachedBaseDir;
+    if (!s_cachedBaseDir.empty())
+        return s_cachedBaseDir.c_str();
+    if (g_pJavaVM) {
+        JNIEnv* env = nullptr;
+        if (g_pJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_OK && env) {
+            jclass atCls = env->FindClass("android/app/ActivityThread");
+            if (atCls) {
+                jmethodID curAppMid = env->GetStaticMethodID(atCls, "currentApplication", "()Landroid/app/Application;");
+                jobject appObj = curAppMid ? env->CallStaticObjectMethod(atCls, curAppMid) : nullptr;
+                env->ExceptionClear();
+                if (appObj) {
+                    jclass ctxCls = env->GetObjectClass(appObj);
+                    jmethodID getExtMid = env->GetMethodID(ctxCls, "getExternalFilesDir", "(Ljava/lang/String;)Ljava/io/File;");
+                    jobject fileObj = getExtMid ? env->CallObjectMethod(appObj, getExtMid, nullptr) : nullptr;
+                    env->ExceptionClear();
+                    if (fileObj) {
+                        jclass fileCls = env->GetObjectClass(fileObj);
+                        jmethodID getPathMid = env->GetMethodID(fileCls, "getAbsolutePath", "()Ljava/lang/String;");
+                        jstring pathStr = getPathMid ? (jstring)env->CallObjectMethod(fileObj, getPathMid) : nullptr;
+                        env->ExceptionClear();
+                        if (pathStr) {
+                            const char* utf = env->GetStringUTFChars(pathStr, nullptr);
+                            if (utf && *utf) s_cachedBaseDir = utf;
+                            if (utf) env->ReleaseStringChars(pathStr, (const jchar*)utf);
+                            env->DeleteLocalRef(pathStr);
+                        }
+                        env->DeleteLocalRef(fileCls);
+                        env->DeleteLocalRef(fileObj);
+                    }
+                    env->DeleteLocalRef(ctxCls);
+                    env->DeleteLocalRef(appObj);
+                }
+                env->DeleteLocalRef(atCls);
+            }
+        }
+    }
+    if (!s_cachedBaseDir.empty())
+        return s_cachedBaseDir.c_str();
+    if (access("/sdcard/Android/data/com.worldonline.client/files", F_OK) == 0)
+        return "/sdcard/Android/data/com.worldonline.client/files";
+    return "/sdcard/Android/data/com.worldonline.client/files";
 #endif
 }
 
-JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobject obj, jobject assetManager, jint width, jint height) {
-    LOGI("Initializing Metin2 Mobile Engine (%dx%d)", width, height);
+extern "C" uint32_t g_AndroidGLContextGen;
+
+JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, jobject obj, jobject assetManager, jint width, jint height) {
+    if (s_bEngineReady) {
+        if (width > 0 && height > 0) {
+            g_AndroidPhysWidth = (int)width;
+            g_AndroidPhysHeight = (int)height;
+            glViewport(0, 0, (GLsizei)width, (GLsizei)height);
+        }
+        if (IDirect3DDevice8* dev = GetCurrentGLDevice()) {
+            dev->m_pCurrentRenderTargetTex = NULL;
+            for (int i = 0; i < 8; ++i) dev->m_BoundGLTexId[i] = 0xFFFFFFFFu;
+            dev->m_DirtyFlags = 0xFFFFFFFFu;
+        }
+        LOGI("WorldOnline surface resized (%dx%d) — keeping active session (ctxGen=%u)", width, height, g_AndroidGLContextGen);
+        return;
+    }
+
+    LOGI("Initializing WorldOnline Engine (%dx%d)", width, height);
     srand((unsigned int)time(NULL) ^ (unsigned int)getpid());
 	if (width > 0 && height > 0) {
         g_AndroidPhysWidth = (int)width;
@@ -1244,7 +1395,8 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
     }
     s_bEngineReady = false;
     
-    #if !defined(__APPLE__)
+#if !defined(__APPLE__)
+    env->GetJavaVM(&g_pJavaVM);
     g_pAssetManager = AAssetManager_fromJava(env, assetManager);
 #else
     (void)env; (void)obj; (void)assetManager;
@@ -1272,15 +1424,15 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
     env->GetJavaVM(&g_pJavaVM);
 #endif
 
-    if (width > 0 && height > 0 && access("metin2.cfg", F_OK) != 0) {
-        if (FILE* cfgFp = fopen("metin2.cfg", "wb")) {
+    if (width > 0 && height > 0 && access("worldonline.cfg", F_OK) != 0) {
+        if (FILE* cfgFp = fopen("worldonline.cfg", "wb")) {
             fprintf(cfgFp, "WIDTH\t\t\t\t\t\t%d\nHEIGHT\t\t\t\t\t\t%d\nBPP\t\t\t\t\t\t32\nFREQUENCY\t\t\t\t\t60\nSOFTWARE_CURSOR\t\t\t0\nSOFTWARE_TILING\t\t\t0\nOBJECT_CULLING\t\t\t\t1\nVISIBILITY\t\t\t\t\t3\nMUSIC_VOLUME\t\t\t\t0.000\nVOICE_VOLUME\t\t\t\t0\nGAMMA\t\t\t\t\t\t3\nIS_SAVE_ID\t\t\t\t\t0\nSAVE_ID\t\t\t\t\t0\nDECOMPRESSED_TEXTURE\t\t0\nWINDOWED\t\t\t\t\t1\n", (int)width, (int)height);
             fclose(cfgFp);
         }
     }
 	if (access("audio_init_v1.flag", F_OK) != 0) {
         if (FILE* f = fopen("audio_init_v1.flag", "wb")) fclose(f);
-        if (FILE* cfgFp = fopen("metin2.cfg", "rb")) {
+        if (FILE* cfgFp = fopen("worldonline.cfg", "rb")) {
             char buf[2048] = {0};
             size_t n = fread(buf, 1, sizeof(buf) - 1, cfgFp);
             fclose(cfgFp);
@@ -1289,7 +1441,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
             if (posM != std::string::npos) s.replace(posM, 23, "MUSIC_VOLUME\t\t\t\t\t0.500");
             size_t posV = s.find("VOICE_VOLUME\t\t\t\t\t0");
             if (posV != std::string::npos) s.replace(posV, 19, "VOICE_VOLUME\t\t\t\t\t3");
-            if (FILE* outFp = fopen("metin2.cfg", "wb")) {
+            if (FILE* outFp = fopen("worldonline.cfg", "wb")) {
                 fwrite(s.data(), 1, s.size(), outFp);
                 fclose(outFp);
             }
@@ -1302,7 +1454,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
     SetLogLevel(1);
     InstallAndroidCrashHandler(); g_szCrashStage = "Init: OpenLogFile"; OpenLogFile(true);
     InstallAndroidCrashHandler();
-    Tracen("Metin2 Mobile: Log initialized [BUILD v5 - IOS FIX].");
+    Tracen("worldonline Mobile: Log initialized [BUILD v5 - IOS FIX].");
 
     // 2. Initialize string table and locale.cfg
     ApplicationStringTable_Initialize(NULL);
@@ -1334,7 +1486,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
         return;
     }
     CEterPackManager::Instance().SetSearchMode(true);
-    Tracen("Metin2 Mobile: PackInitialize('pack') succeeded.");
+    Tracen("worldonline Mobile: PackInitialize('pack') succeeded.");
 
     if (LocaleService_LoadGlobal(NULL)) {
         SetDefaultCodePage(LocaleService_GetCodePage());
@@ -1351,7 +1503,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
     }
     g_szCrashStage = "Init: CPythonApplication::Initialize"; s_pApp->Initialize(NULL);
 
-    Tracen("Metin2 Mobile: Starting CPythonLauncher...");
+    Tracen("worldonline Mobile: Starting CPythonLauncher...");
     if (s_pyLauncher.Create()) {
         PyRun_SimpleString(
             "import gc, sys, time as _time\n"
@@ -1411,9 +1563,9 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
             "_dt_mod.timedelta = _TD\n"
             "sys.modules['datetime'] = _dt_mod\n"
             "import _codecs\n"
-            "def _mt2_codec(name):\n"
+            "def _wo_codec(name):\n"
             "    return (_codecs.latin_1_encode, _codecs.latin_1_decode, None, None)\n"
-            "_codecs.register(_mt2_codec)\n"
+            "_codecs.register(_wo_codec)\n"
             "_log_mod = imp.new_module('logging')\n"
             "class _Logger(object):\n"
             "    def debug(self, *a, **k): pass\n"
@@ -1444,7 +1596,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
 #ifdef ENABLE_OPENGL
         initmobileInput(); PyEval_SetProfile(MobilePyProfileTracer, NULL); g_szCrashStage = "Init: RunMainScript (system.py)";
 #endif
-        Tracen("Metin2 Mobile: Running RunMainScript (system.py)...");
+        Tracen("worldonline Mobile: Running RunMainScript (system.py)...");
         if (!RunMainScript(s_pyLauncher, "")) {
             if (PyErr_Occurred()) {
                 PyErr_Print();
@@ -1484,8 +1636,8 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_init(JNIEnv* env, jobjec
     );
 
     PyEval_SetProfile(MobilePyProfileTracer, NULL); g_szCrashStage = "Engine Ready / Render Loop"; s_bEngineReady = true;
-    Tracen("Metin2 Mobile: Engine Initialized Successfully!");
-    LOGI("Metin2 Mobile Engine Initialized Successfully");
+    Tracen("worldonline Mobile: Engine Initialized Successfully!");
+    LOGI("worldonline Mobile Engine Initialized Successfully");
 }
 
 struct AndroidTouchEvt {
@@ -1662,14 +1814,76 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
                 if (d < outerR * 0.24f)
                     iconMask = fmaxf(iconMask, (1.0f - SmoothStepF(outerR * 0.08f, outerR * 0.24f, d)) * 0.95f);
             } else if (iconType == MICON_ATK_SWORDS) {
-                float s = outerR / 52.0f;
-                float dB1 = DistToSegF(px, py, -18.0f * s, 18.0f * s, 21.0f * s, -21.0f * s);
-                float dG1 = DistToSegF(px, py, -19.0f * s, 5.0f * s, -5.0f * s, 19.0f * s);
-                float dB2 = DistToSegF(px, py, 18.0f * s, 18.0f * s, -21.0f * s, -21.0f * s);
-                float dG2 = DistToSegF(px, py, 5.0f * s, 19.0f * s, 19.0f * s, 5.0f * s);
-                float minS = fminf(fminf(dB1, dB2), fminf(dG1, dG2) * 1.15f);
-                if (minS < 3.3f * s)
-                    iconMask = 1.0f - SmoothStepF(1.4f * s, 3.3f * s, minS);
+                float s = outerR / 56.0f;
+                // 1. Cardinal diamond notches on the outer bezel + inner runic combat ring
+                float notchX = fabsf(px), notchY = fabsf(py);
+                float cardD = fminf(hypotf(notchX, notchY - (outerR - rimW * 0.5f)),
+                                    hypotf(notchX - (outerR - rimW * 0.5f), notchY));
+                if (cardD < 4.2f * s)
+                    iconMask = fmaxf(iconMask, (1.0f - SmoothStepF(2.2f * s, 4.2f * s, cardD)) * 0.90f);
+
+                float runeRing = fabsf(d - 38.0f * s);
+                if (runeRing < 1.5f * s) {
+                    float dash = sinf(atan2f(py, px) * 12.0f);
+                    if (dash > -0.2f)
+                        iconMask = fmaxf(iconMask, (1.0f - runeRing / (1.5f * s)) * 0.42f);
+                }
+
+                // 2. Two crossed tapered broadswords (45-deg and 135-deg)
+                auto EvalSword = [&](float sx, float sy) -> float {
+                    // Rotate into sword-local space where u is along the blade (-26..+28) and v is perpendicular
+                    float m = 0.0f;
+                    // Tapered broadsword blade (u from -6 to +27)
+                    if (sx >= -6.0f * s && sx <= 27.5f * s) {
+                        float t = (sx + 6.0f * s) / (33.5f * s); // 0 at guard, 1 at tip
+                        float halfW = (t < 0.78f)
+                            ? (3.6f * s + t * 0.6f * s)
+                            : ((1.0f - (t - 0.78f) / 0.22f) * 4.1f * s);
+                        float absV = fabsf(sy);
+                        if (absV <= halfW + 1.0f * s) {
+                            float blade = 1.0f - SmoothStepF(fmaxf(0.0f, halfW - 0.9f * s), halfW + 0.9f * s, absV);
+                            // Central fuller (blood groove) for 3D metallic depth
+                            if (t > 0.06f && t < 0.72f && absV < 0.95f * s)
+                                blade *= 0.38f;
+                            m = fmaxf(m, blade);
+                        }
+                    }
+                    // Flared winged crossguard (u around -7.5, v from -13 to +13)
+                    float guardCurve = -7.2f * s + (sy * sy) / (42.0f * s);
+                    float gDist = fabsf(sx - guardCurve);
+                    if (fabsf(sy) <= 13.5f * s) {
+                        float gThick = (2.4f - 0.08f * (fabsf(sy) / s)) * s;
+                        if (gDist <= gThick + 0.8f * s)
+                            m = fmaxf(m, 1.0f - SmoothStepF(fmaxf(0.0f, gThick - 0.6f * s), gThick + 0.8f * s, gDist));
+                    }
+                    // Wrapped hilt grip (u from -18.5 to -8)
+                    if (sx >= -18.5f * s && sx <= -7.5f * s && fabsf(sy) <= 2.3f * s) {
+                        m = fmaxf(m, 1.0f - SmoothStepF(1.4f * s, 2.3f * s, fabsf(sy)));
+                    }
+                    // Faceted round pommel (centered at u = -21.5, v = 0)
+                    float pomD = hypotf(sx + 21.5f * s, sy);
+                    if (pomD <= 4.2f * s) {
+                        m = fmaxf(m, 1.0f - SmoothStepF(2.8f * s, 4.2f * s, pomD));
+                    }
+                    return m;
+                };
+
+                // Sword 1: bottom-left to top-right
+                float s1u = (px - py) * 0.70710678f;
+                float s1v = (px + py) * 0.70710678f;
+                // Sword 2: bottom-right to top-left
+                float s2u = (-px - py) * 0.70710678f;
+                float s2v = (px - py) * 0.70710678f;
+
+                float sw1 = EvalSword(s1u, s1v);
+                float sw2 = EvalSword(s2u, s2v);
+                // Slight shadow gap where Sword 1 crosses over Sword 2
+                if (sw1 > 0.1f) {
+                    iconMask = fmaxf(iconMask, sw1);
+                } else if (sw2 > 0.1f) {
+                    float underShadow = (fabsf(s1u) < 5.2f * s && fabsf(s1v) < 5.8f * s) ? 0.55f : 1.0f;
+                    iconMask = fmaxf(iconMask, sw2 * underShadow);
+                }
             } else if (iconType == MICON_TARGET) {
                 float s = outerR / 28.0f;
                 float rRing = fabsf(d - 11.0f * s);
@@ -1680,22 +1894,53 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
                 if (d < 2.6f * s)
                     iconMask = fmaxf(iconMask, 1.0f - SmoothStepF(1.0f * s, 2.6f * s, d));
             } else if (iconType == MICON_LOOT) {
-                float s = outerR / 28.0f;
-                float starV = powf(fabsf(px), 0.65f) + powf(fabsf(py + 2.0f * s), 0.65f);
-                if (starV < powf(10.5f * s, 0.65f)) iconMask = 0.95f;
-                float arcD = fabsf(hypotf(px, py - 2.0f * s) - 12.5f * s);
-                if (py > 1.0f * s && arcD < 2.0f * s)
-                    iconMask = fmaxf(iconMask, 1.0f - SmoothStepF(0.7f * s, 2.0f * s, arcD));
+                // Open Hand silhouette (palm + thumb + 4 fingers)
+                float ux = px / (outerR / 28.0f);
+                float uy = py / (outerR / 28.0f);
+                float palmD = hypotf(ux * 0.92f, (uy - 4.2f) * 1.05f) - 6.2f;
+                float wristBox = fmaxf(fabsf(ux) - 4.2f, fabsf(uy - 8.5f) - 2.8f);
+                float hDist = fminf(palmD, wristBox);
+                // Thumb (left) + 4 fingers (index, middle, ring, pinky)
+                hDist = fminf(hDist, DistToSegF(ux, uy, -4.5f,  4.5f, -10.5f, -1.5f) - 1.9f);
+                hDist = fminf(hDist, DistToSegF(ux, uy, -4.2f,  0.5f,  -5.4f, -9.5f) - 1.65f);
+                hDist = fminf(hDist, DistToSegF(ux, uy, -1.4f, -0.5f,  -1.6f,-11.8f) - 1.70f);
+                hDist = fminf(hDist, DistToSegF(ux, uy,  1.6f,  0.0f,   2.2f,-10.5f) - 1.65f);
+                hDist = fminf(hDist, DistToSegF(ux, uy,  4.3f,  1.5f,   5.6f, -7.2f) - 1.50f);
+                if (hDist < 0.8f) {
+                    iconMask = 1.0f - SmoothStepF(-0.5f, 0.8f, hDist);
+                    // Subtle crease line across palm for depth
+                    float crease = DistToSegF(ux, uy, -3.5f, 2.2f, 3.8f, 3.2f);
+                    if (crease < 0.7f) iconMask *= 0.45f;
+                }
             } else if (iconType == MICON_PAGE) {
                 float s = outerR / 28.0f;
                 float orbD = fabsf(d - 12.5f * s);
                 if (orbD < 2.0f * s && fabsf(px) > 2.5f * s)
                     iconMask = 1.0f - SmoothStepF(0.7f * s, 2.0f * s, orbD);
             } else if (iconType == MICON_MOUNT) {
-                float s = outerR / 28.0f;
-                float shoeDist = fabsf(hypotf(px, py - 1.0f * s) - 11.5f * s);
-                if (shoeDist < 2.6f * s && !(py < -4.5f * s && fabsf(px) < 6.5f * s))
-                    iconMask = 1.0f - SmoothStepF(1.1f * s, 2.6f * s, shoeDist);
+                // Stylized Horse Head & Neck silhouette (facing right)
+                float ux = px / (outerR / 28.0f);
+                float uy = py / (outerR / 28.0f);
+                float hDist = 100.0f;
+                // Base pedestal + arched neck + cranium + tapered muzzle + ears + mane
+                hDist = fminf(hDist, DistToSegF(ux, uy, -6.5f, 11.2f,  4.5f, 11.2f) - 2.0f);
+                hDist = fminf(hDist, DistToSegF(ux, uy, -3.2f,  9.5f, -4.2f, -1.5f) - 4.4f);
+                hDist = fminf(hDist, DistToSegF(ux, uy, -4.2f, -1.5f, -1.5f, -7.5f) - 4.0f);
+                hDist = fminf(hDist, hypotf(ux + 1.2f, uy + 6.5f) - 4.5f);
+                hDist = fminf(hDist, DistToSegF(ux, uy,  0.0f, -6.8f,  9.2f, -2.5f) - 3.1f);
+                hDist = fminf(hDist, DistToSegF(ux, uy, -1.0f, -3.8f,  6.5f, -1.5f) - 2.8f);
+                // Pointed horse ears at crown
+                hDist = fminf(hDist, DistToSegF(ux, uy, -2.2f, -9.0f, -0.5f,-13.8f) - 1.35f);
+                hDist = fminf(hDist, DistToSegF(ux, uy, -4.2f, -8.2f, -3.5f,-12.8f) - 1.20f);
+                // Flowing mane ridges along back of neck
+                hDist = fminf(hDist, DistToSegF(ux, uy, -6.2f, -6.5f, -8.5f,  2.5f) - 2.2f);
+                hDist = fminf(hDist, DistToSegF(ux, uy, -8.2f,  1.5f, -7.2f,  8.5f) - 2.2f);
+                if (hDist < 0.8f) {
+                    iconMask = 1.0f - SmoothStepF(-0.5f, 0.8f, hDist);
+                    // Carve out eye and nostril for crisp horse detail
+                    if (hypotf(ux - 1.2f, uy + 6.8f) < 1.15f || hypotf(ux - 7.8f, uy + 2.6f) < 0.85f)
+                        iconMask *= 0.20f;
+                }
             } else if (iconType == MICON_CHAT_BUBBLE) {
                 float s = outerR / 28.0f;
                 float bx = px / (12.0f * s);
@@ -1780,19 +2025,25 @@ static void WriteSquaredMiniMapTextures() {
                     int d = std::min(std::min(x, sz - 1 - x), std::min(y, sz - 1 - y));
                     size_t i = ((size_t)y * sz + (size_t)x) * 4;
                     if (d < 6) {
-                        // Outer shadow + double metallic gold bevel border
+                        // Native worldonline Dark Iron & Pewter Bevel Frame (matching 67Untitled.png)
                         if (d == 0) {
-                            pix[i+0] = 10; pix[i+1] = 12; pix[i+2] = 16; pix[i+3] = 180;
-                        } else if (d >= 1 && d <= 3) {
-                            float grad = 0.72f + 0.28f * (1.0f - (float)(x + y) / (2.0f * sz));
-                            pix[i+0] = ClampU8(98.0f * grad);
-                            pix[i+1] = ClampU8(178.0f * grad);
-                            pix[i+2] = ClampU8(218.0f * grad);
-                            pix[i+3] = 245;
+                            pix[i+0] = 22; pix[i+1] = 24; pix[i+2] = 26; pix[i+3] = 245;
+                        } else if (d == 1) {
+                            float grad = 0.80f + 0.20f * (1.0f - (float)(x + y) / (2.0f * sz));
+                            pix[i+0] = ClampU8(152.0f * grad);
+                            pix[i+1] = ClampU8(162.0f * grad);
+                            pix[i+2] = ClampU8(170.0f * grad);
+                            pix[i+3] = 255;
+                        } else if (d == 2 || d == 3) {
+                            float grad = 0.75f + 0.25f * (1.0f - (float)(x + y) / (2.0f * sz));
+                            pix[i+0] = ClampU8(116.0f * grad);
+                            pix[i+1] = ClampU8(126.0f * grad);
+                            pix[i+2] = ClampU8(134.0f * grad);
+                            pix[i+3] = 250;
                         } else if (d == 4) {
-                            pix[i+0] = 24; pix[i+1] = 28; pix[i+2] = 36; pix[i+3] = 220;
+                            pix[i+0] = 32; pix[i+1] = 35; pix[i+2] = 38; pix[i+3] = 235;
                         } else if (d == 5) {
-                            pix[i+0] = 75; pix[i+1] = 135; pix[i+2] = 170; pix[i+3] = 160;
+                            pix[i+0] = 74; pix[i+1] = 82; pix[i+2] = 88; pix[i+3] = 190;
                         }
                     }
                 }
@@ -1813,7 +2064,8 @@ enum ETopBarIcon {
     TICON_AUTOHUNT = 7,
     TICON_DS = 8,
     TICON_UTIL = 9,
-    TICON_SYS = 10
+    TICON_SYS = 10,
+    TICON_SPEC_BOXES = 11
 };
 
 static void WriteTopBarButtonTGA(const char* path, int iconType, bool isPressed) {
@@ -1920,6 +2172,19 @@ static void WriteTopBarButtonTGA(const char* path, int iconType, bool isPressed)
                 if (bellW > 0.0f && ax <= bellW) ic = 1.0f - SmoothStepF(bellW - 1.0f, bellW, ax);
                 if (fabsf(py - 4.5f) < 1.2f && ax < 8.2f) ic = 0.98f;
                 if (hypotf(px, py + 6.5f) < 1.8f || hypotf(px, py - 6.8f) < 2.2f) ic = fmaxf(ic, 0.96f);
+            } else if (iconType == TICON_SPEC_BOXES) {
+                // Two stacked/side-by-side storage boxes icon for Special Storage
+                float b1x = px + 3.2f, b1y = py + 2.6f; // Back-left box
+                float b2x = px - 2.8f, b2y = py - 2.4f; // Front-right box
+                bool inFront = (fabsf(b2x) < 5.6f && fabsf(b2y) < 4.8f);
+                bool inBack  = (fabsf(b1x) < 5.4f && fabsf(b1y) < 4.6f) && !(fabsf(b2x) < 6.4f && fabsf(b2y) < 5.6f);
+                if (inFront) {
+                    if (fabsf(b2y + 0.8f) > 0.75f && !(fabsf(b2x) < 1.3f && fabsf(b2y + 0.8f) < 1.8f))
+                        ic = 0.98f;
+                } else if (inBack) {
+                    if (fabsf(b1y + 0.8f) > 0.75f)
+                        ic = 0.88f;
+                }
             }
 
             if (ic > 0.0f) {
@@ -2029,25 +2294,26 @@ static void WritePortraitRingTGA(const char* path) {
             float d = hypotf(px, py);
             size_t i = ((size_t)y * size + (size_t)x) * 4;
 
-            float r = 12.0f, g = 15.0f, b = 22.0f, a = 0.0f;
+            float r = 18.0f, g = 18.0f, b = 20.0f, a = 0.0f;
 
             if (d >= innerR && d < outerR + 2.5f) {
                 float sh = 1.0f - SmoothStepF(outerR - 0.5f, outerR + 2.5f, d);
-                a = sh * 120.0f;
+                a = sh * 135.0f;
             }
             if (d >= innerR - 1.0f && d <= outerR) {
                 float inMask  = SmoothStepF(innerR - 1.0f, innerR + 0.8f, d);
                 float outMask = 1.0f - SmoothStepF(outerR - 1.0f, outerR + 0.4f, d);
                 float ringMask = inMask * outMask;
 
-                float grad = 0.65f + 0.35f * (1.0f - (float)(x + y) / (2.0f * size));
-                bool isInnerLip = (d < innerR + 1.6f);
-                if (isInnerLip) {
-                    r = 235.0f * grad; g = 240.0f * grad; b = 250.0f * grad;
+                float grad = 0.68f + 0.32f * (1.0f - (float)(x + y) / (2.0f * size));
+                if (d < innerR + 1.5f || d > outerR - 1.5f) {
+                    // Pewter / Iron outer & inner bevel ridge
+                    r = 162.0f * grad; g = 156.0f * grad; b = 145.0f * grad;
                 } else {
-                    r = 222.0f * grad; g = 184.0f * grad; b = 105.0f * grad;
+                    // Native worldonline dark copper-brown / iron core
+                    r = 108.0f * grad; g = 58.0f * grad; b = 32.0f * grad;
                 }
-                a = fmaxf(a, ringMask * 250.0f);
+                a = fmaxf(a, ringMask * 252.0f);
             }
 
             pix[i + 0] = ClampU8(b);
@@ -2060,67 +2326,243 @@ static void WritePortraitRingTGA(const char* path) {
     fclose(fp);
 }
 
+static void WriteStatusPlateTGA(const char* path) {
+    if (access(path, F_OK) == 0) return;
+    const int w = 196, h = 44;
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return;
+    uint8_t hdr[18] = {0};
+    hdr[2] = 2; hdr[12] = w & 0xFF; hdr[13] = (w >> 8) & 0xFF; hdr[14] = h & 0xFF; hdr[15] = (h >> 8) & 0xFF; hdr[16] = 32; hdr[17] = 0x28;
+    fwrite(hdr, 1, 18, fp);
+
+    std::vector<uint8_t> pix((size_t)w * (size_t)h * 4, 0);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            size_t i = ((size_t)y * w + (size_t)x) * 4;
+            if (x >= w - 2 && (y < 2 || y >= h - 2)) continue;
+
+            bool isOuterDark = (y == 0 || y == h - 1 || x == 0 || x == w - 1);
+            bool isPewterBevel = (y == 1 || y == 2 || y == h - 2 || x == 1 || x == w - 2);
+            bool isInnerShadow = (y == 3 || y == h - 3 || x == w - 3);
+            bool isDivider = (y == 17 || y == 18 || y == 30 || y == 31) && (x >= 18 && x <= w - 4);
+            float r = 18.0f, g = 18.0f, b = 20.0f, a = 242.0f;
+
+            if (isOuterDark) {
+                r = 34.0f; g = 32.0f; b = 30.0f; a = 250.0f;
+            } else if (isPewterBevel) {
+                float grad = (y == 1) ? 1.12f : (0.78f + 0.22f * (1.0f - (float)y / (float)h));
+                r = 148.0f * grad; g = 142.0f * grad; b = 132.0f * grad; a = 255.0f;
+            } else if (isInnerShadow) {
+                r = 46.0f; g = 43.0f; b = 40.0f; a = 248.0f;
+            } else if (isDivider) {
+                float divGrad = (y == 17 || y == 30) ? 1.0f : 0.55f;
+                r = 128.0f * divGrad; g = 122.0f * divGrad; b = 114.0f * divGrad; a = 245.0f;
+            } else {
+                // Recessed channels extend full length x: 22..192 (171px) right up to the right inner shadow (w - 3)
+                bool inSlot = (y >= 4 && y <= 16) || (y >= 19 && y <= 29) || (y >= 32 && y <= 39);
+                if (inSlot && x >= 22 && x <= w - 4) {
+                    r = 10.0f; g = 10.0f; b = 12.0f; a = 248.0f;
+                } else {
+                    r = 26.0f; g = 25.0f; b = 24.0f; a = 245.0f;
+                }
+            }
+            pix[i + 0] = ClampU8(b); pix[i + 1] = ClampU8(g); pix[i + 2] = ClampU8(r); pix[i + 3] = ClampU8(a);
+        }
+    }
+    fwrite(pix.data(), 1, pix.size(), fp);
+    fclose(fp);
+}
+
+static void WriteGlossyBarFillTGA(const char* path, int w, int h, float cr, float cg, float cb, int frameIdx = 0) {
+    if (access(path, F_OK) == 0) return;
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return;
+    uint8_t hdr[18] = {0};
+    hdr[2] = 2; hdr[12] = w & 0xFF; hdr[13] = (w >> 8) & 0xFF; hdr[14] = h & 0xFF; hdr[15] = (h >> 8) & 0xFF; hdr[16] = 32; hdr[17] = 0x28;
+    fwrite(hdr, 1, 18, fp);
+
+    const float phase = ((float)frameIdx / 8.0f) * 6.2831853f;
+    std::vector<uint8_t> pix((size_t)w * (size_t)h * 4, 0);
+    for (int y = 0; y < h; ++y) {
+        float ny = (float)y / (float)(h > 1 ? h - 1 : 1); // 0 = top, 1 = bottom
+        float cyl = 0.56f + 0.44f * sinf(ny * 3.14159265f);
+        float topSpec = (ny >= 0.08f && ny <= 0.34f) ? 58.0f : 0.0f;
+        for (int x = 0; x < w; ++x) {
+            size_t i = ((size_t)y * w + (size_t)x) * 4;
+            // Flowing liquid wave + diagonal shimmer band that loops seamlessly across 8 frames
+            float waveAngle = ((float)x / 42.75f + ny * 0.35f) * 6.2831853f - phase;
+            float wave = 0.5f + 0.5f * sinf(waveAngle);
+            float shimmer = powf(wave, 3.0f) * 42.0f * sinf(ny * 3.14159265f);
+            float bodyBoost = 0.90f + 0.18f * wave;
+            float r = fminf(255.0f, cr * cyl * bodyBoost + topSpec + shimmer);
+            float g = fminf(255.0f, cg * cyl * bodyBoost + topSpec + shimmer);
+            float b = fminf(255.0f, cb * cyl * bodyBoost + topSpec * 0.85f + shimmer * 0.9f);
+            pix[i + 0] = ClampU8(b); pix[i + 1] = ClampU8(g); pix[i + 2] = ClampU8(r); pix[i + 3] = 252;
+        }
+    }
+    fwrite(pix.data(), 1, pix.size(), fp);
+    fclose(fp);
+}
+
+enum ETooltipActionIcon {
+    TTICON_USE = 1,
+    TTICON_SPLIT = 2,
+    TTICON_LINK = 3,
+    TTICON_CHEST = 4,
+    TTICON_PREVIEW = 5,
+    TTICON_CLOSE = 6
+};
+
+static void WriteTooltipActionIconTGA(const char* path, int iconType, bool isPressed) {
+    if (access(path, F_OK) == 0) return;
+    const int size = 36;
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return;
+    uint8_t hdr[18] = {0};
+    hdr[2] = 2; hdr[12] = size; hdr[14] = size; hdr[16] = 32; hdr[17] = 0x28;
+    fwrite(hdr, 1, 18, fp);
+
+    std::vector<uint8_t> pix((size_t)size * (size_t)size * 4, 0);
+    float half = size * 0.5f;
+    for (int y = 0; y < size; ++y) {
+        float py = (y + 0.5f) - half;
+        for (int x = 0; x < size; ++x) {
+            float px = (x + 0.5f) - half;
+            float ax = fabsf(px), ay = fabsf(py);
+            int edgeD = std::min(std::min(x, size - 1 - x), std::min(y, size - 1 - y));
+            size_t i = ((size_t)y * size + (size_t)x) * 4;
+
+            float r = isPressed ? 92.0f : 24.0f;
+            float g = isPressed ? 42.0f : 23.0f;
+            float b = isPressed ? 18.0f : 22.0f;
+            float a = 242.0f;
+            if (edgeD == 0) {
+                r = 34.0f; g = 32.0f; b = 30.0f; a = 240.0f;
+            } else if (edgeD == 1) {
+                r = isPressed ? 185.0f : 146.0f;
+                g = isPressed ? 178.0f : 140.0f;
+                b = isPressed ? 166.0f : 130.0f;
+                a = 255.0f;
+            }
+
+            float ic = 0.0f;
+            if (iconType == TTICON_USE) {
+                // Upward Equip/Use Sword & Arrow emblem
+                float dBlade = DistToSegF(px, py, -7.0f, 7.0f, 7.5f, -7.5f);
+                float dGuard = DistToSegF(px, py, -6.5f, 0.5f, -0.5f, 6.5f);
+                if (fminf(dBlade, dGuard) < 1.8f) ic = 1.0f - SmoothStepF(0.8f, 1.8f, fminf(dBlade, dGuard));
+            } else if (iconType == TTICON_SPLIT) {
+                // Split stacks icon: two separated boxes + outward arrows
+                bool boxL = (px >= -10.5f && px <= -3.5f && ay <= 4.5f);
+                bool boxR = (px >= 3.5f && px <= 10.5f && ay <= 4.5f);
+                float sepLine = (ax < 1.1f && ay < 8.5f) ? 0.95f : 0.0f;
+                if (boxL || boxR) {
+                    float bEdge = fminf(fabsf(ax - 7.0f) - 2.2f, ay - 3.2f);
+                    if (bEdge > -1.4f) ic = 0.96f;
+                }
+                ic = fmaxf(ic, sepLine);
+            } else if (iconType == TTICON_LINK) {
+                // Chat Speech Bubble + Link node
+                float bd = hypotf(px / 9.5f, (py + 1.5f) / 7.2f);
+                if (bd <= 1.0f && bd >= 0.72f) ic = 0.96f;
+                if (fabsf(py + 1.5f) < 1.4f && (fabsf(px) < 1.4f || fabsf(ax - 4.2f) < 1.4f)) ic = 0.96f;
+                if (DistToSegF(px, py, -3.0f, 5.0f, -6.5f, 8.5f) < 1.6f) ic = 0.96f;
+            } else if (iconType == TTICON_CHEST) {
+                // Open Chest / Bundle icon
+                if (ax < 8.5f && py >= -6.0f && py <= 6.5f) {
+                    if (fabsf(py + 0.8f) > 0.9f && !(ax < 1.8f && fabsf(py + 0.8f) < 2.2f))
+                        ic = 0.95f;
+                }
+            } else if (iconType == TTICON_PREVIEW) {
+                // Eye / Preview icon
+                float eyeY = 4.8f * (1.0f - (px * px) / 81.0f);
+                if (ax <= 9.0f && fabsf(ay - eyeY) < 1.5f) ic = 0.96f;
+                if (hypotf(px, py) < 2.8f) ic = 0.98f;
+            } else if (iconType == TTICON_CLOSE) {
+                // Crisp X icon
+                float d1 = DistToSegF(px, py, -6.5f, -6.5f, 6.5f, 6.5f);
+                float d2 = DistToSegF(px, py, 6.5f, -6.5f, -6.5f, 6.5f);
+                if (fminf(d1, d2) < 1.8f) ic = 1.0f - SmoothStepF(0.8f, 1.8f, fminf(d1, d2));
+            }
+
+            if (ic > 0.0f) {
+                float ir = (iconType == TTICON_CLOSE) ? 255.0f : (isPressed ? 255.0f : 245.0f);
+                float ig = (iconType == TTICON_CLOSE) ? 115.0f : (isPressed ? 225.0f : 235.0f);
+                float ib = (iconType == TTICON_CLOSE) ? 115.0f : (isPressed ? 140.0f : 200.0f);
+                r = r * (1.0f - ic) + ir * ic;
+                g = g * (1.0f - ic) + ig * ic;
+                b = b * (1.0f - ic) + ib * ic;
+            }
+            pix[i + 0] = ClampU8(b); pix[i + 1] = ClampU8(g); pix[i + 2] = ClampU8(r); pix[i + 3] = ClampU8(a);
+        }
+    }
+    fwrite(pix.data(), 1, pix.size(), fp);
+    fclose(fp);
+}
+
 static void WriteMobileStatusHUDTextures() {
-    WriteMobileRingTGA("mark/m_portrait_bg.tga", 64, 28.5f, 2.2f, 195.0f, 218,182,108, 110,210,255, MICON_NONE, false);
+    WriteMobileRingTGA("mark/m_portrait_bg.tga", 64, 28.5f, 2.2f, 215.0f, 146,140,130, 175,168,156, MICON_NONE, false);
     WritePortraitRingTGA("mark/m_portrait_ring.tga");
     WriteExpSphereTGA("mark/m_exp_orb_empty_v3.tga", false, 0.0f, 0.0f, 0.0f);
-    WriteExpSphereTGA("mark/m_exp_orb_full_v3.tga",  true, 255.0f, 200.0f, 25.0f);
-    WriteExpSphereTGA("mark/m_exp_orb_conq_v3.tga",  true,  45.0f, 210.0f, 255.0f);
+    WriteExpSphereTGA("mark/m_exp_orb_full_v3.tga",  true, 225.0f, 175.0f, 35.0f);
+    WriteExpSphereTGA("mark/m_exp_orb_conq_v3.tga",  true,  65.0f, 195.0f, 245.0f);
+    WriteStatusPlateTGA("mark/m_hud_plate_v4.tga");
+    for (int f = 0; f < 8; ++f) {
+        char hpPath[64], spPath[64], enPath[64];
+        snprintf(hpPath, sizeof(hpPath), "mark/m_hud_hp_v4_%d.tga", f);
+        snprintf(spPath, sizeof(spPath), "mark/m_hud_sp_v4_%d.tga", f);
+        snprintf(enPath, sizeof(enPath), "mark/m_hud_en_v4_%d.tga", f);
+        WriteGlossyBarFillTGA(hpPath, 171, 13, 220.0f, 34.0f, 34.0f, f);
+        WriteGlossyBarFillTGA(spPath, 171, 11,  34.0f, 115.0f, 225.0f, f);
+        WriteGlossyBarFillTGA(enPath, 171,  8,  95.0f, 180.0f, 220.0f, f);
+    }
+
+    WriteTooltipActionIconTGA("mark/m_tt_use_norm.tga",     TTICON_USE,     false);
+    WriteTooltipActionIconTGA("mark/m_tt_use_down.tga",     TTICON_USE,     true);
+    WriteTooltipActionIconTGA("mark/m_tt_split_norm.tga",   TTICON_SPLIT,   false);
+    WriteTooltipActionIconTGA("mark/m_tt_split_down.tga",   TTICON_SPLIT,   true);
+    WriteTooltipActionIconTGA("mark/m_tt_link_norm.tga",    TTICON_LINK,    false);
+    WriteTooltipActionIconTGA("mark/m_tt_link_down.tga",    TTICON_LINK,    true);
+    WriteTooltipActionIconTGA("mark/m_tt_chest_norm.tga",   TTICON_CHEST,   false);
+    WriteTooltipActionIconTGA("mark/m_tt_chest_down.tga",   TTICON_CHEST,   true);
+    WriteTooltipActionIconTGA("mark/m_tt_preview_norm.tga", TTICON_PREVIEW, false);
+    WriteTooltipActionIconTGA("mark/m_tt_preview_down.tga", TTICON_PREVIEW, true);
+    WriteTooltipActionIconTGA("mark/m_tt_close_norm.tga",   TTICON_CLOSE,   false);
+    WriteTooltipActionIconTGA("mark/m_tt_close_down.tga",   TTICON_CLOSE,   true);
 }
 
 void GenerateMobileHUDTextures() {
-    // Bump texture names to v2 so larger, high-visibility sizes are generated cleanly
-    WriteMobileRingTGA("mark/m_joy_bg_v2.tga",        160, 74.0f, 3.8f,  98.0f, 218,182,108, 110,210,255, MICON_JOY_BG,      false);
-    WriteMobileRingTGA("mark/m_joy_knob_norm_v2.tga",  76, 33.0f, 3.2f, 165.0f, 218,182,108, 255,205, 95, MICON_JOY_KNOB,    false);
-    WriteMobileRingTGA("mark/m_joy_knob_down_v2.tga",  76, 35.0f, 3.8f, 205.0f, 110,210,255, 110,210,255, MICON_JOY_KNOB,    true);
+    // One-time migration: remove old cached TGAs so native worldonline textures regenerate cleanly
+    if (access("mark/theme_wo_native_v4.flag", F_OK) != 0) {
+        static const char* s_oldTgas[] = {
+            "mark/m_minimap_frame.tga", "mark/m_portrait_bg.tga", "mark/m_portrait_ring.tga",
+            "mark/m_hud_plate_v2.tga", "mark/m_hud_plate_v3.tga",
+            "mark/m_exp_orb_empty_v3.tga", "mark/m_exp_orb_full_v3.tga", "mark/m_exp_orb_conq_v3.tga",
+            "mark/m_tt_use_norm.tga", "mark/m_tt_use_down.tga", "mark/m_tt_split_norm.tga", "mark/m_tt_split_down.tga",
+            "mark/m_tt_link_norm.tga", "mark/m_tt_link_down.tga", "mark/m_tt_chest_norm.tga", "mark/m_tt_chest_down.tga",
+            "mark/m_tt_preview_norm.tga", "mark/m_tt_preview_down.tga", "mark/m_tt_close_norm.tga", "mark/m_tt_close_down.tga",
+            "mark/m_joy_bg_v2.tga", "mark/m_joy_knob_norm_v2.tga", "mark/m_joy_knob_down_v2.tga",
+            "mark/m_atk_norm_v3.tga", "mark/m_atk_down_v3.tga", "mark/m_atk_norm_v5.tga", "mark/m_atk_down_v5.tga",
+            "mark/m_slot_norm_v3.tga", "mark/m_slot_over_v3.tga",
+            "mark/m_btn_lock_norm_v3.tga", "mark/m_btn_lock_down_v3.tga",
+            "mark/m_btn_loot_norm_v3.tga", "mark/m_btn_loot_down_v3.tga",
+            "mark/m_btn_page_norm_v3.tga", "mark/m_btn_page_down_v3.tga",
+            "mark/m_btn_mount_norm_v3.tga", "mark/m_btn_mount_down_v3.tga",
+            "mark/m_btn_chat_norm_v3.tga", "mark/m_btn_chat_down_v3.tga"
+        };
+        for (const char* p : s_oldTgas) unlink(p);
+        if (FILE* f = fopen("mark/theme_wo_native_v4.flag", "wb")) fclose(f);
+    }
 
-    WriteMobileRingTGA("mark/m_atk_norm_v2.tga",      140, 63.0f, 4.5f, 148.0f, 218,182,108, 255,205, 95, MICON_ATK_SWORDS,  false);
-    WriteMobileRingTGA("mark/m_atk_down_v2.tga",      140, 65.0f, 5.2f, 198.0f, 255,205, 95, 110,210,255, MICON_ATK_SWORDS,  true);
+    // Native worldonline Pewter/Iron Rim (148,142,132) + Warm Copper-Brown Accent (145,78,42)
+    WriteMobileRingTGA("mark/m_joy_bg_v2.tga",        160, 74.0f, 3.8f, 115.0f, 148,142,132, 185,178,166, MICON_JOY_BG,      false);
+    WriteMobileRingTGA("mark/m_joy_knob_norm_v2.tga",  76, 33.0f, 3.2f, 185.0f, 148,142,132, 175,105, 62, MICON_JOY_KNOB,    false);
+    WriteMobileRingTGA("mark/m_joy_knob_down_v2.tga",  76, 35.0f, 3.8f, 220.0f, 185,178,166, 205,120, 68, MICON_JOY_KNOB,    true);
 
-    WriteMobileRingTGA("mark/m_slot_norm_v2.tga",      72, 33.0f, 3.0f, 128.0f, 218,182,108, 165,185,210, MICON_NONE,        false);
-    WriteMobileRingTGA("mark/m_slot_over_v2.tga",      72, 34.0f, 3.5f, 172.0f, 255,205, 95, 110,210,255, MICON_NONE,        true);
-
-    WriteMobileRingTGA("mark/m_btn_lock_norm.tga",     64, 26.0f, 2.8f, 132.0f, 165,185,210, 110,210,255, MICON_TARGET,      false);
-    WriteMobileRingTGA("mark/m_btn_lock_down.tga",     64, 27.0f, 3.2f, 188.0f, 110,210,255, 110,210,255, MICON_TARGET,      true);
-    WriteMobileRingTGA("mark/m_btn_loot_norm.tga",     64, 26.0f, 2.8f, 132.0f, 218,182,108, 255,205, 95, MICON_LOOT,        false);
-    WriteMobileRingTGA("mark/m_btn_loot_down.tga",     64, 27.0f, 3.2f, 188.0f, 255,205, 95, 255,205, 95, MICON_LOOT,        true);
-    WriteMobileRingTGA("mark/m_btn_page_norm.tga",     64, 26.0f, 2.8f, 132.0f, 218,182,108, 110,210,255, MICON_PAGE,        false);
-    WriteMobileRingTGA("mark/m_btn_page_down.tga",     64, 27.0f, 3.2f, 188.0f, 110,210,255, 110,210,255, MICON_PAGE,        true);
-    WriteMobileRingTGA("mark/m_btn_mount_norm.tga",    64, 28.0f, 3.0f, 132.0f, 218,182,108, 255,205, 95, MICON_MOUNT,       false);
-    WriteMobileRingTGA("mark/m_btn_mount_down.tga",    64, 29.0f, 3.4f, 188.0f, 255,205, 95, 255,205, 95, MICON_MOUNT,       true);
-
-    WriteMobileRingTGA("mark/m_btn_chat_norm.tga",     56, 24.0f, 2.6f, 138.0f, 218,182,108, 110,210,255, MICON_CHAT_BUBBLE, false);
-    WriteMobileRingTGA("mark/m_btn_chat_down.tga",     56, 25.0f, 3.0f, 192.0f, 110,210,255, 110,210,255, MICON_CHAT_BUBBLE, true);
-
-    WriteMobileRingTGA("mark/m_mm_plus_norm.tga",      28, 12.0f, 2.0f, 155.0f, 218,182,108, 255,205, 95, MICON_PLUS,        false);
-    WriteMobileRingTGA("mark/m_mm_plus_down.tga",      28, 12.5f, 2.2f, 200.0f, 110,210,255, 110,210,255, MICON_PLUS,        true);
-    WriteMobileRingTGA("mark/m_mm_minus_norm.tga",     28, 12.0f, 2.0f, 155.0f, 218,182,108, 255,205, 95, MICON_MINUS,       false);
-    WriteMobileRingTGA("mark/m_mm_minus_down.tga",     28, 12.5f, 2.2f, 200.0f, 110,210,255, 110,210,255, MICON_MINUS,       true);
-    WriteMobileRingTGA("mark/m_mm_atlas_norm.tga",     42, 18.5f, 2.4f, 145.0f, 218,182,108, 110,210,255, MICON_MAP_PIN,     false);
-    WriteMobileRingTGA("mark/m_mm_atlas_down.tga",     42, 19.5f, 2.8f, 195.0f, 110,210,255, 110,210,255, MICON_MAP_PIN,     true);
-	WriteTopBarButtonTGA("mark/m_top_collapse_norm.tga", TICON_COLLAPSE, false);
-    WriteTopBarButtonTGA("mark/m_top_collapse_down.tga", TICON_COLLAPSE, true);
-    WriteTopBarButtonTGA("mark/m_top_expand_norm.tga",   TICON_EXPAND,   false);
-    WriteTopBarButtonTGA("mark/m_top_expand_down.tga",   TICON_EXPAND,   true);
-    WriteTopBarButtonTGA("mark/m_top_char_norm.tga",     TICON_CHAR,     false);
-    WriteTopBarButtonTGA("mark/m_top_char_down.tga",     TICON_CHAR,     true);
-    WriteTopBarButtonTGA("mark/m_top_inven_norm.tga",    TICON_INVEN,    false);
-    WriteTopBarButtonTGA("mark/m_top_inven_down.tga",    TICON_INVEN,    true);
-    WriteTopBarButtonTGA("mark/m_top_comm_norm.tga",     TICON_COMM,     false);
-    WriteTopBarButtonTGA("mark/m_top_comm_down.tga",     TICON_COMM,     true);
-    WriteTopBarButtonTGA("mark/m_top_shop_norm.tga",     TICON_SHOP,     false);
-    WriteTopBarButtonTGA("mark/m_top_shop_down.tga",     TICON_SHOP,     true);
-    WriteTopBarButtonTGA("mark/m_top_auto_norm.tga",     TICON_AUTOHUNT, false);
-    WriteTopBarButtonTGA("mark/m_top_auto_down.tga",     TICON_AUTOHUNT, true);
-    WriteTopBarButtonTGA("mark/m_top_ds_norm.tga",       TICON_DS,       false);
-    WriteTopBarButtonTGA("mark/m_top_ds_down.tga",       TICON_DS,       true);
-    WriteTopBarButtonTGA("mark/m_top_util_norm.tga",     TICON_UTIL,     false);
-    WriteTopBarButtonTGA("mark/m_top_util_down.tga",     TICON_UTIL,     true);
-    WriteTopBarButtonTGA("mark/m_top_sys_norm.tga",      TICON_SYS,      false);
-    WriteTopBarButtonTGA("mark/m_top_sys_down.tga",      TICON_SYS,      true);
     WriteSquaredMiniMapTextures();
-	WriteMobileStatusHUDTextures();
-	WriteTopBarButtonTGA("mark/m_top_collapse_norm_v4.tga", TICON_COLLAPSE, false);
+    WriteMobileStatusHUDTextures();
+
+    WriteTopBarButtonTGA("mark/m_top_collapse_norm_v4.tga", TICON_COLLAPSE, false);
     WriteTopBarButtonTGA("mark/m_top_collapse_down_v4.tga", TICON_COLLAPSE, true);
     WriteTopBarButtonTGA("mark/m_top_expand_norm_v4.tga",   TICON_EXPAND,   false);
     WriteTopBarButtonTGA("mark/m_top_expand_down_v4.tga",   TICON_EXPAND,   true);
@@ -2140,6 +2582,27 @@ void GenerateMobileHUDTextures() {
     WriteTopBarButtonTGA("mark/m_top_util_down_v4.tga",     TICON_UTIL,     true);
     WriteTopBarButtonTGA("mark/m_top_sys_norm_v4.tga",      TICON_SYS,      false);
     WriteTopBarButtonTGA("mark/m_top_sys_down_v4.tga",      TICON_SYS,      true);
+    WriteTopBarButtonTGA("mark/m_top_spec_norm_v4.tga",     TICON_SPEC_BOXES, false);
+    WriteTopBarButtonTGA("mark/m_top_spec_down_v4.tga",     TICON_SPEC_BOXES, true);
+
+    // Native worldonline Dark Charcoal Glass + Pewter-Iron Bevel & Copper-Rust Active Glow
+    // 2x HiDPI Native worldonline Dark Charcoal & Pewter-Iron Rings (stay razor-sharp when resized up to 180%)
+    WriteMobileRingTGA("mark/m_atk_norm_v3.tga",       280, 128.0f, 10.4f, 200.0f, 152,146,136, 188,112, 68, MICON_ATK_SWORDS,  false);
+    WriteMobileRingTGA("mark/m_atk_down_v3.tga",       280, 132.0f, 12.0f, 235.0f, 192,185,174, 215,125, 72, MICON_ATK_SWORDS,  true);
+    WriteMobileRingTGA("mark/m_slot_norm_v3.tga",      144,  67.0f,  7.2f, 190.0f, 146,140,130, 175,168,156, MICON_NONE,        false);
+    WriteMobileRingTGA("mark/m_slot_over_v3.tga",      144,  69.0f,  8.4f, 225.0f, 188,182,170, 195,115, 68, MICON_NONE,        true);
+    WriteMobileRingTGA("mark/m_btn_lock_norm_v3.tga",  128,  54.0f,  6.8f, 195.0f, 146,140,130, 185,178,166, MICON_TARGET,      false);
+    WriteMobileRingTGA("mark/m_btn_lock_down_v3.tga",  128,  56.0f,  8.0f, 230.0f, 188,182,170, 205,120, 68, MICON_TARGET,      true);
+    WriteMobileRingTGA("mark/m_btn_loot_norm_v3.tga",  128,  54.0f,  6.8f, 195.0f, 146,140,130, 185,178,166, MICON_LOOT,        false);
+    WriteMobileRingTGA("mark/m_btn_loot_down_v3.tga",  128,  56.0f,  8.0f, 230.0f, 188,182,170, 205,120, 68, MICON_LOOT,        true);
+    WriteMobileRingTGA("mark/m_btn_page_norm_v3.tga",  128,  54.0f,  6.8f, 195.0f, 146,140,130, 185,178,166, MICON_PAGE,        false);
+    WriteMobileRingTGA("mark/m_btn_page_down_v3.tga",  128,  56.0f,  8.0f, 230.0f, 188,182,170, 205,120, 68, MICON_PAGE,        true);
+    WriteMobileRingTGA("mark/m_btn_mount_norm_v3.tga", 128,  57.0f,  7.2f, 195.0f, 146,140,130, 185,178,166, MICON_MOUNT,       false);
+    WriteMobileRingTGA("mark/m_btn_mount_down_v3.tga", 128,  59.0f,  8.4f, 230.0f, 188,182,170, 205,120, 68, MICON_MOUNT,       true);
+    WriteMobileRingTGA("mark/m_btn_chat_norm_v3.tga",  112,  49.0f,  6.4f, 195.0f, 146,140,130, 185,178,166, MICON_CHAT_BUBBLE, false);
+    WriteMobileRingTGA("mark/m_btn_chat_down_v3.tga",  112,  51.0f,  7.6f, 230.0f, 188,182,170, 205,120, 68, MICON_CHAT_BUBBLE, true);
+    WriteMobileRingTGA("mark/m_atk_norm_v5.tga",       288, 132.0f, 10.8f, 205.0f, 152,146,136, 192,115, 68, MICON_ATK_SWORDS,  false);
+    WriteMobileRingTGA("mark/m_atk_down_v5.tga",       288, 136.0f, 12.4f, 238.0f, 195,188,176, 220,128, 72, MICON_ATK_SWORDS,  true);
 }
 
 // ============================================================================
@@ -2165,37 +2628,194 @@ struct SMobilePointerSlot {
     UI::CWindow* pHoldDragWnd = nullptr;
 };
 
-static std::unordered_map<UI::CWindow*, float> s_scaledWindows;
+struct SScaledWindowRect {
+    float scale = 1.0f;
+    int x = 0, y = 0, w = 0, h = 0;
+    uint32_t lastSeenFrame = 0;
+};
+static std::unordered_map<uintptr_t, SScaledWindowRect> s_scaledWindows;
+static uint32_t s_uMobileRenderFrame = 1;
 static D3DXMATRIX s_savedUiViewMat;
 static bool s_bUiScaleActive = false;
+static int s_iLastTouchDownX = -1000;
+static int s_iLastTouchDownY = -1000;
+static bool s_bLastTouchSnappedToButton = false;
+static bool s_bExplicitKeyboardRequest = false;
 
 static void MapTouchThroughScaledWindows(int inX, int inY, int* outX, int* outY) {
     *outX = inX;
     *outY = inY;
     for (auto it = s_scaledWindows.begin(); it != s_scaledWindows.end(); ) {
-        UI::CWindow* pWnd = it->first;
-        float sc = it->second;
-        if (!pWnd || sc <= 1.01f) {
-            ++it;
+        if (s_uMobileRenderFrame > it->second.lastSeenFrame + 60) {
+            it = s_scaledWindows.erase(it);
             continue;
         }
-        if (!pWnd->IsShow()) {
-            ++it;
-            continue;
-        }
-        long wx = 0, wy = 0;
-        pWnd->GetPosition(&wx, &wy);
-        int ww = pWnd->GetWidth();
-        int wh = pWnd->GetHeight();
-        int scaledW = (int)(ww * sc);
-        int scaledH = (int)(wh * sc);
-        if (inX >= wx && inX <= wx + scaledW && inY >= wy && inY <= wy + scaledH) {
-            *outX = wx + (int)((inX - wx) / sc);
-            *outY = wy + (int)((inY - wy) / sc);
-            return;
+        const SScaledWindowRect& r = it->second;
+        if (s_uMobileRenderFrame <= r.lastSeenFrame + 2 && fabsf(r.scale - 1.0f) > 0.01f && r.w > 0 && r.h > 0) {
+            int scaledW = (int)(r.w * r.scale);
+            int scaledH = (int)(r.h * r.scale);
+            if (inX >= r.x && inX <= r.x + scaledW && inY >= r.y && inY <= r.y + scaledH) {
+                *outX = r.x + (int)((inX - r.x) / r.scale + 0.5f);
+                *outY = r.y + (int)((inY - r.y) / r.scale + 0.5f);
+                return;
+            }
         }
         ++it;
     }
+}
+
+static bool IsClickableButtonWindow(UI::CWindow* pWnd) {
+    if (!pWnd) return false;
+    if (dynamic_cast<UI::CButton*>(pWnd) != nullptr && dynamic_cast<UI::CDragButton*>(pWnd) == nullptr)
+        return true;
+    const char* szName = pWnd->GetName();
+    if (szName && (strcmp(szName, "ChatModeButton") == 0 || strcmp(szName, "ChatTabButton") == 0))
+        return true;
+    return false;
+}
+
+// Ensures child TextLines/ToolTipTexts inside a CButton never intercept touch, without disabling child buttons inside a CDragButton
+static UI::CWindow* SanitizeButtonChildPickFlags(UI::CWindow* pWnd) {
+    if (!pWnd || IsClickableButtonWindow(pWnd) || dynamic_cast<UI::CDragButton*>(pWnd) != nullptr)
+        return pWnd;
+
+    UI::CWindow* pBtnAncestor = nullptr;
+    for (UI::CWindow* pWalk = pWnd->GetParent(); pWalk != nullptr; pWalk = pWalk->GetParent()) {
+        if (IsClickableButtonWindow(pWalk)) {
+            pBtnAncestor = pWalk;
+            break;
+        }
+        if (dynamic_cast<UI::CDragButton*>(pWalk) != nullptr) {
+            break;
+        }
+    }
+    if (pBtnAncestor) {
+        for (UI::CWindow* pWalk = pWnd; pWalk != nullptr && pWalk != pBtnAncestor; pWalk = pWalk->GetParent()) {
+            if (!IsClickableButtonWindow(pWalk)) {
+                pWalk->AddFlag(UI::CWindow::FLAG_NOT_PICK);
+            }
+        }
+        return pBtnAncestor;
+    }
+    return pWnd;
+}
+
+static bool IsScrollOrSliderOrButtonWidget(UI::CWindow* pWnd, bool* outIsDragThumb = nullptr, bool* outIsClickableBtn = nullptr) {
+    if (outIsDragThumb) *outIsDragThumb = false;
+    if (outIsClickableBtn) *outIsClickableBtn = false;
+    pWnd = SanitizeButtonChildPickFlags(pWnd);
+    for (UI::CWindow* pCur = pWnd; pCur != nullptr; pCur = pCur->GetParent()) {
+        const char* szName = pCur->GetName();
+        if (szName && (strcmp(szName, "ChatModeButton") == 0 || strcmp(szName, "ChatTabButton") == 0)) {
+            if (outIsClickableBtn) *outIsClickableBtn = true;
+            return true;
+        }
+        if (dynamic_cast<UI::CButton*>(pCur) != nullptr) {
+            if (outIsClickableBtn) *outIsClickableBtn = true;
+            return true;
+        }
+        if (szName && strcmp(szName, "ChatWindow:ChatButton") == 0) {
+            return false;
+        }
+        if (dynamic_cast<UI::CDragButton*>(pCur) != nullptr) {
+            if (outIsDragThumb) *outIsDragThumb = true;
+            return true;
+        }
+        if (dynamic_cast<UI::CTextLine*>(pCur) != nullptr &&
+            !pCur->IsFlag(UI::CWindow::FLAG_NOT_PICK) &&
+            UI::CWindowManager::Instance().GetActivateWindow() == pCur) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void ApplySmartTouchMagnetism(int inX, int inY, int* ioX, int* ioY, bool* outSnappedBtn, bool* outIsScrollThumb) {
+    *ioX = inX;
+    *ioY = inY;
+    if (outSnappedBtn) *outSnappedBtn = false;
+    if (outIsScrollThumb) *outIsScrollThumb = false;
+
+    UI::CWindowManager::Instance().RunMouseMove(inX, inY);
+    UI::CWindow* pDirect = SanitizeButtonChildPickFlags(UI::CWindowManager::Instance().GetPointWindow());
+    bool isThumb = false, isBtn = false;
+    if (pDirect && IsScrollOrSliderOrButtonWidget(pDirect, &isThumb, &isBtn)) {
+        if (outSnappedBtn) *outSnappedBtn = isBtn;
+        if (outIsScrollThumb) *outIsScrollThumb = isThumb;
+        UI::CWindowManager::Instance().RunMouseMove(*ioX, *ioY);
+        return;
+    }
+
+    UI::CWindow* pBestTarget = nullptr;
+    int bestDistSq = 999999;
+    int bestCenterX = inX, bestCenterY = inY;
+    bool bestIsThumb = false, bestIsBtn = false;
+
+    static const int s_radii[] = { 6, 12, 18, 24 };
+    static const float s_dirs[8][2] = {
+        {1,0}, {-1,0}, {0,1}, {0,-1},
+        {0.707f,0.707f}, {-0.707f,0.707f}, {0.707f,-0.707f}, {-0.707f,-0.707f}
+    };
+
+    for (int r : s_radii) {
+        for (int d = 0; d < 8; ++d) {
+            int px = inX + (int)(s_dirs[d][0] * r);
+            int py = inY + (int)(s_dirs[d][1] * r);
+            UI::CWindowManager::Instance().RunMouseMove(px, py);
+            UI::CWindow* pCand = SanitizeButtonChildPickFlags(UI::CWindowManager::Instance().GetPointWindow());
+            if (!pCand) continue;
+
+            UI::CWindow* pControl = nullptr;
+            bool candThumb = false, candBtn = false;
+            for (UI::CWindow* pWalk = pCand; pWalk != nullptr; pWalk = pWalk->GetParent()) {
+                const char* wName = pWalk->GetName();
+                if (wName && (strcmp(wName, "ChatModeButton") == 0 || strcmp(wName, "ChatTabButton") == 0)) {
+                    pControl = pWalk; candBtn = true; break;
+                }
+                if (dynamic_cast<UI::CButton*>(pWalk) != nullptr) {
+                    pControl = pWalk; candBtn = true; break;
+                }
+                if (wName && strcmp(wName, "ChatWindow:ChatButton") == 0) {
+                    break;
+                }
+                if (dynamic_cast<UI::CDragButton*>(pWalk) != nullptr) {
+                    pControl = pWalk; candThumb = true; break;
+                }
+            }
+            if (!pControl) continue;
+
+            int cw = pControl->GetWidth();
+            int ch = pControl->GetHeight();
+            if (!candThumb && (cw > 90 || ch > 48)) continue;
+
+            const RECT& rc = pControl->GetRect();
+            int cx = (rc.left + rc.right) / 2;
+            int cy = (rc.top + rc.bottom) / 2;
+            int dx = inX - cx;
+            int dy = inY - cy;
+            int dSq = dx * dx + dy * dy;
+            if (candThumb) dSq -= 120;
+            else if (cw <= 24 && ch <= 24) dSq -= 80;
+
+            if (dSq < bestDistSq) {
+                bestDistSq = dSq;
+                pBestTarget = pControl;
+                bestCenterX = cx;
+                bestCenterY = cy;
+                bestIsThumb = candThumb;
+                bestIsBtn = candBtn;
+            }
+        }
+    }
+
+    if (pBestTarget) {
+        *ioX = bestCenterX;
+        *ioY = bestCenterY;
+        if (outSnappedBtn) *outSnappedBtn = bestIsBtn;
+        if (outIsScrollThumb) *outIsScrollThumb = bestIsThumb;
+    }
+    UI::CWindowManager::Instance().RunMouseMove(*ioX, *ioY);
+    SanitizeButtonChildPickFlags(UI::CWindowManager::Instance().GetPointWindow());
 }
 
 static DWORD Pick3DActorAtScreenPos(int sx, int sy) {
@@ -2206,7 +2826,6 @@ static DWORD Pick3DActorAtScreenPos(int sx, int sy) {
     CInstanceBase* pMain = pChrMgr->GetMainInstancePtr();
     const D3DXMATRIX& matV = pCam->GetViewMatrix();
     float fovDeg = 30.0f;
-    if (fovDeg < 10.0f) fovDeg = 30.0f;
     float tanHalfFov = tanf(fovDeg * 0.5f * (3.14159265f / 180.0f));
     float aspect = (float)g_AndroidScreenWidth / (float)(g_AndroidScreenHeight > 0 ? g_AndroidScreenHeight : 720);
 
@@ -2251,7 +2870,7 @@ static DWORD Pick3DActorAtScreenPos(int sx, int sy) {
         if (sx >= cx - halfW && sx <= cx + halfW && sy >= minY && sy <= maxY) {
             float cy = 0.5f * (fy + hy);
             float distSq = (sx - cx) * (sx - cx) + (sy - cy) * (sy - cy);
-            if (pkInst->IsPC()) distSq *= 0.7f; // Prioritize players slightly when overlapping
+            if (pkInst->IsPC()) distSq *= 0.7f;
             if (distSq < bestScore) {
                 bestScore = distSq;
                 bestVID = pkInst->GetVirtualID();
@@ -2263,33 +2882,35 @@ static DWORD Pick3DActorAtScreenPos(int sx, int sy) {
 
 static UI::CWindow* FindHoldDraggableWindow(int x, int y) {
     UI::CWindowManager::Instance().RunMouseMove(x, y);
-    UI::CWindow* pPointWnd = UI::CWindowManager::Instance().GetPointWindow();
+    UI::CWindow* pPointWnd = SanitizeButtonChildPickFlags(UI::CWindowManager::Instance().GetPointWindow());
     if (!pPointWnd) return nullptr;
 
-    // Only skip tiny slider/scrollbar thumbs (<= 28px)
-    if (pPointWnd->IsFlag(UI::CWindow::FLAG_MOVABLE) &&
-        pPointWnd->GetWidth() <= 28 && pPointWnd->GetHeight() <= 28) {
+    // Never hijack scrollbars, sliders, buttons, or editlines into a window drag!
+    bool isThumb = false, isBtn = false;
+    if (IsScrollOrSliderOrButtonWidget(pPointWnd, &isThumb, &isBtn)) {
+        return nullptr;
+    }
+
+    int testX = x, testY = y;
+    bool snapBtn = false, snapThumb = false;
+    ApplySmartTouchMagnetism(x, y, &testX, &testY, &snapBtn, &snapThumb);
+    if (snapThumb || snapBtn) {
         return nullptr;
     }
 
     UI::CWindow* pBestMovable = nullptr;
-    UI::CWindow* pTopLayerChild = nullptr;
     for (UI::CWindow* pCur = pPointWnd; pCur != nullptr; pCur = pCur->GetParent()) {
         const char* szName = pCur->GetName();
         if (szName) {
-            if (strcmp(szName, "ChatWindow") == 0 || strcmp(szName, "MobileChatCatcher") == 0) {
-                return (strcmp(szName, "MobileChatCatcher") == 0 && pCur->GetParent()) ? pCur->GetParent() : pCur;
-            }
-            if (strcmp(szName, "TaskBar") == 0 || strcmp(szName, "MobileHUDFixed") == 0) {
+            if (strcmp(szName, "SliderBar") == 0 ||
+                strcmp(szName, "ChatInputSet") == 0 ||
+                strcmp(szName, "ChatWindow:ChatButton") == 0 ||
+                strcmp(szName, "TaskBar") == 0 ||
+                strcmp(szName, "MobileHUDFixed") == 0) {
                 return nullptr;
             }
-        }
-        UI::CWindow* pParent = pCur->GetParent();
-        if (pParent && pParent->GetName()) {
-            const char* pName = pParent->GetName();
-            if (strcmp(pName, "UI") == 0 || strcmp(pName, "TOP_MOST") == 0 || strcmp(pName, "UI_BOTTOM") == 0) {
-                pTopLayerChild = pCur;
-                break;
+            if (strcmp(szName, "MobileChatCatcher") == 0) {
+                return pCur;
             }
         }
         if (pCur->IsFlag(UI::CWindow::FLAG_MOVABLE) && !pCur->IsFlag(UI::CWindow::FLAG_RESTRICT_X)) {
@@ -2297,18 +2918,18 @@ static UI::CWindow* FindHoldDraggableWindow(int x, int y) {
         }
     }
 
-    UI::CWindow* pCandidate = pTopLayerChild ? pTopLayerChild : pBestMovable;
-    if (!pCandidate) return nullptr;
+    if (!pBestMovable) return nullptr;
 
-    if (pCandidate->GetWidth() >= g_AndroidScreenWidth - 32 &&
-        pCandidate->GetHeight() >= g_AndroidScreenHeight - 32) {
+    if (pBestMovable->GetWidth() >= g_AndroidScreenWidth - 32 &&
+        pBestMovable->GetHeight() >= g_AndroidScreenHeight - 32) {
         return nullptr;
     }
-    const char* cName = pCandidate->GetName();
-    if (cName && (strcmp(cName, "MobileHUDFixed") == 0 || strcmp(cName, "TaskBar") == 0)) {
+    const char* cName = pBestMovable->GetName();
+    if (cName && (strcmp(cName, "MobileHUDFixed") == 0 || strcmp(cName, "TaskBar") == 0 ||
+                  strcmp(cName, "ChatWindow:ChatButton") == 0)) {
         return nullptr;
     }
-    return pCandidate;
+    return pBestMovable;
 }
 
 static SMobilePointerSlot s_pointers[4];
@@ -2324,6 +2945,14 @@ static float s_fJoyRawDy = 0.0f;
 static float s_fSmoothedAutoRollRate = 0.0f;
 static bool s_bUiTouchDown = false;
 static DWORD s_dwLastLockedVID = 0;
+static DWORD s_dwLastTappedTargetVID = 0;
+static DWORD s_dwLastTappedTargetMs = 0;
+static DWORD s_dwMobileAutoAttackVID = 0;
+static bool  s_bAutoAttackMoveActive = false;
+static float s_fAutoAttackMoveDeg = 0.0f;
+static bool s_bPendingGroundLeftUp = false;
+static int  s_iPendingGroundUpX = 0;
+static int  s_iPendingGroundUpY = 0;
 
 // Cinematic Camera State
 static float s_fCamAccumDx = 0.0f;
@@ -2428,9 +3057,10 @@ static void EnsureAndroidLiveEditTextOnUiThread(JNIEnv* env) {
                 env->ExceptionClear();
 
                 if (etObj) {
-                    // TYPE_CLASS_TEXT (1) | TYPE_TEXT_VARIATION_VISIBLE_PASSWORD (0x90) | TYPE_TEXT_FLAG_NO_SUGGESTIONS (0x80000) | TYPE_TEXT_FLAG_MULTI_LINE (0x20000)
+                    // TYPE_CLASS_TEXT (1) | TYPE_TEXT_FLAG_NO_SUGGESTIONS (0x80000) | TYPE_TEXT_FLAG_MULTI_LINE (0x20000)
+                    // (Do NOT set 0x90 VISIBLE_PASSWORD so Android keyboards allow switching to Arabic)
                     jmethodID setInputTypeMid = env->GetMethodID(etCls, "setInputType", "(I)V");
-                    if (setInputTypeMid) env->CallVoidMethod(etObj, setInputTypeMid, (jint)0x000A0091);
+                    if (setInputTypeMid) env->CallVoidMethod(etObj, setInputTypeMid, (jint)0x000A0001);
                     env->ExceptionClear();
 
                     // IME_FLAG_NO_EXTRACT_UI (0x10000000) | IME_FLAG_NO_FULLSCREEN (0x2000000) | IME_ACTION_DONE (6)
@@ -2456,6 +3086,26 @@ static void EnsureAndroidLiveEditTextOnUiThread(JNIEnv* env) {
                     env->ExceptionClear();
 
                     jclass vgCls = env->FindClass("android/view/ViewGroup");
+                    jclass viewCls = env->FindClass("android/view/View");
+                    jmethodID getChildCountMid = env->GetMethodID(vgCls, "getChildCount", "()I");
+                    jmethodID getChildAtMid = env->GetMethodID(vgCls, "getChildAt", "(I)Landroid/view/View;");
+                    jmethodID setChildFocMid = env->GetMethodID(viewCls, "setFocusable", "(Z)V");
+                    jmethodID setChildFocTouchMid = env->GetMethodID(viewCls, "setFocusableInTouchMode", "(Z)V");
+                    // Prevent GLSurfaceView from stealing input focus away from s_pLiveEditText on touch
+                    if (getChildCountMid && getChildAtMid && setChildFocMid && setChildFocTouchMid) {
+                        jint cCount = env->CallIntMethod(contentView, getChildCountMid);
+                        for (jint ci = 0; ci < cCount; ++ci) {
+                            jobject ch = env->CallObjectMethod(contentView, getChildAtMid, ci);
+                            if (ch) {
+                                env->CallVoidMethod(ch, setChildFocMid, (jboolean)JNI_FALSE);
+                                env->CallVoidMethod(ch, setChildFocTouchMid, (jboolean)JNI_FALSE);
+                                env->DeleteLocalRef(ch);
+                            }
+                        }
+                        env->ExceptionClear();
+                    }
+                    env->DeleteLocalRef(viewCls);
+
                     jmethodID addViewMid = env->GetMethodID(vgCls, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
                     if (addViewMid && lpObj) {
                         env->CallVoidMethod(contentView, addViewMid, etObj, lpObj);
@@ -2480,7 +3130,7 @@ static void EnsureAndroidLiveEditTextOnUiThread(JNIEnv* env) {
 
     if (s_pLiveEditText) {
         jclass etCls = env->FindClass("android/widget/EditText");
-        if (s_bResetLiveEditTextPending) {
+        if (s_bResetLiveEditTextPending || !s_bSoftKeyboardVisible) {
             s_bResetLiveEditTextPending = false;
             jstring padStr = env->NewStringUTF("                                ");
             jclass tvCls = env->FindClass("android/widget/TextView");
@@ -2494,20 +3144,69 @@ static void EnsureAndroidLiveEditTextOnUiThread(JNIEnv* env) {
             env->DeleteLocalRef(tvCls);
             env->DeleteLocalRef(padStr);
         }
-        if (s_bSoftKeyboardVisible) {
-            jclass viewCls = env->FindClass("android/view/View");
-            jmethodID reqFocMid = env->GetMethodID(viewCls, "requestFocus", "()Z");
-            if (reqFocMid) env->CallBooleanMethod(s_pLiveEditText, reqFocMid);
-            env->ExceptionClear();
-            env->DeleteLocalRef(viewCls);
-        }
+        jclass viewCls = env->FindClass("android/view/View");
+        jmethodID reqFocMid = env->GetMethodID(viewCls, "requestFocus", "()Z");
+        if (reqFocMid) env->CallBooleanMethod(s_pLiveEditText, reqFocMid);
+        env->ExceptionClear();
+        jmethodID setSelMid = env->GetMethodID(etCls, "setSelection", "(I)V");
+        if (setSelMid) env->CallVoidMethod(s_pLiveEditText, setSelMid, (jint)s_u16LastEditText.size());
+        env->ExceptionClear();
+        env->DeleteLocalRef(viewCls);
         env->DeleteLocalRef(etCls);
     }
 #endif
 }
 
+static void EnsureActiveEditLineFocusedBeforeIME() {
+    PyRun_SimpleString(
+        "try:\n"
+        "    import constInfo\n"
+        "    itf = constInfo.GetInterfaceInstance() if hasattr(constInfo, 'GetInterfaceInstance') else None\n"
+        "    if itf and getattr(itf, 'wndChat', None) and itf.wndChat.IsEditMode():\n"
+        "        cl = itf.wndChat.chatInputSet.chatLine\n"
+        "        if not cl.IsFocus(): cl.SetFocus()\n"
+        "except:\n"
+        "    pass\n"
+    );
+}
+
+static void SyncMobileLiveTypingToPython() {
+    UI::CWindowManager::Instance().RunIMEUpdate();
+    PyRun_SimpleString(
+        "try:\n"
+        "    import ime, ui, constInfo\n"
+        "    itf = constInfo.GetInterfaceInstance() if hasattr(constInfo, 'GetInterfaceInstance') else None\n"
+        "    if itf and getattr(itf, 'wndChat', None) and itf.wndChat.IsEditMode():\n"
+        "        itf.wndChat.chatInputSet.chatLine.OnIMEUpdate()\n"
+        "    if hasattr(ui, '_g_mobileKbBar') and ui._g_mobileKbBar and ui._g_mobileKbBar.IsShow():\n"
+        "        ui._g_mobileKbBar.SetPreviewText(ime.GetText(0), 0)\n"
+        "except:\n"
+        "    pass\n"
+    );
+}
+
 static void PasteUnicodeCharToMetin2IME(uint16_t ch) {
     if (ch < 32) return;
+    EnsureActiveEditLineFocusedBeforeIME();
+
+    // Handle single-key Arabic Lam-Alef ligatures (لا / لأ / لإ / لآ)
+    if (ch >= 0xFEF5 && ch <= 0xFEFC) {
+        unsigned int alefByte = 0xC7; // ا
+        if (ch == 0xFEF5 || ch == 0xFEF6) alefByte = 0xC2;      // آ
+        else if (ch == 0xFEF7 || ch == 0xFEF8) alefByte = 0xC3; // أ
+        else if (ch == 0xFEF9 || ch == 0xFEFA) alefByte = 0xC5; // إ
+        char cmd[96];
+        snprintf(cmd, sizeof(cmd), "import ime\nime.PasteString('\\xe4\\x%02x')\n", alefByte);
+        PyRun_SimpleString(cmd);
+        return;
+    }
+
+    ch = (uint16_t)NormalizeArabicPresentationWChar((WCHAR)ch);
+
+    // Convert Arabic-Indic digits (٠-٩ and ۰-۹) to standard ASCII '0'-'9'
+    if (ch >= 0x0660 && ch <= 0x0669) ch = (uint16_t)('0' + (ch - 0x0660));
+    else if (ch >= 0x06F0 && ch <= 0x06F9) ch = (uint16_t)('0' + (ch - 0x06F0));
+
     unsigned char outCh = 0;
     if (ch < 127) {
         outCh = (unsigned char)ch;
@@ -2593,12 +3292,24 @@ static bool PollAndroidLiveEditText(JNIEnv* env) {
         }
     }
 
+    if (cleanStr.size() > 32 && cleanStr[0] != u' ' && s_u16LastEditText.size() >= 32 && s_u16LastEditText.substr(0, 32) == std::u16string(32, u' ')) {
+        size_t trailingSpaces = 0;
+        while (trailingSpaces < cleanStr.size() && cleanStr[cleanStr.size() - 1 - trailingSpaces] == u' ') {
+            ++trailingSpaces;
+        }
+        if (trailingSpaces >= 32) {
+            std::u16string typedPart = cleanStr.substr(0, cleanStr.size() - 32);
+            cleanStr = std::u16string(32, u' ') + typedPart;
+        }
+    }
+
     size_t prefixLen = 0;
     size_t minLen = std::min(s_u16LastEditText.size(), cleanStr.size());
     while (prefixLen < minLen && s_u16LastEditText[prefixLen] == cleanStr[prefixLen]) {
         ++prefixLen;
     }
 
+    EnsureActiveEditLineFocusedBeforeIME();
     size_t numBackspaces = s_u16LastEditText.size() - prefixLen;
     for (size_t i = 0; i < numBackspaces; ++i) {
         PyRun_SimpleString("import ime\nime.PasteBackspace()\n");
@@ -2607,12 +3318,12 @@ static bool PollAndroidLiveEditText(JNIEnv* env) {
         PasteUnicodeCharToMetin2IME((uint16_t)cleanStr[i]);
     }
 
-    s_u16LastEditText = rawStr;
+    s_u16LastEditText = cleanStr;
     if (cleanStr.size() < 8 || cleanStr.size() > 160) {
         s_bResetLiveEditTextPending = true;
     }
 
-    UI::CWindowManager::Instance().RunIMEUpdate();
+    SyncMobileLiveTypingToPython();
 
     if (pressedEnter) {
         s_bResetLiveEditTextPending = true;
@@ -2632,12 +3343,31 @@ static bool PollAndroidLiveEditText(JNIEnv* env) {
 void AndroidToggleSoftKeyboard(bool show) {
     if (show) {
         DWORD nowMs = ELTimer_GetMSec();
-        // Ignore automatic SetFocus() calls when a window opens if the player didn't tap the screen
-        if (s_dwLastTouchDownMs == 0 || (nowMs - s_dwLastTouchDownMs > 550)) {
-            return;
+        if (!s_bExplicitKeyboardRequest) {
+            if (s_bLastTouchSnappedToButton || s_dwLastTouchDownMs == 0 || (nowMs - s_dwLastTouchDownMs > 450)) {
+                return;
+            }
+            UI::CWindow* pAct = UI::CWindowManager::InstancePtr() ? UI::CWindowManager::Instance().GetActivateWindow() : nullptr;
+            if (!pAct || !pAct->IsShow() || pAct->IsFlag(UI::CWindow::FLAG_NOT_PICK) || dynamic_cast<UI::CTextLine*>(pAct) == nullptr) {
+                return;
+            }
+            // Never open keyboard if pAct is a child of a CButton (such as ToolTipText or ButtonText)
+            for (UI::CWindow* pWalk = pAct->GetParent(); pWalk != nullptr; pWalk = pWalk->GetParent()) {
+                if (dynamic_cast<UI::CButton*>(pWalk) != nullptr) {
+                    pAct->AddFlag(UI::CWindow::FLAG_NOT_PICK);
+                    return;
+                }
+            }
+            const RECT& rc = pAct->GetRect();
+            if (s_iLastTouchDownX < rc.left - 14 || s_iLastTouchDownX > rc.right + 14 ||
+                s_iLastTouchDownY < rc.top - 14  || s_iLastTouchDownY > rc.bottom + 14) {
+                return;
+            }
         }
+        s_bExplicitKeyboardRequest = false;
         s_dwLastKeyboardOpenMs = nowMs;
     } else {
+        s_bExplicitKeyboardRequest = false;
         s_bResetLiveEditTextPending = true;
     }
     s_bSoftKeyboardVisible = show;
@@ -2889,22 +3619,29 @@ static void ReleasePointerSlot(int idx, int x, int y, int maskedAction) {
         slot.pHoldDragWnd = nullptr;
         UpdateUiTouchDownFlag();
         if (wasDraggingWnd) {
-            if (pDraggedWnd && pDraggedWnd->GetName() && strcmp(pDraggedWnd->GetName(), "ChatWindow") == 0) {
+            if (pDraggedWnd && pDraggedWnd->GetName() &&
+                (strcmp(pDraggedWnd->GetName(), "ChatWindow") == 0 || strcmp(pDraggedWnd->GetName(), "MobileChatCatcher") == 0)) {
                 long cx = 0, cy = 0;
                 pDraggedWnd->GetPosition(&cx, &cy);
-                char cmd[160];
+                char cmd[240];
                 snprintf(cmd, sizeof(cmd),
                     "try:\n"
                     "    import constInfo\n"
-                    "    if hasattr(constInfo, 'SaveMobileChatPos'): constInfo.SaveMobileChatPos(%ld, %ld)\n"
+                    "    if hasattr(constInfo, 'OnMobileChatDragged'): constInfo.OnMobileChatDragged(%ld, %ld, '%s')\n"
                     "except:\n"
-                    "    pass\n", cx, cy);
+                    "    pass\n", cx, cy, pDraggedWnd->GetName());
                 PyRun_SimpleString(cmd);
             }
             return;
         }
         int mx = rx, my = ry;
         MapTouchThroughScaledWindows(rx, ry, &mx, &my);
+        // If ACTION_DOWN snapped onto a button and the finger didn't drag far, release squarely on the snapped button!
+        int totalMoveSq = (rx - slot.startX) * (rx - slot.startX) + (ry - slot.startY) * (ry - slot.startY);
+        if (s_bLastTouchSnappedToButton && totalMoveSq <= 324) {
+            mx = s_iLastTouchDownX;
+            my = s_iLastTouchDownY;
+        }
         g_AndroidMouseX = mx;
         g_AndroidMouseY = my;
         UI::CWindowManager::Instance().RunMouseMove(mx, my);
@@ -2914,25 +3651,34 @@ static void ReleasePointerSlot(int idx, int x, int y, int maskedAction) {
         DWORD heldMs = ELTimer_GetMSec() - slot.downTimeMs;
         int totalDx = rx - slot.startX;
         int totalDy = ry - slot.startY;
-        if (maskedAction != 3 && !slot.isDraggingCamera && heldMs < 400 && (totalDx * totalDx + totalDy * totalDy <= 576)) {
-            DWORD pickedVID = Pick3DActorAtScreenPos(rx, ry);
+        if (maskedAction != 3 && !slot.isDraggingCamera && heldMs < 480 && (totalDx * totalDx + totalDy * totalDy <= 900)) {
+            // If an item or skill is attached to mouseController, tapping the 3D ground drops the item or detaches the skill!
+            PyObject* pMm = PyImport_AddModule("mouseModule");
+            PyObject* pMc = pMm ? PyObject_GetAttrString(pMm, "mouseController") : nullptr;
+            PyObject* pIsAtt = pMc ? PyObject_CallMethod(pMc, "isAttached", NULL) : nullptr;
+            bool bAttachedOnCursor = (pIsAtt && PyObject_IsTrue(pIsAtt));
+            Py_XDECREF(pIsAtt);
+            Py_XDECREF(pMc);
+            if (PyErr_Occurred()) PyErr_Clear();
+
+            DWORD pickedVID = bAttachedOnCursor ? 0 : Pick3DActorAtScreenPos(rx, ry);
             if (pickedVID != 0 && CPythonPlayer::InstancePtr()) {
-                CPythonPlayer::Instance().SetTarget(pickedVID, TRUE);
+                DWORD nowTapMs = ELTimer_GetMSec();
+                CAndroidPlayerAccessor& rkPlayer = static_cast<CAndroidPlayerAccessor&>(CPythonPlayer::Instance());
+                DWORD prevTargetVID = rkPlayer.GetTargetVID();
+                bool isSecondTapOnSameTarget = (pickedVID == prevTargetVID ||
+                    (pickedVID == s_dwLastTappedTargetVID && (nowTapMs - s_dwLastTappedTargetMs) < 4000));
+
+                s_dwLastTappedTargetVID = pickedVID;
+                s_dwLastTappedTargetMs = nowTapMs;
+                rkPlayer.SetTarget(pickedVID, TRUE);
+
                 CInstanceBase* pkInst = CPythonCharacterManager::InstancePtr()
                     ? CPythonCharacterManager::Instance().GetInstancePtr(pickedVID) : nullptr;
                 if (pkInst) {
-                    if (pkInst->IsPC()) {
-                        char cmd[256];
-                        snprintf(cmd, sizeof(cmd),
-                            "try:\n"
-                            "    import constInfo, chr\n"
-                            "    itf = constInfo.GetInterfaceInstance()\n"
-                            "    if itf and hasattr(itf, 'wndTargetBoard') and itf.wndTargetBoard:\n"
-                            "        itf.wndTargetBoard.Open(%u, chr.GetNameByVID(%u))\n"
-                            "except:\n"
-                            "    pass\n", (unsigned int)pickedVID, (unsigned int)pickedVID);
-                        PyRun_SimpleString(cmd);
-                    } else if (pkInst->IsNPC() || pkInst->IsShop()) {
+                    if (pkInst->IsNPC() || pkInst->IsShop()) {
+                        s_dwMobileAutoAttackVID = 0;
+                        rkPlayer.SetAttackKeyState(false);
                         char cmd[128];
                         snprintf(cmd, sizeof(cmd),
                             "try:\n"
@@ -2941,14 +3687,54 @@ static void ReleasePointerSlot(int idx, int x, int y, int maskedAction) {
                             "except:\n"
                             "    pass\n", (unsigned int)pickedVID);
                         PyRun_SimpleString(cmd);
+                    } else if (pkInst->IsPC()) {
+                        if (rkPlayer.m_ppyGameWindow) {
+                            PyCallClassMemberFunc(rkPlayer.m_ppyGameWindow, "SetPCTargetBoard",
+                                                  Py_BuildValue("(is)", (int)pickedVID, pkInst->GetNameString()));
+                        }
+                        if (isSecondTapOnSameTarget && pkInst->IsEnemy()) {
+                            s_dwMobileAutoAttackVID = pickedVID;
+                        } else {
+                            s_dwMobileAutoAttackVID = 0;
+                        }
+                    } else {
+                        if (isSecondTapOnSameTarget) {
+                            s_dwMobileAutoAttackVID = pickedVID;
+                        } else {
+                            s_dwMobileAutoAttackVID = 0;
+                            rkPlayer.SetAttackKeyState(false);
+                        }
                     }
                 }
             } else {
+                if (s_dwMobileAutoAttackVID != 0 && CPythonPlayer::InstancePtr()) {
+                    s_dwMobileAutoAttackVID = 0;
+                    s_bAutoAttackMoveActive = false;
+                    CPythonPlayer::Instance().SetAttackKeyState(false);
+                }
                 g_AndroidMouseX = rx;
                 g_AndroidMouseY = ry;
                 UI::CWindowManager::Instance().RunMouseMove(rx, ry);
                 UI::CWindowManager::Instance().RunMouseLeftButtonDown(rx, ry);
-                UI::CWindowManager::Instance().RunMouseLeftButtonUp(rx, ry);
+                if (bAttachedOnCursor) {
+                    UI::CWindowManager::Instance().RunMouseLeftButtonUp(rx, ry);
+                    PyRun_SimpleString(
+                        "try:\n"
+                        "    import mouseModule, constInfo\n"
+                        "    if mouseModule.mouseController.isAttached():\n"
+                        "        mouseModule.mouseController.DeattachObject()\n"
+                        "    itf = constInfo.GetInterfaceInstance() if hasattr(constInfo, 'GetInterfaceInstance') else None\n"
+                        "    if itf and getattr(itf, 'tooltipItem', None):\n"
+                        "        itf.tooltipItem.HideToolTip()\n"
+                        "except:\n"
+                        "    pass\n"
+                    );
+                } else {
+                    // Defer LeftButtonUp until right after Loop() so CPythonPlayer::Update() processes MBS_PRESS raycast first!
+                    s_bPendingGroundLeftUp = true;
+                    s_iPendingGroundUpX = rx;
+                    s_iPendingGroundUpY = ry;
+                }
             }
         }
     }
@@ -2991,20 +3777,26 @@ static PyObject* mobileInput_IsUiTouchDown(PyObject* self, PyObject* args) {
 }
 
 extern "C" bool AndroidGetJoystickMoveDir(float* outDeg) {
-    if (!s_bJoyActive) return false;
-    float mag = hypotf(s_fJoyNormX, s_fJoyNormY);
-    if (mag <= 0.15f) return false;
-    if (outDeg) {
-        float vx = s_fJoyNormX / mag;
-        float vy = s_fJoyNormY / mag;
-        float dot = -vy;
-        if (dot < -1.0f) dot = -1.0f;
-        else if (dot > 1.0f) dot = 1.0f;
-        float ret = acosf(dot) * (180.0f / 3.14159265f);
-        if (vx < 0.0f) ret = 360.0f - ret;
-        *outDeg = 360.0f - ret;
+    if (s_bJoyActive) {
+        float mag = hypotf(s_fJoyNormX, s_fJoyNormY);
+        if (mag <= 0.15f) return false;
+        if (outDeg) {
+            float vx = s_fJoyNormX / mag;
+            float vy = s_fJoyNormY / mag;
+            float dot = -vy;
+            if (dot < -1.0f) dot = -1.0f;
+            else if (dot > 1.0f) dot = 1.0f;
+            float ret = acosf(dot) * (180.0f / 3.14159265f);
+            if (vx < 0.0f) ret = 360.0f - ret;
+            *outDeg = 360.0f - ret;
+        }
+        return true;
     }
-    return true;
+    if (s_bAutoAttackMoveActive && s_dwMobileAutoAttackVID != 0) {
+        if (outDeg) *outDeg = s_fAutoAttackMoveDeg;
+        return true;
+    }
+    return false;
 }
 
 static PyObject* mobileInput_IsRectTouchHeld(PyObject* self, PyObject* args) {
@@ -3031,6 +3823,7 @@ static PyObject* mobileInput_ShowKeyboard(PyObject* self, PyObject* args) {
     int show = 1;
     if (!PyArg_ParseTuple(args, "|i", &show))
         return Py_BuildValue("i", 0);
+    if (show != 0) s_bExplicitKeyboardRequest = true;
     AndroidToggleSoftKeyboard(show != 0);
     return Py_BuildValue("i", 1);
 }
@@ -3143,15 +3936,68 @@ static PyObject* mobileInput_GetPerfHudText(PyObject* /*self*/, PyObject* /*args
 }
 #endif // ENABLE_MOBILE_PERF_DEBUGGER
 
+static void EnsureParentDirsExistForPath(const std::string& filePath) {
+    size_t pos = 0;
+    while ((pos = filePath.find('/', pos + 1)) != std::string::npos) {
+        std::string dir = filePath.substr(0, pos);
+        if (!dir.empty()) mkdir(dir.c_str(), 0777);
+    }
+}
+
+static PyObject* mobileInput_ReadPackFile(PyObject* /*self*/, PyObject* args) {
+    const char* c_szPath = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &c_szPath) || !c_szPath || !*c_szPath)
+        return Py_BuildValue("s", "");
+
+    std::string normPath = c_szPath;
+    for (char& c : normPath) if (c == '\\') c = '/';
+    std::string lowerPath = normPath;
+    for (char& c : lowerPath) c = (char)tolower((unsigned char)c);
+
+    CMappedFile file;
+    LPCVOID pData = nullptr;
+    std::string dPath = "d:/ymir work/" + lowerPath;
+    if (CEterPackManager::InstancePtr() &&
+        (CEterPackManager::Instance().Get(file, normPath.c_str(), &pData) ||
+         CEterPackManager::Instance().Get(file, lowerPath.c_str(), &pData) ||
+         CEterPackManager::Instance().Get(file, dPath.c_str(), &pData))) {
+        if (pData && file.Size() > 0) {
+            // Also cache on local disk so C++ fopen() calls (like npcLocationHelper) can open it directly
+            if (access(lowerPath.c_str(), F_OK) != 0) {
+                EnsureParentDirsExistForPath(lowerPath);
+                if (FILE* fp = fopen(lowerPath.c_str(), "wb")) {
+                    fwrite(pData, 1, file.Size(), fp);
+                    fclose(fp);
+                }
+            }
+            return PyString_FromStringAndSize((const char*)pData, (Py_ssize_t)file.Size());
+        }
+    }
+    return Py_BuildValue("s", "");
+}
+
 static PyObject* mobileInput_SetWindowScale(PyObject* /*self*/, PyObject* args) {
-    int hWnd = 0;
+    PyObject* pyHandle = nullptr;
     float scale = 1.0f;
-    if (!PyArg_ParseTuple(args, "if", &hWnd, &scale))
+    if (!PyArg_ParseTuple(args, "Of", &pyHandle, &scale))
         return Py_BuildValue("i", 0);
-    UI::CWindow* pWnd = (UI::CWindow*)(intptr_t)hWnd;
+    UI::CWindow* pWnd = (UI::CWindow*)PyLong_AsVoidPtr(pyHandle);
+    if (PyErr_Occurred()) { PyErr_Clear(); pWnd = nullptr; }
     if (pWnd) {
-        if (scale <= 1.01f) s_scaledWindows.erase(pWnd);
-        else s_scaledWindows[pWnd] = scale;
+        uintptr_t key = (uintptr_t)pWnd;
+        if (fabsf(scale - 1.0f) <= 0.01f || !pWnd->IsShow()) {
+            s_scaledWindows.erase(key);
+        } else {
+            long wx = 0, wy = 0;
+            pWnd->GetPosition(&wx, &wy);
+            SScaledWindowRect& entry = s_scaledWindows[key];
+            entry.scale = scale;
+            entry.x = (int)wx;
+            entry.y = (int)wy;
+            entry.w = pWnd->GetWidth();
+            entry.h = pWnd->GetHeight();
+            entry.lastSeenFrame = s_uMobileRenderFrame;
+        }
     }
     return Py_BuildValue("i", 1);
 }
@@ -3161,7 +4007,8 @@ static PyObject* mobileInput_BeginWindowScale(PyObject* /*self*/, PyObject* args
     float scale = 1.0f;
     if (!PyArg_ParseTuple(args, "iif", &gx, &gy, &scale))
         return Py_BuildValue("i", 0);
-    if (scale > 1.01f && CStateManager::InstancePtr()) {
+    if (fabsf(scale - 1.0f) > 0.01f && CStateManager::InstancePtr()) {
+        CGraphicTextInstance::FlushBatchRender();
         if (!s_bUiScaleActive) {
             CStateManager::Instance().GetTransform(D3DTS_VIEW, &s_savedUiViewMat);
             s_bUiScaleActive = true;
@@ -3170,8 +4017,8 @@ static PyObject* mobileInput_BeginWindowScale(PyObject* /*self*/, PyObject* args
         D3DXMatrixIdentity(&mat);
         mat._11 = scale;
         mat._22 = scale;
-        mat._41 = (float)gx * (1.0f - scale);
-        mat._42 = (float)gy * (1.0f - scale);
+        mat._41 = floorf((float)gx * (1.0f - scale) + 0.5f);
+        mat._42 = floorf((float)gy * (1.0f - scale) + 0.5f);
         CStateManager::Instance().SetTransform(D3DTS_VIEW, &mat);
     }
     return Py_BuildValue("i", 1);
@@ -3179,6 +4026,7 @@ static PyObject* mobileInput_BeginWindowScale(PyObject* /*self*/, PyObject* args
 
 static PyObject* mobileInput_EndWindowScale(PyObject* /*self*/, PyObject* /*args*/) {
     if (s_bUiScaleActive && CStateManager::InstancePtr()) {
+        CGraphicTextInstance::FlushBatchRender();
         CStateManager::Instance().SetTransform(D3DTS_VIEW, &s_savedUiViewMat);
         s_bUiScaleActive = false;
     }
@@ -3186,6 +4034,7 @@ static PyObject* mobileInput_EndWindowScale(PyObject* /*self*/, PyObject* /*args
 }
 
 static PyMethodDef s_mobileInputMethods[] = {
+    { "ReadPackFile",        mobileInput_ReadPackFile,        METH_VARARGS, "Read file from EterPack and cache on disk" },
     { "SetWindowScale",      mobileInput_SetWindowScale,      METH_VARARGS, "Register scaled UI window" },
     { "BeginWindowScale",    mobileInput_BeginWindowScale,    METH_VARARGS, "Begin 2D UI scale matrix" },
     { "EndWindowScale",      mobileInput_EndWindowScale,      METH_VARARGS, "End 2D UI scale matrix" },
@@ -3208,7 +4057,7 @@ void initmobileInput(void) {
 }
 #endif // ENABLE_OPENGL
 
-JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobject obj) {
+JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_render(JNIEnv* env, jobject obj) {
     if (s_bEngineReady && CPythonApplication::InstancePtr() && CStateManager::InstancePtr()) {
         while (true) {
             pthread_mutex_lock(&s_inputQueueMutex);
@@ -3295,35 +4144,86 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                     slot.role = TOUCH_ROLE_JOYSTICK;
                     s_bJoyActive = true;
                     UpdateJoystickFromPoint(ev.x, ev.y);
+                    UI::CWindowManager::Instance().RunMouseMove(-5000, -5000);
+                    PyRun_SimpleString(
+                        "try:\n"
+                        "    import constInfo\n"
+                        "    if hasattr(constInfo, 'CheckAutoCloseMobileChat'): constInfo.CheckAutoCloseMobileChat(-1, -1)\n"
+                        "    if hasattr(constInfo, 'DismissMobileTooltipsOnTap'): constInfo.DismissMobileTooltipsOnTap(-5000, -5000)\n"
+                        "except:\n"
+                        "    pass\n"
+                    );
                 }
-                // 2. Interactive UI Window / HUD Button
+                // 2. Interactive UI Window / HUD Button (with Smart Touch Magnetism for buttons & scrollbars)
                 else if ([&]() {
                     int mx = ev.x, my = ev.y;
                     MapTouchThroughScaledWindows(ev.x, ev.y, &mx, &my);
+                    bool snappedBtn = false, isThumb = false;
+                    ApplySmartTouchMagnetism(mx, my, &mx, &my, &snappedBtn, &isThumb);
+                    s_iLastTouchDownX = mx;
+                    s_iLastTouchDownY = my;
+                    s_bLastTouchSnappedToButton = snappedBtn;
                     return IsPointOnUILayer(mx, my);
                 }()) {
-                    int mx = ev.x, my = ev.y;
-                    MapTouchThroughScaledWindows(ev.x, ev.y, &mx, &my);
+                    int mx = s_iLastTouchDownX, my = s_iLastTouchDownY;
                     slot.role = TOUCH_ROLE_UI;
                     slot.isDraggingWindow = false;
                     slot.holdDragCancelled = false;
-                    slot.pHoldDragWnd = FindHoldDraggableWindow(mx, my);
+                    slot.pHoldDragWnd = s_bLastTouchSnappedToButton ? nullptr : FindHoldDraggableWindow(mx, my);
                     UpdateUiTouchDownFlag();
                     g_AndroidMouseX = mx;
                     g_AndroidMouseY = my;
+
+                    // Check if the touched UI widget belongs to the Chat system; if not, force-close open ChatWindow!
+                    UI::CWindow* pTouched = UI::CWindowManager::Instance().GetPointWindow();
+                    bool isChatWidget = false;
+                    for (UI::CWindow* pWalk = pTouched; pWalk != nullptr; pWalk = pWalk->GetParent()) {
+                        const char* wName = pWalk->GetName();
+                        if (wName && (strcmp(wName, "ChatWindow") == 0 ||
+                                      strcmp(wName, "ChatInputSet") == 0 ||
+                                      strcmp(wName, "Chat Line") == 0 ||
+                                      strcmp(wName, "ChatModeButton") == 0 ||
+                                      strcmp(wName, "ChatWindow:ChatButton") == 0 ||
+                                      strcmp(wName, "ChatTabButton") == 0 ||
+                                      strcmp(wName, "ChatResizeCorner") == 0 ||
+                                      strcmp(wName, "MobileChatCatcher") == 0)) {
+                            isChatWidget = true;
+                            break;
+                        }
+                    }
+
+                    char tapCheckCmd[320];
+                    snprintf(tapCheckCmd, sizeof(tapCheckCmd),
+                        "try:\n"
+                        "    import constInfo\n"
+                        "    if hasattr(constInfo, 'CheckAutoCloseMobileChat'): constInfo.CheckAutoCloseMobileChat(%d, %d)\n"
+                        "    if hasattr(constInfo, 'DismissMobileTooltipsOnTap'): constInfo.DismissMobileTooltipsOnTap(%d, %d)\n"
+                        "except:\n"
+                        "    pass\n", isChatWidget ? mx : -1, isChatWidget ? my : -1, mx, my);
+                    PyRun_SimpleString(tapCheckCmd);
                     UI::CWindowManager::Instance().RunMouseMove(mx, my);
                     UI::CWindowManager::Instance().RunMouseLeftButtonDown(mx, my);
                 }
                 // 3. 3D World (Orbit / Pinch-to-Zoom / Fast-Tap)
                 else {
+                    s_iLastTouchDownX = ev.x;
+                    s_iLastTouchDownY = ev.y;
+                    s_bLastTouchSnappedToButton = false;
                     slot.role = TOUCH_ROLE_WORLD;
                     s_fCamVelRoll *= 0.25f;
                     s_fCamVelPitch *= 0.25f;
-                    if (!s_bUiTouchDown) {
-                        g_AndroidMouseX = ev.x;
-                        g_AndroidMouseY = ev.y;
-                        UI::CWindowManager::Instance().RunMouseMove(ev.x, ev.y);
-                    }
+                    // Auto-close open ChatWindow when tapping on the 3D world
+                    PyRun_SimpleString(
+                   "try:\n"
+                   "    import constInfo\n"
+                   "    if hasattr(constInfo, 'CheckAutoCloseMobileChat'): constInfo.CheckAutoCloseMobileChat(-1, -1)\n"
+                   "    if hasattr(constInfo, 'DismissMobileTooltipsOnTap'): constInfo.DismissMobileTooltipsOnTap(-5000, -5000)\n"
+                   "except:\n"
+                   "    pass\n"
+               );
+               if (!s_bUiTouchDown) {
+                   UI::CWindowManager::Instance().RunMouseMove(-5000, -5000);
+               }
                 }
             }
             else if (maskedAction == 2) { // ACTION_MOVE
@@ -3368,13 +4268,15 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                             slot.isDraggingWindow = true;
                             UI::CWindowManager::Instance().RunMouseLeftButtonUp(-5000, -5000);
                             PyRun_SimpleString(
-                                "try:\n"
-                                "    import mouseModule\n"
-                                "    if mouseModule.mouseController.isAttached():\n"
-                                "        mouseModule.mouseController.DeattachObject()\n"
-                                "except:\n"
-                                "    pass\n"
-                            );
+                             "try:\n"
+                             "    import mouseModule, constInfo\n"
+                             "    if mouseModule.mouseController.isAttached():\n"
+                             "        mouseModule.mouseController.DeattachObject()\n"
+                             "    if hasattr(constInfo, 'DismissMobileTooltipsOnTap'):\n"
+                             "        constInfo.DismissMobileTooltipsOnTap(-5000, -5000)\n"
+                             "except:\n"
+                             "    pass\n"
+                         );
                         }
                     }
 
@@ -3392,9 +4294,14 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                     } else {
                         int mx = ev.x, my = ev.y;
                         MapTouchThroughScaledWindows(ev.x, ev.y, &mx, &my);
+                        if (s_bLastTouchSnappedToButton && distSq <= 324) {
+                            mx = s_iLastTouchDownX;
+                            my = s_iLastTouchDownY;
+                        }
                         g_AndroidMouseX = mx;
                         g_AndroidMouseY = my;
                         UI::CWindowManager::Instance().RunMouseMove(mx, my);
+                        SanitizeButtonChildPickFlags(UI::CWindowManager::Instance().GetPointWindow());
                     }
                 }
                 else if (slot.role == TOUCH_ROLE_WORLD) {
@@ -3423,9 +4330,9 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                         s_fLastPinchSpan = -1.0f;
                         int totalDx = ev.x - slot.startX;
                         int totalDy = ev.y - slot.startY;
-                        if (!slot.isDraggingCamera && (totalDx * totalDx + totalDy * totalDy > 49)) {
-                            slot.isDraggingCamera = true;
-                        }
+                        if (!slot.isDraggingCamera && (totalDx * totalDx + totalDy * totalDy > 196)) {
+                         slot.isDraggingCamera = true;
+                     }
                         if (slot.isDraggingCamera) {
                             // Accumulate sub-pixel deltas for cinematic frame-interpolated orbit + inertia
                             s_fCamAccumDx += (float)stepDx;
@@ -3557,6 +4464,60 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
             s_fJoySteerHoldTime = 0.0f;
         }
 
+        // Double-Tap Enemy Auto-Aim & Attack (cancelled immediately if user steers with joystick)
+        if (s_bJoyActive && s_dwMobileAutoAttackVID != 0) {
+            s_dwMobileAutoAttackVID = 0;
+            s_bAutoAttackMoveActive = false;
+            if (CPythonPlayer::InstancePtr())
+                CPythonPlayer::Instance().SetAttackKeyState(false);
+        } else if (s_dwMobileAutoAttackVID != 0 && CPythonPlayer::InstancePtr() && CPythonCharacterManager::InstancePtr()) {
+            CAndroidPlayerAccessor& rkPlayer = static_cast<CAndroidPlayerAccessor&>(CPythonPlayer::Instance());
+            CInstanceBase* pMain = CPythonCharacterManager::Instance().GetMainInstancePtr();
+            CInstanceBase* pTarget = CPythonCharacterManager::Instance().GetInstancePtr(s_dwMobileAutoAttackVID);
+            if (!pMain || !pTarget || pTarget->IsDead() || rkPlayer.GetTargetVID() != s_dwMobileAutoAttackVID) {
+                s_dwMobileAutoAttackVID = 0;
+                s_bAutoAttackMoveActive = false;
+                rkPlayer.SetAttackKeyState(false);
+            } else if (!pMain->IsUsingSkill() && pCam) {
+                TPixelPosition kMyPos, kTargetPos;
+                pMain->NEW_GetPixelPosition(&kMyPos);
+                pTarget->NEW_GetPixelPosition(&kTargetPos);
+                // In Metin2 3D world space, wx = +kPos.x and wy = -kPos.y
+                float wdx = kTargetPos.x - kMyPos.x;
+                float wdy = (-kTargetPos.y) - (-kMyPos.y);
+                float dist = hypotf(wdx, wdy);
+                if (dist > 1.0f) {
+                    const D3DXMATRIX& matV = pCam->GetViewMatrix();
+                    // Camera horizontal Right unit vector in world XY is (matV._11, matV._21)
+                    // Camera horizontal Forward unit vector in world XY is (-matV._21, matV._11)
+                    float rx = matV._11, ry = matV._21;
+                    float rLen = hypotf(rx, ry);
+                    if (rLen > 0.001f) { rx /= rLen; ry /= rLen; } else { rx = 1.0f; ry = 0.0f; }
+                    float fx = -ry, fy = rx;
+
+                    // Convert world vector to camera-relative joystick axes (joyX = right, joyY = down/towards camera)
+                    float joyX = (wdx * rx + wdy * ry) / dist;
+                    float joyY = -(wdx * fx + wdy * fy) / dist;
+                    float dot = -joyY;
+                    if (dot < -1.0f) dot = -1.0f;
+                    else if (dot > 1.0f) dot = 1.0f;
+                    float ret = acosf(dot) * (180.0f / 3.14159265f);
+                    if (joyX < 0.0f) ret = 360.0f - ret;
+                    float fDeg = 360.0f - ret;
+
+                    s_fAutoAttackMoveDeg = fDeg;
+                    if (dist > 185.0f) {
+                        s_bAutoAttackMoveActive = true;
+                        rkPlayer.SetAttackKeyState(false);
+                        rkPlayer.NEW_MoveToDirection(fDeg);
+                    } else {
+                        s_bAutoAttackMoveActive = false;
+                        rkPlayer.SetAttackKeyState(true);
+                    }
+                }
+            }
+        }
+
         // Apply delayed rotational follow-up & smooth coasting after stick release
         if (pCam && !IsAnyPointerDraggingCamera() && s_fManualCamCooldown <= 0.0f) {
             float rateBlend = (fabsf(targetAutoRollRate) > fabsf(s_fSmoothedAutoRollRate))
@@ -3603,9 +4564,10 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
             AndroidKeyEvt kev = s_keyQueue[s_keyTail];
             s_keyTail = (s_keyTail + 1) & 63;
             pthread_mutex_unlock(&s_inputQueueMutex);
-            if (kev.keyCode == 67 || kev.keyCode == 8 || kev.unicodeChar == 8 || kev.unicodeChar == 127) {
+            // NOTE: In Android KeyEvent, KEYCODE_DEL is 67 (8 is KEYCODE_1!). Only check keyCode == 67 or unicodeChar 8/127.
+            if (kev.keyCode == 67 || kev.unicodeChar == 8 || kev.unicodeChar == 127) {
                 PyRun_SimpleString("import ime\nime.PasteBackspace()\n");
-                UI::CWindowManager::Instance().RunIMEUpdate();
+                SyncMobileLiveTypingToPython();
             } else if (kev.keyCode == 66 || kev.keyCode == 160 || kev.unicodeChar == 10 || kev.unicodeChar == 13) {
                 UI::CWindow* pBefore = UI::CWindowManager::Instance().GetActivateWindow();
                 UI::CWindowManager::Instance().RunIMEReturnEvent();
@@ -3615,34 +4577,10 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
                 }
             } else if (kev.keyCode == 61) {
                 UI::CWindowManager::Instance().RunIMETabEvent();
-            } else if (kev.unicodeChar >= 32) {
-                unsigned char outCh = 0;
-                if (kev.unicodeChar < 127) {
-                    outCh = (unsigned char)kev.unicodeChar;
-                } else {
-                    static const uint16_t s_cp1256Map[128] = {
-                        0x20AC,0x067E,0x201A,0x0192,0x201E,0x2026,0x2020,0x2021,0x02C6,0x2030,0x0679,0x2039,0x0152,0x0686,0x0698,0x0688,
-                        0x06AF,0x2018,0x2019,0x201C,0x201D,0x2022,0x2013,0x2014,0x06A9,0x2122,0x0691,0x203A,0x0153,0x200C,0x200D,0x06BA,
-                        0x00A0,0x060C,0x00A2,0x00A3,0x00A4,0x00A5,0x00A6,0x00A7,0x00A8,0x00A9,0x06BE,0x00AB,0x00AC,0x00AD,0x00AE,0x00AF,
-                        0x00B0,0x00B1,0x00B2,0x00B3,0x00B4,0x00B5,0x00B6,0x00B7,0x00B8,0x00B9,0x061B,0x00BB,0x00BC,0x00BD,0x00BE,0x061F,
-                        0x06C1,0x0621,0x0622,0x0623,0x0624,0x0625,0x0626,0x0627,0x0628,0x0629,0x062A,0x062B,0x062C,0x062D,0x062E,0x062F,
-                        0x0630,0x0631,0x0632,0x0633,0x0634,0x0635,0x0636,0x00D7,0x0637,0x0638,0x0639,0x063A,0x0640,0x0641,0x0642,0x0643,
-                        0x00E0,0x0644,0x00E2,0x0645,0x0646,0x0647,0x0648,0x00E7,0x00E8,0x00E9,0x00EA,0x00EB,0x0649,0x064A,0x00EE,0x00EF,
-                        0x064B,0x064C,0x064D,0x064E,0x00F4,0x064F,0x0650,0x00F7,0x0651,0x00F9,0x0652,0x00FB,0x00FC,0x200E,0x200F,0x06D2
-                    };
-                    for (int idx = 0; idx < 128; ++idx) {
-                        if (s_cp1256Map[idx] == (uint16_t)kev.unicodeChar) {
-                            outCh = (unsigned char)(0x80 + idx);
-                            break;
-                        }
-                    }
-                }
-                if (outCh != 0) {
-                    char cmd[64];
-                    snprintf(cmd, sizeof(cmd), "import ime\nime.PasteString('\\x%02x')\n", (unsigned int)outCh);
-                    PyRun_SimpleString(cmd);
-                    UI::CWindowManager::Instance().RunIMEUpdate();
-                }
+            } else if (kev.unicodeChar >= 32 || (kev.keyCode >= 7 && kev.keyCode <= 16)) {
+                uint16_t ch = (kev.unicodeChar >= 32) ? (uint16_t)kev.unicodeChar : (uint16_t)('0' + (kev.keyCode - 7));
+                PasteUnicodeCharToMetin2IME(ch);
+                SyncMobileLiveTypingToPython();
             }
         }
         #ifdef ENABLE_MOBILE_PERF_DEBUGGER
@@ -3845,9 +4783,24 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_render(JNIEnv* env, jobj
             s_lastReportMs = nowReportMs;
         }
 #else
-        CPythonApplication::InstancePtr()->Loop();
+     CPythonApplication::InstancePtr()->Loop();
 #endif
-    }
+#ifdef ENABLE_OPENGL
+     ++s_uMobileRenderFrame;
+     if (s_bUiScaleActive && CStateManager::InstancePtr()) {
+         CGraphicTextInstance::FlushBatchRender();
+         CStateManager::Instance().SetTransform(D3DTS_VIEW, &s_savedUiViewMat);
+         s_bUiScaleActive = false;
+     }
+     if (s_bPendingGroundLeftUp) {
+         s_bPendingGroundLeftUp = false;
+         UI::CWindowManager::Instance().RunMouseLeftButtonUp(s_iPendingGroundUpX, s_iPendingGroundUpY);
+         if (!s_bUiTouchDown) {
+             UI::CWindowManager::Instance().RunMouseMove(-5000, -5000);
+         }
+     }
+#endif
+ }
 }
 
 static inline int MapPhysXToLogical(float x) {
@@ -3860,7 +4813,7 @@ static inline int MapPhysYToLogical(float y) {
     return (int)(y * (float)g_AndroidScreenHeight / (float)g_AndroidPhysHeight + 0.5f);
 }
 
-JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_touchEvent(JNIEnv* env, jobject obj, jint action, jfloat x, jfloat y) {
+JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_touchEvent(JNIEnv* env, jobject obj, jint action, jfloat x, jfloat y) {
     int pid = (action >> 8) & 0x3;
     int masked = (int)(action & 0xFF);
     if (masked == 0 || masked == 5) {
@@ -3881,7 +4834,7 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_touchEvent(JNIEnv* env, 
     pthread_mutex_unlock(&s_inputQueueMutex);
 }
 
-JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_multiTouchEvent(JNIEnv* env, jobject obj, jint pointerId, jint action, jfloat x, jfloat y) {
+JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_multiTouchEvent(JNIEnv* env, jobject obj, jint pointerId, jint action, jfloat x, jfloat y) {
     int pid = (int)(pointerId & 3);
     int masked = (int)(action & 0xFF);
     if (masked == 0 || masked == 5) {
@@ -3902,9 +4855,9 @@ JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_multiTouchEvent(JNIEnv* 
     pthread_mutex_unlock(&s_inputQueueMutex);
 }
 
-JNIEXPORT void JNICALL Java_com_metin2_client_NativeLib_keyEvent(JNIEnv* env, jobject obj, jint keyCode, jint unicodeChar) {
+JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_keyEvent(JNIEnv* env, jobject obj, jint keyCode, jint unicodeChar) {
 #ifdef __APPLE__
-    if (keyCode == 67 || keyCode == 8 || unicodeChar == 8 || unicodeChar == 127) {
+    if (keyCode == 67 || unicodeChar == 8 || unicodeChar == 127) {
         __atomic_fetch_add(&s_uIosBackspaceEventCount, 1, __ATOMIC_RELAXED);
     }
 #endif

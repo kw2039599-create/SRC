@@ -5,7 +5,7 @@
 
 #if defined(__ANDROID__) && !defined(__APPLE__)
 #include <android/log.h>
-#define LOG_TAG "Metin2Mobile"
+#define LOG_TAG "WorldOnline"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #else
@@ -16,6 +16,7 @@
 #ifdef __ANDROID__
 extern "C" int g_AndroidPhysWidth;
 extern "C" int g_AndroidPhysHeight;
+extern "C" uint32_t g_AndroidGLContextGen = 1;
 
 #define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
 
@@ -458,7 +459,7 @@ namespace {
         "  }\n"
         "  if (uShaderMode == 5) {\n"
         "    vTexCoord0 = worldPos4.xy * 0.001;\n"
-        "    vTexCoord1 = aTexCoord0;\n"
+        "    vTexCoord1 = (length(aTexCoord0) > 0.0001) ? aTexCoord0 : (worldPos4.xy * 0.00390625);\n"
         "    vColor = aColor.bgra;\n"
         "    return;\n"
         "  }\n"
@@ -1021,6 +1022,13 @@ namespace {
         if (!vb || !vb->pData || vb->length == 0 || (vb->usage & D3DUSAGE_DYNAMIC) != 0)
             return false;
 
+        if (vb->contextGen != g_AndroidGLContextGen) {
+            vb->glVbo = 0;
+            vb->bGpuInitialized = false;
+            vb->bDirty = false;
+            vb->contextGen = g_AndroidGLContextGen;
+        }
+
         // If a buffer was already uploaded once and is locked again on a subsequent frame,
         // it is a per-frame CPU-deformed mesh (not a static mesh). Promote it to D3DUSAGE_DYNAMIC
         // so we don't stall the mobile GL driver ghosting 4.5 MB/frame via glBufferSubData.
@@ -1059,6 +1067,15 @@ namespace {
     inline bool SyncHardwareIndexBuffer(IDirect3DIndexBuffer8* ib) {
         if (!ib || !ib->pData || ib->length == 0 || (ib->usage & D3DUSAGE_DYNAMIC) != 0)
             return false;
+
+        if (ib->contextGen != g_AndroidGLContextGen) {
+            ib->glIbo = 0;
+            ib->bGpuInitialized = false;
+            ib->bDirty = true;
+            ib->dirtyOffset = 0;
+            ib->dirtyEnd = ib->length;
+            ib->contextGen = g_AndroidGLContextGen;
+        }
 
         if (ib->glIbo == 0)
             glGenBuffers(1, &ib->glIbo);
@@ -1165,7 +1182,27 @@ namespace {
     }
 
     void EnsureProgramInitialized() {
-        if (s_bProgramsInitialized) return;
+        if (s_bProgramsInitialized) {
+            if (s_progs[0].prog != 0 && glIsProgram(s_progs[0].prog))
+                return;
+            // OpenGL ES context was recreated (e.g. split-screen / surface resize)!
+            ++g_AndroidGLContextGen;
+            s_curProg = NULL;
+            s_enabledAttribMask = 0;
+            s_curArrayBuffer = 0;
+            s_curElementArrayBuffer = 0;
+            s_lastAttrVbo = 0;
+            s_lastAttrFvf = 0xFFFFFFFFu;
+            s_lastAttrStride = 0xFFFFFFFFu;
+            s_upVbo = 0;
+            s_upIbo = 0;
+            if (IDirect3DDevice8* dev = GetCurrentGLDevice()) {
+                dev->m_pCurrentRenderTargetTex = NULL;
+                for (int i = 0; i < 8; ++i) dev->m_BoundGLTexId[i] = 0xFFFFFFFFu;
+                dev->m_DirtyFlags = 0xFFFFFFFFu;
+            }
+            LOGI("OpenGL ES context recreation detected (gen=%u) — rebuilding shaders & GPU resources", g_AndroidGLContextGen);
+        }
         s_bProgramsInitialized = true;
 
         GLuint vs0 = CompileShader(GL_VERTEX_SHADER, vShaderMode0);
@@ -1595,12 +1632,45 @@ HRESULT IDirect3D8::CreateDevice(UINT Adapter, D3DDEVTYPE DeviceType, HWND hFocu
 }
 
 HRESULT IDirect3DDevice8::SetRenderTarget(LPDIRECT3DSURFACE8 pRenderTarget, LPDIRECT3DSURFACE8) {
+    EnsureProgramInitialized();
     static GLint s_defaultScreenFbo = 0;
+    static uint32_t s_fboCtxGen = 1;
+    if (s_fboCtxGen != g_AndroidGLContextGen) {
+        s_fboCtxGen = g_AndroidGLContextGen;
+        s_defaultScreenFbo = 0;
+        m_pCurrentRenderTargetTex = NULL;
+    }
+
     if (pRenderTarget && pRenderTarget->pParentTex) {
         if (!m_pCurrentRenderTargetTex) {
             glGetIntegerv(GL_FRAMEBUFFER_BINDING, &s_defaultScreenFbo);
         }
         IDirect3DTexture8* tex = pRenderTarget->pParentTex;
+        if (tex->contextGen != g_AndroidGLContextGen) {
+            tex->glId = 0;
+            tex->glFbo = 0;
+            tex->glDepthRbo = 0;
+            tex->contextGen = g_AndroidGLContextGen;
+        } else if (tex->glFbo && !glIsFramebuffer(tex->glFbo)) {
+            tex->glFbo = 0;
+            tex->glDepthRbo = 0;
+        }
+        if (!tex->glId || !glIsTexture(tex->glId)) {
+            int w = (tex->width > 0 && tex->width <= 8192) ? tex->width : 256;
+            int h = (tex->height > 0 && tex->height <= 8192) ? tex->height : 256;
+            glActiveTexture(GL_TEXTURE0);
+            glGenTextures(1, &tex->glId);
+            glBindTexture(GL_TEXTURE_2D, tex->glId);
+            GLint filter = (tex->format == D3DFMT_R32F) ? GL_NEAREST : GL_LINEAR;
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+            std::vector<DWORD> whitePixels((size_t)w * (size_t)h, 0xFFFFFFFFu);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, whitePixels.data());
+            tex->lastWrapS = GL_REPEAT;
+            tex->lastWrapT = GL_REPEAT;
+            tex->contextGen = g_AndroidGLContextGen;
+            m_BoundGLTexId[0] = 0xFFFFFFFFu;
+        }
         if (!tex->glFbo) {
             glGenFramebuffers(1, &tex->glFbo);
             glBindFramebuffer(GL_FRAMEBUFFER, tex->glFbo);
@@ -1631,6 +1701,7 @@ HRESULT IDirect3DDevice8::SetRenderTarget(LPDIRECT3DSURFACE8 pRenderTarget, LPDI
 }
 
 HRESULT IDirect3DDevice8::Clear(DWORD Count, const D3DRECT* pRects, DWORD Flags, D3DCOLOR Color, float Z, DWORD Stencil) {
+    EnsureProgramInitialized();
     GLbitfield mask = 0;
     if (Flags & D3DCLEAR_TARGET) {
         GLCOLOR col(Color);
@@ -1853,6 +1924,44 @@ HRESULT IDirect3DDevice8::SetTexture(DWORD Stage, LPDIRECT3DBaseTexture8 pTextur
     if (Stage >= 8) return S_OK;
 
     IDirect3DTexture8* tex = (IDirect3DTexture8*)pTexture;
+    if (tex && (tex->contextGen != g_AndroidGLContextGen || !tex->glId || !glIsTexture(tex->glId))) {
+        if (!tex->m_rgbaBackup.empty()) {
+            int w = (tex->width > 0 && tex->width <= 8192) ? tex->width : 256;
+            int h = (tex->height > 0 && tex->height <= 8192) ? tex->height : 256;
+            glActiveTexture(GL_TEXTURE0 + Stage);
+            glGenTextures(1, &tex->glId);
+            glBindTexture(GL_TEXTURE_2D, tex->glId);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex->m_rgbaBackup.data());
+            if (tex->format == D3DFMT_A4R4G4B4) {
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                tex->lastWrapS = GL_CLAMP_TO_EDGE;
+                tex->lastWrapT = GL_CLAMP_TO_EDGE;
+            } else if (w >= 64 && h >= 64 && (w & (w - 1)) == 0 && (h & (h - 1)) == 0) {
+                glGenerateMipmap(GL_TEXTURE_2D);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                tex->lastWrapS = GL_REPEAT;
+                tex->lastWrapT = GL_REPEAT;
+            } else {
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                tex->lastWrapS = GL_REPEAT;
+                tex->lastWrapT = GL_REPEAT;
+            }
+            tex->contextGen = g_AndroidGLContextGen;
+            m_BoundGLTexId[Stage] = 0xFFFFFFFFu;
+        } else if (tex->contextGen != g_AndroidGLContextGen) {
+            tex->glId = 0;
+            tex->glFbo = 0;
+            tex->glDepthRbo = 0;
+            tex->contextGen = g_AndroidGLContextGen;
+            m_BoundGLTexId[Stage] = 0xFFFFFFFFu;
+        }
+    }
     GLuint newGlId = tex ? tex->glId : 0;
     DWORD addrU = m_AddressU[Stage];
     DWORD addrV = m_AddressV[Stage];

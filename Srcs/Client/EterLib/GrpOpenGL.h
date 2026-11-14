@@ -1252,10 +1252,23 @@ inline void SwizzleBGRAtoRGBAInPlace(DWORD* pix, int total, bool forceOpaque) {
 }
 #endif
 
+#ifdef __ANDROID__
+extern "C" uint32_t g_AndroidGLContextGen;
+#endif
+
 struct IDirect3DTexture8 : public IDirect3DBaseTexture8 {
 	GLuint glId, glFbo, glDepthRbo; int width, height; D3DFORMAT format; void* pLockedData;
 	GLint lastWrapS, lastWrapT;
-	IDirect3DTexture8() : glId(0), glFbo(0), glDepthRbo(0), width(256), height(256), format(D3DFMT_A8R8G8B8), pLockedData(NULL), lastWrapS(GL_REPEAT), lastWrapT(GL_REPEAT) {}
+#ifdef __ANDROID__
+	uint32_t contextGen;
+	DWORD usageFlags;
+	std::vector<DWORD> m_rgbaBackup;
+#endif
+	IDirect3DTexture8() : glId(0), glFbo(0), glDepthRbo(0), width(256), height(256), format(D3DFMT_A8R8G8B8), pLockedData(NULL), lastWrapS(GL_REPEAT), lastWrapT(GL_REPEAT)
+#ifdef __ANDROID__
+		, contextGen(g_AndroidGLContextGen), usageFlags(0)
+#endif
+	{}
 	virtual ~IDirect3DTexture8();
 	HRESULT LockRect(UINT, D3DLOCKED_RECT* p, const RECT*, DWORD) {
 		int w = (width > 0 && width <= 8192) ? width : 256;
@@ -1279,6 +1292,9 @@ struct IDirect3DVertexBuffer8 {
 	ULONG m_refCount;
 	GLuint glVbo; UINT length; DWORD usage; DWORD lastLockFlags;
 	bool bDirty; bool bGpuInitialized;
+#ifdef __ANDROID__
+	uint32_t contextGen = g_AndroidGLContextGen;
+#endif
 	UINT dirtyOffset; UINT dirtyEnd;
 	void* pData;
 	IDirect3DVertexBuffer8(UINT len, DWORD dwUsage = 0)
@@ -1325,6 +1341,9 @@ struct IDirect3DIndexBuffer8 {
 	ULONG m_refCount;
 	GLuint glIbo; UINT length; DWORD usage; DWORD lastLockFlags;
 	bool bDirty; bool bGpuInitialized;
+#ifdef __ANDROID__
+	uint32_t contextGen = g_AndroidGLContextGen;
+#endif
 	UINT dirtyOffset; UINT dirtyEnd;
 	void* pData;
 	IDirect3DIndexBuffer8(UINT len, DWORD dwUsage = 0)
@@ -1557,6 +1576,10 @@ struct IDirect3DDevice8 {
 		if (W == 0 || W > 8192) W = 256;
 		if (H == 0 || H > 8192) H = 256;
 		IDirect3DTexture8* tex = new IDirect3DTexture8(); tex->width = W; tex->height = H; tex->format = Fmt;
+#ifdef __ANDROID__
+		tex->usageFlags = Usage;
+		tex->contextGen = g_AndroidGLContextGen;
+#endif
 		glActiveTexture(GL_TEXTURE0);
 		GLuint prevTex = m_pBoundTextures[0] ? ((IDirect3DTexture8*)m_pBoundTextures[0])->glId : 0;
 		glGenTextures(1, &tex->glId); glBindTexture(GL_TEXTURE_2D, tex->glId);
@@ -1690,7 +1713,7 @@ struct IDirect3DDevice8 {
 		if (v && v->Width > 0 && v->Height > 0) {
 			if (m_pCurrentRenderTargetTex) {
 #ifdef __ANDROID__
-				if (m_ActivePixelShaderType == PS_TYPE_SHADOW_DEPTH) {
+				if (m_ActivePixelShaderType == PS_TYPE_SHADOW_DEPTH || (v->X == 1 && v->Y == 1)) {
 					glViewport(v->X, v->Y, v->Width, v->Height);
 				} else {
 					glViewport(0, 0, m_pCurrentRenderTargetTex->width, m_pCurrentRenderTargetTex->height);
@@ -2031,10 +2054,36 @@ struct IDirect3DDevice8 {
 		case D3DTSS_ADDRESSU:
 			if (m_AddressU[stage] == value) return S_OK;
 			m_AddressU[stage] = value;
+#ifdef __ANDROID__
+			if (m_pBoundTextures[stage]) {
+				IDirect3DTexture8* tex = (IDirect3DTexture8*)m_pBoundTextures[stage];
+				GLint wantS = (value == D3DTADDRESS_CLAMP || value == D3DTADDRESS_BORDER || value == D3DTADDRESS_MIRRORONCE) ? GL_CLAMP_TO_EDGE : GL_REPEAT;
+				if (tex->glId && tex->lastWrapS != wantS) {
+					glActiveTexture(GL_TEXTURE0 + stage);
+					glBindTexture(GL_TEXTURE_2D, tex->glId);
+					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wantS);
+					tex->lastWrapS = wantS;
+					glActiveTexture(GL_TEXTURE0);
+				}
+			}
+#endif
 			return S_OK;
 		case D3DTSS_ADDRESSV:
 			if (m_AddressV[stage] == value) return S_OK;
 			m_AddressV[stage] = value;
+#ifdef __ANDROID__
+			if (m_pBoundTextures[stage]) {
+				IDirect3DTexture8* tex = (IDirect3DTexture8*)m_pBoundTextures[stage];
+				GLint wantT = (value == D3DTADDRESS_CLAMP || value == D3DTADDRESS_BORDER || value == D3DTADDRESS_MIRRORONCE) ? GL_CLAMP_TO_EDGE : GL_REPEAT;
+				if (tex->glId && tex->lastWrapT != wantT) {
+					glActiveTexture(GL_TEXTURE0 + stage);
+					glBindTexture(GL_TEXTURE_2D, tex->glId);
+					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wantT);
+					tex->lastWrapT = wantT;
+					glActiveTexture(GL_TEXTURE0);
+				}
+			}
+#endif
 			return S_OK;
 		case D3DTSS_COLOROP:
 			if (m_ColorOp[stage] == value) return S_OK;
@@ -2419,6 +2468,13 @@ inline HRESULT IDirect3DTexture8::UnlockRect(UINT Level) {
 		glActiveTexture(GL_TEXTURE0);
 		GLuint prevTex = (GetCurrentGLDevice() && GetCurrentGLDevice()->m_pBoundTextures[0])
 			? ((IDirect3DTexture8*)GetCurrentGLDevice()->m_pBoundTextures[0])->glId : 0;
+#ifdef __ANDROID__
+		const bool bNeedFullAlloc = (contextGen != g_AndroidGLContextGen || !glIsTexture(glId));
+		if (bNeedFullAlloc) {
+			glGenTextures(1, &glId);
+			if (GetCurrentGLDevice()) GetCurrentGLDevice()->m_BoundGLTexId[0] = 0xFFFFFFFFu;
+		}
+#endif
 		glBindTexture(GL_TEXTURE_2D, glId);
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 		if (format == D3DFMT_A4R4G4B4) {
@@ -2437,7 +2493,10 @@ inline HRESULT IDirect3DTexture8::UnlockRect(UINT Level) {
 #endif
 			}
 #ifdef __ANDROID__
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+			if (bNeedFullAlloc) glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+			else glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+			m_rgbaBackup = std::move(rgba);
+			contextGen = g_AndroidGLContextGen;
 #else
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_BGRA_EXT, GL_UNSIGNED_BYTE, rgba.data());
 #endif
@@ -2456,7 +2515,10 @@ inline HRESULT IDirect3DTexture8::UnlockRect(UINT Level) {
 #endif
 			}
 #ifdef __ANDROID__
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+			if (bNeedFullAlloc) glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+			else glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+			m_rgbaBackup = std::move(rgba);
+			contextGen = g_AndroidGLContextGen;
 #else
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_BGRA_EXT, GL_UNSIGNED_BYTE, rgba.data());
 #endif
@@ -2465,13 +2527,23 @@ inline HRESULT IDirect3DTexture8::UnlockRect(UINT Level) {
 			DWORD* pix = (DWORD*)pLockedData;
 			const bool forceOpaque = (format == D3DFMT_X8R8G8B8 || format == D3DFMT_R8G8B8);
 			SwizzleBGRAtoRGBAInPlace(pix, w * h, forceOpaque);
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pix);
+			if (bNeedFullAlloc) glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pix);
+			else glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pix);
+			m_rgbaBackup.assign(pix, pix + (size_t)w * (size_t)h);
+			contextGen = g_AndroidGLContextGen;
 #else
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_BGRA_EXT, GL_UNSIGNED_BYTE, pLockedData);
 #endif
 		}
 #ifdef __ANDROID__
-		if (w >= 64 && h >= 64 && (w & (w - 1)) == 0 && (h & (h - 1)) == 0) {
+		if (format == D3DFMT_A4R4G4B4) {
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			lastWrapS = GL_CLAMP_TO_EDGE;
+			lastWrapT = GL_CLAMP_TO_EDGE;
+		} else if (w >= 64 && h >= 64 && (w & (w - 1)) == 0 && (h & (h - 1)) == 0) {
 			glGenerateMipmap(GL_TEXTURE_2D);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -2494,31 +2566,43 @@ inline IDirect3DTexture8::~IDirect3DTexture8() {
 			}
 		}
 	}
-#ifdef ANDROID
-	if (glFbo) glDeleteFramebuffers(1, &glFbo);
-	if (glDepthRbo) glDeleteRenderbuffers(1, &glDepthRbo);
-#endif
+#ifdef __ANDROID__
+	if (contextGen == g_AndroidGLContextGen) {
+		if (glFbo) glDeleteFramebuffers(1, &glFbo);
+		if (glDepthRbo) glDeleteRenderbuffers(1, &glDepthRbo);
+		if (glId) glDeleteTextures(1, &glId);
+	}
+#else
 	if (glId) glDeleteTextures(1, &glId);
+#endif
 	if (pLockedData) free(pLockedData);
 }
 
 inline IDirect3DVertexBuffer8::~IDirect3DVertexBuffer8() {
 	if (GetCurrentGLDevice() && GetCurrentGLDevice()->m_pStreamSource == this)
 		GetCurrentGLDevice()->m_pStreamSource = NULL;
-#ifdef ANDROID
-	if (glVbo) NotifyAndroidGLBufferDeleted(glVbo, 0);
-#endif
+#ifdef __ANDROID__
+	if (glVbo && contextGen == g_AndroidGLContextGen) {
+		NotifyAndroidGLBufferDeleted(glVbo, 0);
+		glDeleteBuffers(1, &glVbo);
+	}
+#else
 	if (glVbo) glDeleteBuffers(1, &glVbo);
+#endif
 	if (pData) free(pData);
 }
 
 inline IDirect3DIndexBuffer8::~IDirect3DIndexBuffer8() {
 	if (GetCurrentGLDevice() && GetCurrentGLDevice()->m_pIndexBuffer == this)
 		GetCurrentGLDevice()->m_pIndexBuffer = NULL;
-#ifdef ANDROID
-	if (glIbo) NotifyAndroidGLBufferDeleted(0, glIbo);
-#endif
+#ifdef __ANDROID__
+	if (glIbo && contextGen == g_AndroidGLContextGen) {
+		NotifyAndroidGLBufferDeleted(0, glIbo);
+		glDeleteBuffers(1, &glIbo);
+	}
+#else
 	if (glIbo) glDeleteBuffers(1, &glIbo);
+#endif
 	if (pData) free(pData);
 }
 
@@ -3072,6 +3156,8 @@ inline HRESULT D3DXCreateTextureFromFileInMemoryEx(LPDIRECT3DDEVICE8 pDev, LPCVO
 			SwizzleBGRAtoRGBAInPlace(bgra.data(), (int)bgra.size(), false);
 			IDirect3DTexture8* tex = new IDirect3DTexture8();
 			tex->width = decW; tex->height = decH; tex->format = D3DFMT_A8R8G8B8;
+			tex->usageFlags = Usage;
+			tex->contextGen = g_AndroidGLContextGen;
 			glActiveTexture(GL_TEXTURE0);
 			GLuint prevTex = pDev->m_pBoundTextures[0] ? ((IDirect3DTexture8*)pDev->m_pBoundTextures[0])->glId : 0;
 			glGenTextures(1, &tex->glId);
@@ -3086,6 +3172,7 @@ inline HRESULT D3DXCreateTextureFromFileInMemoryEx(LPDIRECT3DDEVICE8 pDev, LPCVO
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 			}
+			tex->m_rgbaBackup = std::move(bgra);
 			glBindTexture(GL_TEXTURE_2D, prevTex);
 			*ppTex = tex;
 			return S_OK;

@@ -152,7 +152,7 @@ LPDIRECT3DPIXELSHADER9 CMapOutdoor::LoadAndBuildPixelShader(const char* filename
 
 void CMapOutdoor::CreateShadowmapShaders()
 {
-	const bool bIsMode4 = (Frustum::Instance().graphicsLevel >= 4);
+	const bool bIsMode4 = false; // Mode 4 Ultra uses the exact same shaders as Mode 3
 
 	if (!m_lpShadowMapVertexShaderDepth)
 		m_lpShadowMapVertexShaderDepth = LoadAndBuildVertexShader(shadowmapDepthVS);
@@ -530,6 +530,33 @@ void CMapOutdoor::CreateCharacterShadowTexture()
 	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/normalmaps/dry_ground_01_nor_gl_2k.dds", &Frustum::Instance().dry_ground_01_diff_4k);
 	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/foam.jpg", &Frustum::Instance().foam);
 #ifdef __ANDROID__
+	if (!Frustum::Instance().foam && ms_lpd3dDevice)
+	{
+		if (SUCCEEDED(ms_lpd3dDevice->CreateTexture(256, 256, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &Frustum::Instance().foam, NULL)) && Frustum::Instance().foam)
+		{
+			D3DLOCKED_RECT lr;
+			if (SUCCEEDED(Frustum::Instance().foam->LockRect(0, &lr, NULL, 0)) && lr.pBits)
+			{
+				DWORD* dst = (DWORD*)lr.pBits;
+				for (int y = 0; y < 256; ++y)
+				{
+					for (int x = 0; x < 256; ++x)
+					{
+						float fx = x * 0.09817477f;
+						float fy = y * 0.09817477f;
+						float w1 = sinf(fx * 2.0f + cosf(fy * 2.0f)) * cosf(fy * 2.0f - sinf(fx * 2.0f));
+						float w2 = sinf(fx * 5.0f - fy * 3.0f) * cosf(fx * 3.0f + fy * 5.0f);
+						float v = fmaxf(0.0f, w1 * 0.6f + w2 * 0.4f);
+						BYTE c = (BYTE)fminf(255.0f, powf(v, 0.65f) * 255.0f);
+						dst[y * 256 + x] = (0xFFu << 24) | (c << 16) | (c << 8) | c;
+					}
+				}
+				Frustum::Instance().foam->UnlockRect(0);
+			}
+		}
+	}
+#endif
+#ifdef __ANDROID__
 	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/specular/ground_0007_roughness_2k.dds", &Frustum::Instance().waterSandSpecularTexture);
 	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/specular/ground_0019_color_2k.dds", &Frustum::Instance().waterLeavesSpecularTexture);
 	LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/specular/ground_0030_color_specular.dds", &Frustum::Instance().iceSpecularTexture);
@@ -539,7 +566,7 @@ void CMapOutdoor::CreateCharacterShadowTexture()
 
 #ifndef __ANDROID__
 	// High-quality ground normal/specular maps, tree bark & grass (ONLY loaded in Graphics Mode 4)
-	if (loadTerrainTextureMode4 && Frustum::Instance().graphicsLevel >= 4)
+	if (loadTerrainTextureMode4 && false)
 	{
 		//JTX UPDATE V1.0.4 Textures create
 		LoadDepthTerrainTexture("D:/ymir work/terrainmaps/temp/normalmaps/tile_final_normal.dds", &Frustum::Instance().normalMapTile01);
@@ -728,8 +755,8 @@ void CMapOutdoor::CreateCharacterShadowTexture()
 
 void CMapOutdoor::RenderGrass()
 {
-	// Dedicated to Graphics Mode 4 only
-	if (Frustum::Instance().graphicsLevel < 4)
+	// Dedicated to Graphics Mode 4 only (disabled so Mode 4 matches Mode 3)
+	if (true || Frustum::Instance().graphicsLevel < 4)
 		return;
 
 	D3DXVECTOR3 grassPosition = Frustum::Instance().characterPosition;
@@ -978,8 +1005,8 @@ void CMapOutdoor::RenderGrass()
 
 void CMapOutdoor::RenderGrassShadow()
 {
-	// Dedicated to Graphics Mode 4 only
-	if (Frustum::Instance().graphicsLevel < 4)
+	// Dedicated to Graphics Mode 4 only (disabled so Mode 4 matches Mode 3)
+	if (true || Frustum::Instance().graphicsLevel < 4)
 		return;
 
 	D3DXVECTOR3 grassPosition = Frustum::Instance().characterPosition;
@@ -1161,7 +1188,7 @@ DWORD dwLightEnable = FALSE;
 void CMapOutdoor::SkyUtil()
 {
 	static int s_iLastShaderMode = -1;
-	const int iCurShaderMode = (Frustum::Instance().graphicsLevel >= 4) ? 4 : (Frustum::Instance().graphicsLevel > 0 ? 3 : 0);
+	const int iCurShaderMode = (false) ? 4 : (Frustum::Instance().graphicsLevel > 0 ? 3 : 0);
 	if (s_iLastShaderMode != -1 && s_iLastShaderMode != iCurShaderMode)
 	{
 		ReleaseShaders();
@@ -1181,6 +1208,13 @@ void CMapOutdoor::SkyUtil()
 		ReleaseCharacterShadowTextureOriginal();
 	}
 
+	#ifdef __ANDROID__
+	if (Frustum::Instance().graphicsLevel > 0 && Frustum::Instance().graphicsWaterLevel < 2)
+		Frustum::Instance().graphicsWaterLevel = 2;
+	else if (Frustum::Instance().graphicsLevel == 0)
+		Frustum::Instance().graphicsWaterLevel = 0;
+#endif
+
 	if (Frustum::Instance().graphicsWaterLevel == 0 || Frustum::Instance().graphicsLevel == 0)
 		ReleaseWaterShaders();
 
@@ -1197,7 +1231,7 @@ void CMapOutdoor::SkyUtil()
 		CreateTreeShaders();
 
 	// Ensure Mode 4 textures load on demand if switching from Mode 3 -> Mode 4 at runtime
-	if (Frustum::Instance().graphicsLevel >= 4 && loadTerrainTextureMode4)
+	if (false && loadTerrainTextureMode4 == false)
 	{
 		recreate = true;
 	}
@@ -1424,7 +1458,7 @@ bool CMapOutdoor::BeginRenderCharacterShadowToTexture()
 		&v3Target,
 		&vv);
 
-	const float fShadowSpaceSize = (Frustum::Instance().graphicsLevel >= 4) ? 14000.0f : 10000.0f;
+	const float fShadowSpaceSize = (false) ? 14000.0f : 10000.0f;
 	SnapShadowSpaceMatrix(matLightView, fShadowSpaceSize);
 	D3DXMatrixOrthoRH(&matLightProj, fShadowSpaceSize, fShadowSpaceSize, 1.0f, 300000.0f);
 
@@ -1644,7 +1678,7 @@ bool CMapOutdoor::BeginRenderCharacterShadowToTexture2()
 		&v3Target,
 		&vv);
 
-	const float fShadowSpaceSize2 = (Frustum::Instance().graphicsLevel >= 4) ? 29000.0f : 25000.0f;
+	const float fShadowSpaceSize2 = (false) ? 29000.0f : 25000.0f;
 	SnapShadowSpaceMatrix(m_matLightView2, fShadowSpaceSize2);
 	D3DXMatrixOrthoRH(&matLightProj, fShadowSpaceSize2, fShadowSpaceSize2, 1.0f, 300000.0f);
 
@@ -1889,7 +1923,7 @@ bool CMapOutdoor::BeginRenderCharacterShadowToTexture3()
 	}
 	else {
 		// Mode 4 uses 9000.0f (+20m radius); Mode 3 uses original 5000.0f
-		newTargetValue = (Frustum::Instance().graphicsLevel >= 4) ? 9000.0f : 5000.0f;
+		newTargetValue = (false) ? 9000.0f : 5000.0f;
 	}
 	if (newTargetValue != targetValue) {
 		targetValue = newTargetValue;
@@ -2033,7 +2067,7 @@ void CMapOutdoor::SnapShadowSpaceMatrix(D3DXMATRIX& mat, float spaceSize)
 	float texelRes = (m_wShadowMapSize >= 512) ? static_cast<float>(m_wShadowMapSize) : 2048.0f;
 	step = spaceSize / texelRes;
 #else
-	if (Frustum::Instance().graphicsLevel >= 4)
+	if (false)
 	{
 		float texelRes = (m_wShadowMapSize >= 512) ? static_cast<float>(m_wShadowMapSize) : 2048.0f;
 		step = spaceSize / texelRes;
@@ -2080,7 +2114,7 @@ bool CMapOutdoor::BeginRenderCharacterShadowToTexture4()
 		&vv);
 
 	// Mode 4 uses 8000.0f; Mode 3 uses original 4000.0f
-	const float fShadowSpaceSize4 = (Frustum::Instance().graphicsLevel >= 4) ? 8000.0f : 4000.0f;
+	const float fShadowSpaceSize4 = (false) ? 8000.0f : 4000.0f;
 	SnapShadowSpaceMatrix(matLightView, fShadowSpaceSize4);
 	D3DXMatrixOrthoRH(&matLightProj, fShadowSpaceSize4, fShadowSpaceSize4, 1.0f, 300000.0f);
 
@@ -2241,6 +2275,10 @@ bool CMapOutdoor::BeginRenderCharacterShadowToTextureOriginal()
 	}
 
 	D3DXVECTOR3 v3Target = pCurrentCamera->GetTarget();
+#ifdef __ANDROID__
+	if (D3DXVec3LengthSq(&Frustum::Instance().characterPosition) > 0.001f)
+		v3Target = Frustum::Instance().characterPosition;
+#endif
 
 	D3DXVECTOR3 v3Eye(v3Target.x - 1.732f * 1250.0f,
 		v3Target.y - 1250.0f,
@@ -2252,10 +2290,30 @@ bool CMapOutdoor::BeginRenderCharacterShadowToTextureOriginal()
 		&v3Target,
 		&val);
 
+	#ifdef __ANDROID__
+	SnapShadowSpaceMatrix(matLightView, 2550.0f);
+#endif
 	D3DXMatrixOrthoRH(&matLightProj, 2550.0f, 2550.0f, 1.0f, 15000.0f);
 
 	STATEMANAGER.SaveTransform(D3DTS_VIEW, &matLightView);
 	STATEMANAGER.SaveTransform(D3DTS_PROJECTION, &matLightProj);
+
+#ifdef __ANDROID__
+	D3DXMATRIX matLightViewProj;
+	D3DXMatrixMultiply(&matLightViewProj, &matLightView, &matLightProj);
+
+	static const D3DXMATRIX s_matScaleBias(
+		 0.5f,  0.0f, 0.0f, 0.0f,
+		 0.0f, -0.5f, 0.0f, 0.0f,
+		 0.0f,  0.0f, 0.0f, 0.0f,
+		 0.5f,  0.5f, 0.0f, 1.0f
+	);
+
+	D3DXMATRIX matShadowTex, matCamViewInv;
+	D3DXMatrixMultiply(&matShadowTex, &matLightViewProj, &s_matScaleBias);
+	D3DXMatrixInverse(&matCamViewInv, NULL, &pCurrentCamera->GetViewMatrix());
+	D3DXMatrixMultiply(&m_matDynamicShadow, &matCamViewInv, &matShadowTex);
+#endif
 
 	dwLightEnable = STATEMANAGER.GetRenderState(D3DRS_LIGHTING);
 	STATEMANAGER.SetRenderState(D3DRS_LIGHTING, FALSE);

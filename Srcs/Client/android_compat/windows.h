@@ -395,17 +395,90 @@ static inline int MultiByteToWideChar(UINT CodePage, DWORD dwFlags, LPCSTR lpMul
     return copyLen;
 }
 
+static inline WCHAR NormalizeArabicPresentationWChar(WCHAR ch) {
+    // Map Arabic Presentation Forms-B (0xFE70..0xFEFC) back to base Unicode Arabic (0x0621..0x064A)
+    if (ch >= 0xFE80 && ch <= 0xFEFC) {
+        static const uint16_t s_fe80ToBase[125] = {
+            0x0621, // FE80
+            0x0622, 0x0622, // FE81..FE82
+            0x0623, 0x0623, // FE83..FE84
+            0x0624, 0x0624, // FE85..FE86
+            0x0625, 0x0625, // FE87..FE88
+            0x0626, 0x0626, 0x0626, 0x0626, // FE89..FE8C
+            0x0627, 0x0627, // FE8D..FE8E
+            0x0628, 0x0628, 0x0628, 0x0628, // FE8F..FE92
+            0x0629, 0x0629, // FE93..FE94
+            0x062A, 0x062A, 0x062A, 0x062A, // FE95..FE98
+            0x062B, 0x062B, 0x062B, 0x062B, // FE99..FE9C
+            0x062C, 0x062C, 0x062C, 0x062C, // FE9D..FEA0
+            0x062D, 0x062D, 0x062D, 0x062D, // FEA1..FEA4
+            0x062E, 0x062E, 0x062E, 0x062E, // FEA5..FEA8
+            0x062F, 0x062F, // FEA9..FEAA
+            0x0630, 0x0630, // FEAB..FEAC
+            0x0631, 0x0631, // FEAD..FEAE
+            0x0632, 0x0632, // FEAF..FEB0
+            0x0633, 0x0633, 0x0633, 0x0633, // FEB1..FEB4
+            0x0634, 0x0634, 0x0634, 0x0634, // FEB5..FEB8
+            0x0635, 0x0635, 0x0635, 0x0635, // FEB9..FEBC
+            0x0636, 0x0636, 0x0636, 0x0636, // FEBD..FEC0
+            0x0637, 0x0637, 0x0637, 0x0637, // FEC1..FEC4
+            0x0638, 0x0638, 0x0638, 0x0638, // FEC5..FEC8
+            0x0639, 0x0639, 0x0639, 0x0639, // FEC9..FECC
+            0x063A, 0x063A, 0x063A, 0x063A, // FECD..FED0
+            0x0641, 0x0641, 0x0641, 0x0641, // FED1..FED4
+            0x0642, 0x0642, 0x0642, 0x0642, // FED5..FED8
+            0x0643, 0x0643, 0x0643, 0x0643, // FED9..FEDC
+            0x0644, 0x0644, 0x0644, 0x0644, // FEDD..FEE0
+            0x0645, 0x0645, 0x0645, 0x0645, // FEE1..FEE4
+            0x0646, 0x0646, 0x0646, 0x0646, // FEE5..FEE8
+            0x0647, 0x0647, 0x0647, 0x0647, // FEE9..FEEC
+            0x0648, 0x0648, // FEED..FEEE
+            0x0649, 0x0649, // FEEF..FEF0
+            0x064A, 0x064A, 0x064A, 0x064A, // FEF1..FEF4
+            0x0644, 0x0644, 0x0644, 0x0644, 0x0644, 0x0644, 0x0644, 0x0644 // FEF5..FEFC (Lam-Alef)
+        };
+        return (WCHAR)s_fe80ToBase[ch - 0xFE80];
+    }
+    if (ch >= 0x0660 && ch <= 0x0669) return (WCHAR)('0' + (ch - 0x0660));
+    if (ch >= 0x06F0 && ch <= 0x06F9) return (WCHAR)('0' + (ch - 0x06F0));
+    return ch;
+}
+
 static inline int WideCharToMultiByte(UINT CodePage, DWORD dwFlags, LPCWSTR lpWideCharStr, int cchWideChar, LPSTR lpMultiByteStr, int cbMultiByte, LPCSTR lpDefaultChar, LPBOOL lpUsedDefaultChar) {
     (void)CodePage;
     (void)dwFlags;
     (void)lpDefaultChar;
+    static const uint16_t s_cp1256[128] = {
+        0x20AC,0x067E,0x201A,0x0192,0x201E,0x2026,0x2020,0x2021,0x02C6,0x2030,0x0679,0x2039,0x0152,0x0686,0x0698,0x0688,
+        0x06AF,0x2018,0x2019,0x201C,0x201D,0x2022,0x2013,0x2014,0x06A9,0x2122,0x0691,0x203A,0x0153,0x200C,0x200D,0x06BA,
+        0x00A0,0x060C,0x00A2,0x00A3,0x00A4,0x00A5,0x00A6,0x00A7,0x00A8,0x00A9,0x06BE,0x00AB,0x00AC,0x00AD,0x00AE,0x00AF,
+        0x00B0,0x00B1,0x00B2,0x00B3,0x00B4,0x00B5,0x00B6,0x00B7,0x00B8,0x00B9,0x061B,0x00BB,0x00BC,0x00BD,0x00BE,0x061F,
+        0x06C1,0x0621,0x0622,0x0623,0x0624,0x0625,0x0626,0x0627,0x0628,0x0629,0x062A,0x062B,0x062C,0x062D,0x062E,0x062F,
+        0x0630,0x0631,0x0632,0x0633,0x0634,0x0635,0x0636,0x00D7,0x0637,0x0638,0x0639,0x063A,0x0640,0x0641,0x0642,0x0643,
+        0x00E0,0x0644,0x00E2,0x0645,0x0646,0x0647,0x0648,0x00E7,0x00E8,0x00E9,0x00EA,0x00EB,0x0649,0x064A,0x00EE,0x00EF,
+        0x064B,0x064C,0x064D,0x064E,0x00F4,0x064F,0x0650,0x00F7,0x0651,0x00F9,0x0652,0x00FB,0x00FC,0x200E,0x200F,0x06D2
+    };
     if (lpUsedDefaultChar) *lpUsedDefaultChar = FALSE;
     if (!lpWideCharStr) return 0;
     int len = (cchWideChar < 0) ? (int)(wcslen(lpWideCharStr) + 1) : cchWideChar;
     if (cbMultiByte == 0 || !lpMultiByteStr) return len;
     int copyLen = (len < cbMultiByte) ? len : cbMultiByte;
     for (int i = 0; i < copyLen; ++i) {
-        lpMultiByteStr[i] = (char)(lpWideCharStr[i] & 0xFF);
+        WCHAR wc = NormalizeArabicPresentationWChar(lpWideCharStr[i]);
+        if ((uint32_t)wc < 0x80u) {
+            lpMultiByteStr[i] = (char)wc;
+        } else {
+            unsigned char mapped = 0;
+            for (int k = 0; k < 128; ++k) {
+                if (s_cp1256[k] == (uint16_t)wc) {
+                    mapped = (unsigned char)(0x80 + k);
+                    break;
+                }
+            }
+            if (!mapped && (uint32_t)wc <= 0xFFu)
+                mapped = (unsigned char)wc;
+            lpMultiByteStr[i] = (char)(mapped ? mapped : '?');
+        }
     }
     return copyLen;
 }
@@ -1822,17 +1895,41 @@ static inline BOOL SetCurrentDirectoryA(LPCSTR lpPathName) {
 #define DC_PEN              19
 #endif
 
+typedef struct _SAndroidFontHandle {
+    DWORD magic;
+    LOGFONTA lf;
+} SAndroidFontHandle;
+
+#ifdef __cplusplus
+extern "C" LOGFONTA g_AndroidActiveLogFont;
+#else
+extern LOGFONTA g_AndroidActiveLogFont;
+#endif
+
 static inline HGDIOBJ GetStockObject(int i) {
     return (HGDIOBJ)(intptr_t)(i + 1);
 }
 
 static inline HGDIOBJ SelectObject(HDC hdc, HGDIOBJ h) {
     (void)hdc;
+    if (h && (uintptr_t)h > 0xFFFFu) {
+        SAndroidFontHandle* pFont = (SAndroidFontHandle*)h;
+        if (pFont->magic == 0x464F4E54u) {
+            g_AndroidActiveLogFont = pFont->lf;
+        }
+    }
     return h;
 }
 
 static inline BOOL DeleteObject(HGDIOBJ ho) {
-    (void)ho;
+    if (ho && (uintptr_t)ho > 0xFFFFu) {
+        SAndroidFontHandle* pFont = (SAndroidFontHandle*)ho;
+        if (pFont->magic == 0x464F4E54u) {
+            pFont->magic = 0;
+            free(pFont);
+            return TRUE;
+        }
+    }
     return TRUE;
 }
 
@@ -4748,7 +4845,20 @@ typedef struct _ABCFLOAT {
 } ABCFLOAT, *PABCFLOAT, *LPABCFLOAT;
 
 // Win32 Font and Text Output Stubs for GrpFontTexture.cpp under Android
-static inline HFONT CreateFontIndirectA(const LOGFONTA *lplf) { (void)lplf; return (HFONT)1; }
+static inline HFONT CreateFontIndirectA(const LOGFONTA *lplf) {
+    SAndroidFontHandle* h = (SAndroidFontHandle*)calloc(1, sizeof(SAndroidFontHandle));
+    if (!h) return (HFONT)1;
+    h->magic = 0x464F4E54u;
+    if (lplf) {
+        h->lf = *lplf;
+    } else {
+        h->lf.lfHeight = -12;
+        h->lf.lfWeight = 400;
+        strcpy(h->lf.lfFaceName, "Tahoma");
+    }
+    g_AndroidActiveLogFont = h->lf;
+    return (HFONT)h;
+}
 static inline HFONT CreateFontIndirectW(const LOGFONTW *lplf) { (void)lplf; return (HFONT)1; }
 #ifndef CreateFontIndirect
 #define CreateFontIndirect CreateFontIndirectA
