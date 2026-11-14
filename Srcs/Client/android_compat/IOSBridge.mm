@@ -805,6 +805,9 @@ static NSString* const kTrailerFileName = @"trailer.mp4";
     for (int i = 0; i < cnt; ++i) {
         NSDictionary* it = files[i];
         NSString* rel = it[@"path"];
+        NSString* lowerRel = [rel lowercaseString];
+        if ([lowerRel hasSuffix:@".apk"] || [lowerRel hasSuffix:@".exe"] || [lowerRel hasSuffix:@".dll"] || [lowerRel hasSuffix:@".so"])
+            continue;
         long long sz = [it[@"size"] longLongValue];
         NSString* md5 = [it[@"md5"] lowercaseString];
         if (i % 8 == 0 || i == cnt - 1) {

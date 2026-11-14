@@ -99,8 +99,29 @@ def prepare_bundle():
     pl['CFBundleName'] = EXEC_NAME
     pl['CFBundleExecutable'] = EXEC_NAME
     pl['CFBundleIdentifier'] = BUNDLE_ID
-    pl['CFBundleShortVersionString'] = '1.0.0'
-    pl['CFBundleVersion'] = str(os.environ.get('GITHUB_RUN_NUMBER', '1'))
+    run_num = int(os.environ.get('GITHUB_RUN_NUMBER', '1'))
+    next_step = run_num
+    next_build_num = run_num
+    try:
+        p8_key = get_p8()
+        if p8_key:
+            hdr = asc_headers(p8_key)
+            base = 'https://api.appstoreconnect.apple.com/v1'
+            apps = requests.get(f'{base}/apps?filter[bundleId]={BUNDLE_ID}', headers=hdr).json().get('data', [])
+            if apps:
+                app_id = apps[0]['id']
+                b_resp = requests.get(f'{base}/builds?filter[app]={app_id}&limit=200', headers=hdr).json().get('data', [])
+                next_step = len(b_resp) + 1
+                max_b = max([int(b['attributes']['version']) for b in b_resp if str(b.get('attributes', {}).get('version', '')).isdigit()] + [0])
+                next_build_num = max(run_num, max_b + 1)
+    except Exception as e:
+        print('Version auto-check fallback:', e)
+
+    major = 1 + (next_step // 100)
+    minor = next_step % 100
+    pl['CFBundleShortVersionString'] = f'{major}.{minor:02d}'
+    pl['CFBundleVersion'] = str(next_build_num)
+    print(f'=== Building Version {pl["CFBundleShortVersionString"]} (Build {pl["CFBundleVersion"]}) ===')
     pl['UILaunchStoryboardName'] = 'LaunchScreen'
     pl['UIRequiresFullScreen'] = True
     pl['ITSAppUsesNonExemptEncryption'] = False

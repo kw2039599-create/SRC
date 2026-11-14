@@ -39,6 +39,9 @@
 #include <stdio.h>
 typedef void JNIEnv;
 typedef void* jobject;
+typedef void* jclass;
+typedef void* jstring;
+typedef void* jmethodID;
 typedef int jint;
 typedef float jfloat;
 typedef unsigned char jboolean;
@@ -5184,9 +5187,11 @@ struct SPendingSfxPlay {
     float rate;
     DWORD readyAtMs;
 };
+#ifndef __APPLE__
 static std::vector<SPendingSfxPlay> s_pendingSfxPlays;
 static jobject s_soundPool = nullptr;
 static jmethodID s_spPlayMid = nullptr;
+#endif
 
 static void FlushPendingAndroidSfx() {
 #ifndef __APPLE__
