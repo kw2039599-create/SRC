@@ -78,5 +78,5 @@ jobs:
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: M2WorldOnline-iOS-IPA
-          path: Srcs/Client/M2WorldOnline.ipa
+          name: WorldOnline-iOS-IPA
+          path: Srcs/Client/WorldOnline.ipa
