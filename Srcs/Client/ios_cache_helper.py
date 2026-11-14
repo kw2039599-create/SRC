@@ -1,7 +1,7 @@
 import hashlib, json, os, shutil, sys, time
 
 DB = 'build_ios/file_mtimes.json'
-CACHE_EPOCH = 'v2_clean_rebuild_20261111'
+CACHE_EPOCH = 'v3_worldonline_rebuild_20261114'
 mode = sys.argv[1]
 
 old_db = {}
@@ -41,6 +41,7 @@ cur_hdr_hash = hdr_hasher.hexdigest()
 
 if mode == 'restore':
     shutil.rmtree('build_ios/Release-iphoneos/M2WorldOnline.app', ignore_errors=True)
+    shutil.rmtree('build_ios/Release-iphoneos/WorldOnline.app', ignore_errors=True)
     now_ts = time.time() + 5.0
     for p, (h, mt) in cur_files.items():
         if p in old_files and old_files[p][0] == h:
