@@ -1477,6 +1477,8 @@ inline UINT D3DXGetFVFVertexSize(DWORD FVF);
 #ifdef __ANDROID__
 extern "C" int g_AndroidPhysWidth;
 extern "C" int g_AndroidPhysHeight;
+extern "C" int g_AndroidScreenWidth;
+extern "C" int g_AndroidScreenHeight;
 #endif
 
 struct IDirect3DDevice8 {
@@ -1723,12 +1725,25 @@ struct IDirect3DDevice8 {
 #endif
 			} else {
 				m_Viewport = *v;
-				m_ScreenViewport = *v;
 #ifdef __ANDROID__
-				glViewport(0, 0,
-					(g_AndroidPhysWidth > 0) ? g_AndroidPhysWidth : v->Width,
-					(g_AndroidPhysHeight > 0) ? g_AndroidPhysHeight : v->Height);
+				if (v->X == 0 && v->Y == 0) {
+					m_ScreenViewport = *v;
+					glViewport(0, 0,
+						(g_AndroidPhysWidth > 0) ? g_AndroidPhysWidth : v->Width,
+						(g_AndroidPhysHeight > 0) ? g_AndroidPhysHeight : v->Height);
+				} else if (g_AndroidPhysWidth > 0 && g_AndroidPhysHeight > 0 && g_AndroidScreenWidth > 0 && g_AndroidScreenHeight > 0) {
+					float sx = (float)g_AndroidPhysWidth / (float)g_AndroidScreenWidth;
+					float sy = (float)g_AndroidPhysHeight / (float)g_AndroidScreenHeight;
+					GLint vx = (GLint)(v->X * sx + 0.5f);
+					GLint vw = (GLint)(v->Width * sx + 0.5f);
+					GLint vh = (GLint)(v->Height * sy + 0.5f);
+					GLint vy = g_AndroidPhysHeight - (GLint)((v->Y + v->Height) * sy + 0.5f);
+					glViewport(vx, vy, vw, vh);
+				} else {
+					glViewport(v->X, v->Y, v->Width, v->Height);
+				}
 #else
+				m_ScreenViewport = *v;
 				glViewport(v->X, v->Y, v->Width, v->Height);
 #endif
 			}

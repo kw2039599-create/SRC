@@ -1173,6 +1173,17 @@ bool CInstanceBase::SetRace(DWORD eRace)
 {
 	m_dwRace = eRace;
 
+#ifdef __ANDROID__
+	if (!__FindRaceType(m_dwRace, &m_eRaceType))
+		m_eRaceType = CActorInstance::TYPE_PC;
+
+	if (m_eRaceType == CActorInstance::TYPE_PC || m_dwRace < 10)
+	{
+		m_eRaceType = CActorInstance::TYPE_PC;
+		m_GraphicThingInstance.SetActorType(CActorInstance::TYPE_PC);
+	}
+#endif
+
 	DWORD dwModelRace = eRace;
 	if (eRace == 40041 || eRace == 40043) dwModelRace = 3;
 	else if (eRace == 40042 || eRace == 40044) dwModelRace = 7;
@@ -1180,8 +1191,10 @@ bool CInstanceBase::SetRace(DWORD eRace)
 	if (!m_GraphicThingInstance.SetRace(dwModelRace))
 		return false;
 
+#ifndef __ANDROID__
 	if (!__FindRaceType(m_dwRace, &m_eRaceType))
 		m_eRaceType=CActorInstance::TYPE_PC;
+#endif
 
 	return true;
 }

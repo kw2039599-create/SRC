@@ -18,7 +18,7 @@ extern "C" int g_AndroidPhysWidth;
 extern "C" int g_AndroidPhysHeight;
 extern "C" uint32_t g_AndroidGLContextGen = 1;
 
-//#define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
+#define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
 
 #ifdef ENABLE_MOBILE_PERF_DEBUGGER
 #include <time.h>

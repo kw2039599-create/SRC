@@ -915,7 +915,10 @@ bool CPythonApplication::Process()
 	DWORD dwUpdateTime5=ELTimer_GetMSec();
 #endif
 	//if (m_isActivateWnd)
-	#ifndef __ANDROID__
+#ifdef __ANDROID__
+	if (!m_pyBackground.IsMapReady())
+		__UpdateCamera();
+#else
 	__UpdateCamera();
 #endif
 #ifdef __PERFORMANCE_CHECK__

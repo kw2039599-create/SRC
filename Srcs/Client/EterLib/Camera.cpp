@@ -332,91 +332,10 @@ void CCamera::Move(const D3DXVECTOR3 & v3Displacement)
 	if (IsLock())
 		return;
 
-#ifdef __ANDROID__
-	static DWORD s_dwLastMoveMs = 0;
-	static float s_fFollowRamp = 0.0f;
-	static D3DXVECTOR3 s_v3FollowVel(0.0f, 0.0f, 0.0f);
-
-	DWORD dwNowMs = GetTickCount();
-	float fDt = (s_dwLastMoveMs > 0 && dwNowMs > s_dwLastMoveMs)
-		? ((float)(dwNowMs - s_dwLastMoveMs) * 0.001f)
-		: (1.0f / 60.0f);
-	s_dwLastMoveMs = dwNowMs;
-	if (fDt > 0.1f) fDt = 0.1f;
-	if (fDt < 0.001f) fDt = 0.001f;
-
-	float distSq = v3Displacement.x * v3Displacement.x +
-	               v3Displacement.y * v3Displacement.y +
-	               v3Displacement.z * v3Displacement.z;
-
-	// Instant snap on map warps / teleports (> 650 units)
-	if (distSq > 650.0f * 650.0f)
-	{
-		s_fFollowRamp = 0.0f;
-		s_v3FollowVel = D3DXVECTOR3(0.0f, 0.0f, 0.0f);
-		m_v3Eye += v3Displacement;
-		m_v3Target += v3Displacement;
-		SetViewMatrix();
-		return;
-	}
-
-	float xyDist = hypotf(v3Displacement.x, v3Displacement.y);
-	if (xyDist > 1.5f)
-	{
-		// Character is moving: gradually ramp up camera follow after initial lag
-		s_fFollowRamp = fminf(1.0f, s_fFollowRamp + fDt * 2.2f);
-	}
-	else
-	{
-		// Character stopped and camera caught up: reset ramp for next move
-		s_fFollowRamp = fmaxf(0.0f, s_fFollowRamp - fDt * 3.0f);
-	}
-
-	// Start with low stiffness (1.8/s) so character moves out first, then ramp to 5.2/s chase
-	float rampCurve = s_fFollowRamp * s_fFollowRamp * (3.0f - 2.0f * s_fFollowRamp);
-	float stiffnessXY = 1.8f + 3.4f * rampCurve;
-	float stiffnessZ  = 6.5f;
-
-	D3DXVECTOR3 desiredVel(
-		v3Displacement.x * stiffnessXY,
-		v3Displacement.y * stiffnessXY,
-		v3Displacement.z * stiffnessZ
-	);
-
-	// Smooth camera acceleration & deceleration inertia
-	float velBlend = 1.0f - expf(-9.0f * fDt);
-	s_v3FollowVel.x += (desiredVel.x - s_v3FollowVel.x) * velBlend;
-	s_v3FollowVel.y += (desiredVel.y - s_v3FollowVel.y) * velBlend;
-	s_v3FollowVel.z += (desiredVel.z - s_v3FollowVel.z) * velBlend;
-
-	D3DXVECTOR3 v3Step = s_v3FollowVel * fDt;
-
-	// Soft leash: never let the character get more than 145 units ahead of the camera
-	const float maxLeashXY = 145.0f;
-	D3DXVECTOR3 v3Rem = v3Displacement - v3Step;
-	float remXY = hypotf(v3Rem.x, v3Rem.y);
-	if (remXY > maxLeashXY)
-	{
-		float pullScale = (remXY - maxLeashXY) / remXY;
-		v3Step.x += v3Rem.x * pullScale;
-		v3Step.y += v3Rem.y * pullScale;
-	}
-
-	// Prevent overshoot when settling onto the stopped character
-	if (fabsf(v3Step.x) > fabsf(v3Displacement.x) && (v3Step.x * v3Displacement.x >= 0.0f)) v3Step.x = v3Displacement.x;
-	if (fabsf(v3Step.y) > fabsf(v3Displacement.y) && (v3Step.y * v3Displacement.y >= 0.0f)) v3Step.y = v3Displacement.y;
-	if (fabsf(v3Step.z) > fabsf(v3Displacement.z) && (v3Step.z * v3Displacement.z >= 0.0f)) v3Step.z = v3Displacement.z;
-
-	m_v3Eye += v3Step;
-	m_v3Target += v3Step;
-
-	SetViewMatrix();
-#else
 	m_v3Eye += v3Displacement;
 	m_v3Target += v3Displacement;
 
 	SetViewMatrix();
-#endif
 }
 void CCamera::Zoom(float fRatio)
 {

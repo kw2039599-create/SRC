@@ -734,6 +734,10 @@ void CGraphicThingInstance::UpdateTransform(D3DXMATRIX * pMatrix, float fSeconds
 
 static inline bool IsAndroidActorInCameraFrustum(const CGraphicThingInstance* pkInst, float fPadRadius = 550.0f, bool bForDeform = false)
 {
+	const D3DXVECTOR3& v3PosCheck = pkInst->GetPosition();
+	if (fabsf(v3PosCheck.x) < 250.0f && fabsf(v3PosCheck.y) < 250.0f)
+		return true;
+
 	CCamera* pCam = CCameraManager::Instance().GetCurrentCamera();
 	if (!pCam)
 		return true;

@@ -379,9 +379,16 @@ struct FCharacterManagerCharacterInstanceListDeform
 
 void CPythonCharacterManager::Deform()
 {
+#ifdef __ANDROID__
+	const bool bNoMainActor = (GetMainInstancePtr() == NULL);
+#endif
 	for (TCharacterInstanceMap::iterator i = m_kAliveInstMap.begin(); i != m_kAliveInstMap.end(); ++i)
 	{
 		CInstanceBase* pkInst = i->second;
+#ifdef __ANDROID__
+		if (bNoMainActor)
+			pkInst->GetGraphicThingInstanceRef().Show();
+#endif
 		pkInst->Deform();
 	}
 	std::for_each(m_kDeadInstList.begin(), m_kDeadInstList.end(), FCharacterManagerCharacterInstanceListDeform());

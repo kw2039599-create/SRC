@@ -58,8 +58,41 @@ DWORD CActorInstance::GetRace()
 	return m_eRace;
 }
 
+#ifdef __ANDROID__
+extern "C" int PyRun_SimpleStringFlags(const char*, void*);
+#endif
+
 bool CActorInstance::SetRace(DWORD eRace)
 {
+#ifdef __ANDROID__
+	if (eRace < 10)
+	{
+		m_eActorType = TYPE_PC;
+		static bool s_bJobLoaded[5] = { false, false, false, false, false };
+		int jobIdx = -1;
+		const char* jobKey = nullptr;
+		switch (eRace)
+		{
+			case 0: case 4: jobIdx = 0; jobKey = "WARRIOR"; break;
+			case 1: case 5: jobIdx = 1; jobKey = "ASSASSIN"; break;
+			case 2: case 6: jobIdx = 2; jobKey = "SURA"; break;
+			case 3: case 7: jobIdx = 3; jobKey = "SHAMAN"; break;
+			case 8:         jobIdx = 4; jobKey = "WOLFMAN"; break;
+		}
+		if (jobIdx >= 0 && !s_bJobLoaded[jobIdx])
+		{
+			s_bJobLoaded[jobIdx] = true;
+			char pyCmd[160];
+			snprintf(pyCmd, sizeof(pyCmd),
+				"try:\n"
+				"    import playerSettingModule\n"
+				"    playerSettingModule.LoadGameData('%s')\n"
+				"except:\n"
+				"    pass\n", jobKey);
+			PyRun_SimpleStringFlags(pyCmd, nullptr);
+		}
+	}
+#endif
 	CRaceData * pRaceData;
 	if (!CRaceManager::Instance().GetRaceDataPointer(eRace, &pRaceData))
 	{

@@ -3906,7 +3906,7 @@ static PyObject* mobileInput_FindNearestEnemyVID(PyObject* self, PyObject* args)
     return Py_BuildValue("i", (int)chosenVID);
 }
 
-//#define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
+#define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
 
 #ifdef ENABLE_MOBILE_PERF_DEBUGGER
 #include <time.h>

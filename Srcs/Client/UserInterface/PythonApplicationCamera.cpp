@@ -130,12 +130,17 @@ void CPythonApplication::SetCamera(float Distance, float Pitch, float Rotation, 
 	if (!pCurrentCamera)
 		return;
 
+#ifdef __ANDROID__
+	pCurrentCamera->SetTargetHeight(fDestinationHeight);
+	m_pyGraphic.SetPositionCamera(m_v3CenterPosition.x, m_v3CenterPosition.y, m_v3CenterPosition.z + fDestinationHeight, Distance, Pitch, Rotation);
+#else
 	D3DXVECTOR3 v3Target = pCurrentCamera->GetTarget();
 	m_pyGraphic.SetPositionCamera(v3Target.x, v3Target.y, v3Target.z, Distance, Pitch, Rotation);
 
 	CCamera * pMainCamera = CCameraManager::Instance().GetCurrentCamera();
 	if (pMainCamera)
 		pMainCamera->SetTargetHeight(fDestinationHeight);
+#endif
 }
 
 void CPythonApplication::GetCamera(float * Distance, float * Pitch, float * Rotation, float * DestinationHeight)
