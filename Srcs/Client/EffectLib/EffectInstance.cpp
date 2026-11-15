@@ -55,12 +55,12 @@ static inline bool IsAndroidEffectInCameraFrustum(const D3DXMATRIX& rMatGlobal, 
 			s_R.x * s_F.y - s_R.y * s_F.x);
 	}
 
-	const float pad = ((fSphereRadius > 260.0f) ? fSphereRadius : 260.0f) + fExtraPad;
+	const float pad = ((fSphereRadius > 220.0f) ? fSphereRadius : 220.0f) + fExtraPad;
 
-	// Always keep effects near the camera target (main player) active
+	// Always keep effects on the main player (camera target) active
 	const float tdx = px - v3Target.x;
 	const float tdy = py - v3Target.y;
-	if ((tdx * tdx + tdy * tdy) <= (550.0f * 550.0f))
+	if ((tdx * tdx + tdy * tdy) <= (120.0f * 120.0f))
 		return true;
 
 	const float vx = px - v3Eye.x;
@@ -71,12 +71,23 @@ static inline bool IsAndroidEffectInCameraFrustum(const D3DXMATRIX& rMatGlobal, 
 	if (zCam < -pad)
 		return false;
 
+	float tanHalfX = 0.52f;
+	float tanHalfY = 0.30f;
+	if (IDirect3DDevice8* pDev = GetCurrentGLDevice())
+	{
+		if (pDev->m_matProj._11 > 0.1f && pDev->m_matProj._22 > 0.1f)
+		{
+			tanHalfX = (1.0f / pDev->m_matProj._11) + 0.04f;
+			tanHalfY = (1.0f / pDev->m_matProj._22) + 0.04f;
+		}
+	}
+
 	const float xCam = fabsf(vx * s_R.x + vy * s_R.y);
-	if (xCam > (zCam * 1.35f + pad))
+	if (xCam > (zCam * tanHalfX + pad))
 		return false;
 
 	const float yCam = fabsf(vx * s_U.x + vy * s_U.y + vz * s_U.z);
-	if (yCam > (zCam * 0.95f + pad))
+	if (yCam > (zCam * tanHalfY + pad))
 		return false;
 
 	return true;
@@ -163,6 +174,8 @@ void CEffectInstance::OnUpdate()
 {
 #ifndef __ANDROID__
 	Transform();
+#else
+	UpdateSound();
 #endif
 
 #ifdef WORLD_EDITOR

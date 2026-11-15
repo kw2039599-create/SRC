@@ -361,34 +361,60 @@ void CSoundManager::PlaySound2D(const char * c_szFileName)
 }
 
 #ifdef __ANDROID__
+#include "../EterLib/Camera.h"
+
 static void PlayMobilePositional3DSound(float fx, float fy, float fz, float lx, float ly, float lz, float scale, float baseVol, const char* c_szFileName)
 {
 	if (baseVol <= 0.001f || !c_szFileName || !*c_szFileName)
 		return;
+
+	// If listener position has not been updated yet, fall back to the active camera target (main player)
+	if (fabsf(lx) < 1.0f && fabsf(ly) < 1.0f)
+	{
+		if (CCamera* pCam = CCameraManager::Instance().GetCurrentCamera())
+		{
+			const D3DXVECTOR3& v3Target = pCam->GetTarget();
+			lx = v3Target.x;
+			ly = v3Target.y;
+			lz = v3Target.z;
+		}
+	}
+
 	float fdx = fx - lx;
-	float fdy = fy - ly;
-	float fdz = fz - lz;
+	// Handle both TPixelPosition (+Y) and D3DXVECTOR3/m_matGlobal (-Y) coordinate conventions
+	float fdy1 = fy - ly;
+	float fdy2 = fy + ly;
+	float fdy = (fabsf(fdy1) <= fabsf(fdy2)) ? fdy1 : fdy2;
+	float fdz = (fz - lz) * 0.5f;
+
+	float fHorizDist = sqrtf(fdx * fdx + fdy * fdy);
 	float fDist = sqrtf(fdx * fdx + fdy * fdy + fdz * fdz);
-	float maxDist = (scale > 500.0f) ? 3500.0f : 2600.0f;
+	float maxDist = (scale > 500.0f) ? 5500.0f : 4500.0f;
 	if (fDist > maxDist)
 		return;
 
-	// Miles Fast 2D Positional Audio distance curve: full volume inside minDist, smooth inverse-distance rolloff outside
-	float minDist = (scale > 500.0f) ? 350.0f : 220.0f;
-	float effDist = (fDist > minDist) ? (fDist - minDist) : 0.0f;
-	float rolloff = 1.0f / (1.0f + (effDist / (minDist * 2.2f)) * (effDist / (minDist * 2.2f)));
-	float linearFade = 1.0f - (fDist / maxDist);
-	float fAtten = rolloff * linearFade;
-	if (fAtten <= 0.01f)
+	// Native PC Miles Fast 2D Positional Audio inverse-distance rolloff curve
+	float minDist = (scale > 500.0f) ? 600.0f : 300.0f;
+	float fAtten = 1.0f;
+	if (fDist > minDist)
+	{
+		float normDist = (fDist - minDist) / (minDist * 2.2f);
+		float invRolloff = 1.0f / (1.0f + normDist);
+		float edgeFade = 1.0f - (fDist - minDist) / (maxDist - minDist);
+		fAtten = invRolloff * sqrtf(fmaxf(0.0f, edgeFade));
+	}
+	if (fAtten <= 0.015f)
 		return;
 
-	// Compute 3D stereo pan (-0.75 left .. +0.75 right) from camera right vector (s_fAndroidListenerDirY, -s_fAndroidListenerDirX)
+	// True azimuth-angle stereo panning (-0.70 left .. +0.70 right) with near-field centering
 	float rightX = s_fAndroidListenerDirY;
 	float rightY = -s_fAndroidListenerDirX;
 	float sideProj = fdx * rightX + fdy * rightY;
-	float pan = sideProj / 650.0f;
-	if (pan < -0.75f) pan = -0.75f;
-	else if (pan > 0.75f) pan = 0.75f;
+	float sinAzimuth = (fHorizDist > 1.0f) ? (sideProj / fHorizDist) : 0.0f;
+	float nearBlend = fminf(1.0f, fHorizDist / 320.0f);
+	float pan = sinAzimuth * nearBlend * 0.70f;
+	if (pan < -0.70f) pan = -0.70f;
+	else if (pan > 0.70f) pan = 0.70f;
 
 	AndroidPlayAudioFile3D(c_szFileName, baseVol * fAtten, pan);
 }
@@ -424,6 +450,15 @@ int CSoundManager::PlayAmbienceSound3D(float fx, float fy, float fz, const char 
 	if (0.0f == GetSoundVolume())
 		return -1;
 #ifdef __ANDROID__
+	if (c_szFileName && *c_szFileName)
+	{
+		float fCurSec = CTimer::Instance().GetCurrentSecond();
+		auto itor = m_PlaySoundHistoryMap.find(c_szFileName);
+		if (itor != m_PlaySoundHistoryMap.end() && (fCurSec - itor->second) < 2.5f)
+			return -1;
+		m_PlaySoundHistoryMap[c_szFileName] = fCurSec;
+		PlayMobilePositional3DSound(fx, fy, fz, m_fxPosition, m_fyPosition, m_fzPosition, m_fAmbienceSoundScale, GetSoundVolume() * 0.65f, c_szFileName);
+	}
 	return -1;
 #endif
 
@@ -454,7 +489,10 @@ void CSoundManager::PlayCharacterSound3D(float fx, float fy, float fz, const cha
 	{
 		static float s_fLimitDistance = 5000*5000;
 		float fdx = (fx - m_fxPosition) * (fx - m_fxPosition);
-		float fdy = (fy - m_fyPosition) * (fy - m_fyPosition);
+		float fdy1 = fy - m_fyPosition;
+		float fdy2 = fy + m_fyPosition;
+		float fdyMin = (fabsf(fdy1) <= fabsf(fdy2)) ? fdy1 : fdy2;
+		float fdy = fdyMin * fdyMin;
 
 		if (fdx+fdy > s_fLimitDistance)
 			return;
@@ -463,14 +501,13 @@ void CSoundManager::PlayCharacterSound3D(float fx, float fy, float fz, const cha
 		if (m_PlaySoundHistoryMap.end() != itor)
 		{
 			float fTime = itor->second;
-			if (CTimer::Instance().GetCurrentSecond() - fTime < 0.04f)
+			if (CTimer::Instance().GetCurrentSecond() - fTime < 0.018f)
 			{
 				return;
 			}
 		}
 
-		m_PlaySoundHistoryMap.erase(c_szFileName);
-		m_PlaySoundHistoryMap.emplace(c_szFileName, CTimer::Instance().GetCurrentSecond());
+		m_PlaySoundHistoryMap[c_szFileName] = CTimer::Instance().GetCurrentSecond();
 	}
 
 #ifdef __ANDROID__

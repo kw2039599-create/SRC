@@ -732,10 +732,10 @@ void CGraphicThingInstance::UpdateTransform(D3DXMATRIX * pMatrix, float fSeconds
 #include <unordered_map>
 #include "../SphereLib/Frustum.h"
 
-static inline bool IsAndroidActorInCameraFrustum(const CGraphicThingInstance* pkInst, float fPadRadius = 550.0f, bool bForDeform = false)
+static inline bool IsAndroidActorInCameraFrustum(const CGraphicThingInstance* pkInst, float fPadRadius = 450.0f, bool bForDeform = false)
 {
-	const D3DXVECTOR3& v3PosCheck = pkInst->GetPosition();
-	if (fabsf(v3PosCheck.x) < 250.0f && fabsf(v3PosCheck.y) < 250.0f)
+	const D3DXVECTOR3& v3Pos = pkInst->GetPosition();
+	if (fabsf(v3Pos.x) < 250.0f && fabsf(v3Pos.y) < 250.0f)
 		return true;
 
 	CCamera* pCam = CCameraManager::Instance().GetCurrentCamera();
@@ -744,15 +744,13 @@ static inline bool IsAndroidActorInCameraFrustum(const CGraphicThingInstance* pk
 
 	const D3DXVECTOR3& v3Eye = pCam->GetEye();
 	const D3DXVECTOR3& v3Target = pCam->GetTarget();
-	const D3DXVECTOR3& v3Pos = pkInst->GetPosition();
 
 	const float tdx = v3Pos.x - v3Target.x;
 	const float tdy = v3Pos.y - v3Target.y;
 	const float targetDistSq = tdx * tdx + tdy * tdy;
 
-	// If deforming while shadows are enabled (graphicsLevel > 0), keep all actors within shadow range
-	// active even when behind the camera so their long shadows stretch into the screen view
-	const float safeTargetRadius = (bForDeform && Frustum::Instance().graphicsLevel > 0) ? 3000.0f : 700.0f;
+	// Always keep the main player (at camera target) and shadow-casting actors (when shadows are enabled) active
+	const float safeTargetRadius = (bForDeform && Frustum::Instance().graphicsLevel > 0) ? 3000.0f : 120.0f;
 	if (targetDistSq <= (safeTargetRadius * safeTargetRadius))
 		return true;
 
@@ -789,17 +787,28 @@ static inline bool IsAndroidActorInCameraFrustum(const CGraphicThingInstance* pk
 	const float vy = v3Pos.y - v3Eye.y;
 	const float vz = (v3Pos.z + 90.0f) - v3Eye.z;
 
-	// Only cull if behind the camera eye (NO maximum distance cap!)
 	const float zCam = vx * s_F.x + vy * s_F.y + vz * s_F.z;
 	if (zCam < -fPadRadius)
 		return false;
 
+	// Extract exact camera frustum tangents from the active projection matrix (no view distance cap)
+	float tanHalfX = 0.52f;
+	float tanHalfY = 0.30f;
+	if (IDirect3DDevice8* pDev = GetCurrentGLDevice())
+	{
+		if (pDev->m_matProj._11 > 0.1f && pDev->m_matProj._22 > 0.1f)
+		{
+			tanHalfX = (1.0f / pDev->m_matProj._11) + 0.04f;
+			tanHalfY = (1.0f / pDev->m_matProj._22) + 0.04f;
+		}
+	}
+
 	const float xCam = fabsf(vx * s_R.x + vy * s_R.y);
-	if (xCam > (zCam * 1.35f + fPadRadius))
+	if (xCam > (zCam * tanHalfX + fPadRadius))
 		return false;
 
 	const float yCam = fabsf(vx * s_U.x + vy * s_U.y + vz * s_U.z);
-	if (yCam > (zCam * 0.95f + fPadRadius))
+	if (yCam > (zCam * tanHalfY + fPadRadius))
 		return false;
 
 	return true;

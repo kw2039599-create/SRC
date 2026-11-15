@@ -1821,11 +1821,17 @@ struct IDirect3DDevice8 {
 		return S_OK;
 	}
 	HRESULT LightEnable(DWORD Index, BOOL bEnable) {
-		if (Index == 0) { m_Light0Enabled = bEnable ? 1 : 0; m_DirtyFlags |= 4; }
+		if (Index == 0) {
+			DWORD val = bEnable ? 1 : 0;
+			if (m_Light0Enabled != val) { m_Light0Enabled = val; m_DirtyFlags |= 4; }
+		}
 		return S_OK;
 	}
 	HRESULT SetMaterial(const D3DMATERIAL8* pMat) {
-		if (pMat) { m_Material = *pMat; m_DirtyFlags |= 4; }
+		if (pMat && memcmp(&m_Material, pMat, sizeof(D3DMATERIAL8)) != 0) {
+			m_Material = *pMat;
+			m_DirtyFlags |= 4;
+		}
 		return S_OK;
 	}
 	HRESULT SetStreamSource(UINT StreamNum, LPDIRECT3DVERTEXBUFFER8 pData, UINT, UINT Stride) { return SetStreamSource(StreamNum, pData, Stride); }

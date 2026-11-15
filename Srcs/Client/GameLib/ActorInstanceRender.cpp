@@ -199,9 +199,9 @@ void CActorInstance::OnRender()
 
 #ifndef __ANDROID__
 		ms_lpd3dDevice->SetVertexShaderConstantF(4, (const float*)(&s_cachedViewProjMat), 4);
-#endif
 		ms_lpd3dDevice->SetVertexShaderConstantF(8, (const float*)(&OutDoor.m_MatLightViewProj), 4);
 		STATEMANAGER.SetVertexShaderConstant(16, (const float*)(&OutDoor.m_MatLightViewProj2), 4);
+#endif
 
 		if (OutDoor.m_lpCharacterShadowMapTexture)
 			STATEMANAGER.SetTexture(2, OutDoor.m_lpCharacterShadowMapTexture);
@@ -215,9 +215,12 @@ void CActorInstance::OnRender()
 		BeginDiffuseRender();
 		RenderWithOneTexture();
 		EndDiffuseRender();
-		BeginOpacityRender();
-		BlendRenderWithOneTexture();
-		EndOpacityRender();
+		if (HaveBlendThing())
+		{
+			BeginOpacityRender();
+			BlendRenderWithOneTexture();
+			EndOpacityRender();
+		}
 		break;
 	case RENDER_MODE_BLEND:
 		if (m_fAlphaValue == 1.0f)
@@ -225,9 +228,12 @@ void CActorInstance::OnRender()
 			BeginDiffuseRender();
 			RenderWithOneTexture();
 			EndDiffuseRender();
-			BeginOpacityRender();
-			BlendRenderWithOneTexture();
-			EndOpacityRender();
+			if (HaveBlendThing())
+			{
+				BeginOpacityRender();
+				BlendRenderWithOneTexture();
+				EndOpacityRender();
+			}
 		}
 		else if (m_fAlphaValue > 0.0f)
 		{

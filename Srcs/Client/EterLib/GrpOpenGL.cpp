@@ -1007,6 +1007,7 @@ namespace {
     inline void BindArrayBufferCached(GLuint buf) {
         if (s_curArrayBuffer != buf) {
             s_curArrayBuffer = buf;
+            s_lastAttrBasePtr = (const BYTE*)0xFFFFFFFFu;
             glBindBuffer(GL_ARRAY_BUFFER, buf);
         }
     }
@@ -1234,8 +1235,7 @@ namespace {
     void BindESVertexAttributes(DWORD dwFVF, const BYTE* basePtr, UINT stride) {
         DWORD fvf = ResolveFVF(dwFVF, stride);
 
-        if (s_curArrayBuffer != 0 &&
-            s_lastAttrVbo == s_curArrayBuffer &&
+        if (s_lastAttrVbo == s_curArrayBuffer &&
             s_lastAttrFvf == fvf &&
             s_lastAttrStride == stride &&
             s_lastAttrBasePtr == basePtr) {
@@ -1300,14 +1300,10 @@ namespace {
         if (uv1Ptr)  glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, (GLsizei)stride, uv1Ptr);
         if (normPtr) glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, (GLsizei)stride, normPtr);
 
-        if (s_curArrayBuffer != 0) {
-            s_lastAttrVbo = s_curArrayBuffer;
-            s_lastAttrFvf = fvf;
-            s_lastAttrStride = stride;
-            s_lastAttrBasePtr = basePtr;
-        } else {
-            s_lastAttrVbo = 0;
-        }
+        s_lastAttrVbo = s_curArrayBuffer;
+        s_lastAttrFvf = fvf;
+        s_lastAttrStride = stride;
+        s_lastAttrBasePtr = basePtr;
     }
 
     inline void UploadVec2IfChanged(GLint loc, float* cache, const float* val) {

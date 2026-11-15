@@ -5180,46 +5180,355 @@ void AndroidStopMusic() {
 #endif
 }
 
-struct SPendingSfxPlay {
-    int soundId;
-    float leftVol;
-    float rightVol;
-    float rate;
-    DWORD readyAtMs;
-};
 #ifndef __APPLE__
-static std::vector<SPendingSfxPlay> s_pendingSfxPlays;
-static jobject s_soundPool = nullptr;
-static jmethodID s_spPlayMid = nullptr;
-#endif
+namespace {
+    constexpr int kMixRate = 44100;
+    constexpr int kMixChunkFrames = 512; // ~11.6ms low-latency mixing slice
+    constexpr int kMaxActiveVoices = 32;
 
-static void FlushPendingAndroidSfx() {
-#ifndef __APPLE__
-    if (s_pendingSfxPlays.empty() || !g_pJavaVM || !s_soundPool || !s_spPlayMid)
-        return;
-    JNIEnv* env = nullptr;
-    if (g_pJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK || !env)
-        return;
-    DWORD nowMs = ELTimer_GetMSec();
-    for (size_t i = 0; i < s_pendingSfxPlays.size(); ) {
-        if (nowMs >= s_pendingSfxPlays[i].readyAtMs) {
-            const SPendingSfxPlay& p = s_pendingSfxPlays[i];
-            env->CallIntMethod(s_soundPool, s_spPlayMid, (jint)p.soundId, (jfloat)p.leftVol, (jfloat)p.rightVol, 1, 0, (jfloat)p.rate);
-            env->ExceptionClear();
-            s_pendingSfxPlays.erase(s_pendingSfxPlays.begin() + i);
-        } else {
-            ++i;
-        }
+    struct SDecodedWavPcm {
+        std::vector<int16_t> samples; // Mono 44100 Hz 16-bit PCM
+        bool valid = false;
+        bool isCompressedFallback = false;
+        std::string fallbackDiskPath;
+    };
+
+    struct SActiveMixVoice {
+        const std::vector<int16_t>* pcm = nullptr;
+        uint32_t pos = 0;
+        float gainL = 0.0f;
+        float gainR = 0.0f;
+        bool active = false;
+    };
+
+    struct SSfxQueueCmd {
+        std::string lowerPath;
+        std::string diskPath;
+        const std::vector<int16_t>* pcm = nullptr;
+        float leftVol = 1.0f;
+        float rightVol = 1.0f;
+    };
+
+    static pthread_mutex_t s_sfxMutex = PTHREAD_MUTEX_INITIALIZER;
+    static std::unordered_map<std::string, SDecodedWavPcm> s_wavCache;
+    static std::deque<SSfxQueueCmd> s_sfxCmdQueue;
+    static SActiveMixVoice s_mixVoices[kMaxActiveVoices];
+    static volatile bool s_bSfxThreadStarted = false;
+    static pthread_t s_sfxThread;
+
+    static int16_t DecodeImaAdpcmNibble(uint8_t nibble, int32_t& predictor, int32_t& stepIndex) {
+        static const int16_t kStepTable[89] = {
+            7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+            50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
+            253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963,
+            1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327,
+            3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487,
+            12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+        };
+        static const int8_t kIndexTable[16] = {
+            -1, -1, -1, -1, 2, 4, 6, 8,
+            -1, -1, -1, -1, 2, 4, 6, 8
+        };
+        int32_t step = kStepTable[stepIndex];
+        int32_t diff = step >> 3;
+        if (nibble & 4) diff += step;
+        if (nibble & 2) diff += (step >> 1);
+        if (nibble & 1) diff += (step >> 2);
+        if (nibble & 8) predictor -= diff;
+        else predictor += diff;
+        if (predictor > 32767) predictor = 32767;
+        else if (predictor < -32768) predictor = -32768;
+        stepIndex += kIndexTable[nibble & 0x0F];
+        if (stepIndex < 0) stepIndex = 0;
+        else if (stepIndex > 88) stepIndex = 88;
+        return (int16_t)predictor;
     }
+
+    static bool DecodeWavToMono44100(const uint8_t* data, size_t size, std::vector<int16_t>& outSamples) {
+        if (!data || size < 44) return false;
+        if (memcmp(data, "RIFF", 4) != 0 || memcmp(data + 8, "WAVE", 4) != 0)
+            return false;
+
+        uint16_t fmtTag = 0, channels = 0, blockAlign = 0, bitsPerSample = 0;
+        uint32_t sampleRate = 0;
+        const uint8_t* dataPtr = nullptr;
+        uint32_t dataSize = 0;
+
+        size_t pos = 12;
+        while (pos + 8 <= size) {
+            uint32_t chunkId = 0, chunkSz = 0;
+            memcpy(&chunkId, data + pos, 4);
+            memcpy(&chunkSz, data + pos + 4, 4);
+            pos += 8;
+            if (pos + chunkSz > size) chunkSz = (uint32_t)(size - pos);
+
+            if (chunkId == 0x20746D66u && chunkSz >= 16) { // 'fmt '
+                memcpy(&fmtTag, data + pos + 0, 2);
+                memcpy(&channels, data + pos + 2, 2);
+                memcpy(&sampleRate, data + pos + 4, 4);
+                memcpy(&blockAlign, data + pos + 12, 2);
+                memcpy(&bitsPerSample, data + pos + 14, 2);
+            } else if (chunkId == 0x61746164u) { // 'data'
+                dataPtr = data + pos;
+                dataSize = chunkSz;
+                break;
+            }
+            pos += chunkSz + (chunkSz & 1);
+        }
+
+        if (!dataPtr || dataSize == 0 || channels == 0 || channels > 2 || sampleRate < 4000 || sampleRate > 96000)
+            return false;
+
+        std::vector<int16_t> monoSrc;
+        if (fmtTag == 1) { // Standard PCM
+            if (bitsPerSample == 16) {
+                size_t frames = dataSize / (channels * 2);
+                monoSrc.resize(frames);
+                const int16_t* src = (const int16_t*)dataPtr;
+                if (channels == 1) {
+                    memcpy(monoSrc.data(), src, frames * sizeof(int16_t));
+                } else {
+                    for (size_t i = 0; i < frames; ++i)
+                        monoSrc[i] = (int16_t)(((int32_t)src[i * 2] + (int32_t)src[i * 2 + 1]) >> 1);
+                }
+            } else if (bitsPerSample == 8) {
+                size_t frames = dataSize / channels;
+                monoSrc.resize(frames);
+                if (channels == 1) {
+                    for (size_t i = 0; i < frames; ++i)
+                        monoSrc[i] = (int16_t)(((int32_t)dataPtr[i] - 128) << 8);
+                } else {
+                    for (size_t i = 0; i < frames; ++i) {
+                        int32_t l = ((int32_t)dataPtr[i * 2] - 128) << 8;
+                        int32_t r = ((int32_t)dataPtr[i * 2 + 1] - 128) << 8;
+                        monoSrc[i] = (int16_t)((l + r) >> 1);
+                    }
+                }
+            } else {
+                return false;
+            }
+        } else if (fmtTag == 0x0011 && blockAlign >= 4 * channels) { // IMA ADPCM (4-bit)
+            size_t numBlocks = dataSize / blockAlign;
+            monoSrc.reserve(numBlocks * (blockAlign - 4 * channels) * 2 / channels);
+            for (size_t b = 0; b < numBlocks; ++b) {
+                const uint8_t* blk = dataPtr + b * blockAlign;
+                int32_t pred[2] = {0, 0};
+                int32_t stepIdx[2] = {0, 0};
+                for (uint16_t ch = 0; ch < channels; ++ch) {
+                    int16_t p0 = 0;
+                    memcpy(&p0, blk + ch * 4, 2);
+                    pred[ch] = p0;
+                    stepIdx[ch] = blk[ch * 4 + 2];
+                    if (stepIdx[ch] < 0) stepIdx[ch] = 0;
+                    else if (stepIdx[ch] > 88) stepIdx[ch] = 88;
+                }
+                monoSrc.push_back(channels == 1 ? (int16_t)pred[0] : (int16_t)((pred[0] + pred[1]) >> 1));
+                size_t offset = 4 * channels;
+                if (channels == 1) {
+                    for (; offset < blockAlign; ++offset) {
+                        uint8_t byte = blk[offset];
+                        monoSrc.push_back(DecodeImaAdpcmNibble(byte & 0x0F, pred[0], stepIdx[0]));
+                        monoSrc.push_back(DecodeImaAdpcmNibble(byte >> 4,   pred[0], stepIdx[0]));
+                    }
+                } else {
+                    while (offset + 8 <= blockAlign) {
+                        int16_t ch0[8], ch1[8];
+                        for (int k = 0; k < 4; ++k) {
+                            uint8_t b0 = blk[offset + k];
+                            ch0[k * 2 + 0] = DecodeImaAdpcmNibble(b0 & 0x0F, pred[0], stepIdx[0]);
+                            ch0[k * 2 + 1] = DecodeImaAdpcmNibble(b0 >> 4,   pred[0], stepIdx[0]);
+                            uint8_t b1 = blk[offset + 4 + k];
+                            ch1[k * 2 + 0] = DecodeImaAdpcmNibble(b1 & 0x0F, pred[1], stepIdx[1]);
+                            ch1[k * 2 + 1] = DecodeImaAdpcmNibble(b1 >> 4,   pred[1], stepIdx[1]);
+                        }
+                        for (int k = 0; k < 8; ++k)
+                            monoSrc.push_back((int16_t)(((int32_t)ch0[k] + (int32_t)ch1[k]) >> 1));
+                        offset += 8;
+                    }
+                }
+            }
+        } else {
+            return false;
+        }
+
+        if (monoSrc.empty()) return false;
+        if (sampleRate == (uint32_t)kMixRate) {
+            outSamples = std::move(monoSrc);
+        } else {
+            double ratio = (double)sampleRate / (double)kMixRate;
+            size_t outLen = (size_t)((double)monoSrc.size() / ratio);
+            if (outLen == 0) return false;
+            outSamples.resize(outLen);
+            size_t maxIdx = monoSrc.size() - 1;
+            for (size_t i = 0; i < outLen; ++i) {
+                double srcPos = (double)i * ratio;
+                size_t idx = (size_t)srcPos;
+                float frac = (float)(srcPos - (double)idx);
+                int32_t s0 = monoSrc[idx];
+                int32_t s1 = monoSrc[(idx < maxIdx) ? (idx + 1) : maxIdx];
+                outSamples[i] = (int16_t)(s0 + (int32_t)((s1 - s0) * frac));
+            }
+        }
+        return true;
+    }
+
+    static void* AndroidSfxMixerThreadProc(void*) {
+        if (!g_pJavaVM) return nullptr;
+        JNIEnv* env = nullptr;
+        if (g_pJavaVM->AttachCurrentThread(&env, nullptr) != JNI_OK || !env) return nullptr;
+
+        // 1. Create a single continuous 44.1kHz Stereo AudioTrack for our 32-voice C++ software mixer
+        jclass atCls = env->FindClass("android/media/AudioTrack");
+        jobject mixTrack = nullptr;
+        jmethodID writeMid = nullptr;
+        jshortArray mixJArray = env->NewShortArray(kMixChunkFrames * 2);
+
+        if (atCls) {
+            jmethodID minBufMid = env->GetStaticMethodID(atCls, "getMinBufferSize", "(III)I");
+            jmethodID ctorMid = env->GetMethodID(atCls, "<init>", "(IIIIII)V");
+            jmethodID playMid = env->GetMethodID(atCls, "play", "()V");
+            writeMid = env->GetMethodID(atCls, "write", "([SII)I");
+
+            jint minBuf = env->CallStaticIntMethod(atCls, minBufMid, (jint)kMixRate, (jint)12 /*OUT_STEREO*/, (jint)2 /*PCM_16BIT*/);
+            env->ExceptionClear();
+            int bufBytes = std::max<int>((int)minBuf, kMixChunkFrames * 4 * 3);
+            mixTrack = env->NewObject(atCls, ctorMid, (jint)3 /*STREAM_MUSIC*/, (jint)kMixRate, (jint)12, (jint)2, (jint)bufBytes, (jint)1 /*MODE_STREAM*/);
+            env->ExceptionClear();
+            if (mixTrack) {
+                env->CallVoidMethod(mixTrack, playMid);
+                env->ExceptionClear();
+            }
+        }
+
+        // 2. Fallback SoundPool on this worker thread ONLY for compressed (.mp3/.ogg) SFX
+        jclass spCls = env->FindClass("android/media/SoundPool");
+        jobject spObj = nullptr;
+        jmethodID spLoadMid = nullptr, spPlayMid = nullptr;
+        if (spCls) {
+            jmethodID spCtor = env->GetMethodID(spCls, "<init>", "(III)V");
+            spObj = env->NewObject(spCls, spCtor, 8, 3, 0);
+            env->ExceptionClear();
+            spLoadMid = env->GetMethodID(spCls, "load", "(Ljava/lang/String;I)I");
+            spPlayMid = env->GetMethodID(spCls, "play", "(IFFIIF)I");
+        }
+
+        struct SCompressedSfxEntry { int soundId; DWORD loadMs; };
+        std::unordered_map<std::string, SCompressedSfxEntry> compMap;
+        struct SPendingCompPlay { int soundId; float lVol; float rVol; DWORD readyMs; };
+        std::vector<SPendingCompPlay> pendingComp;
+
+        int16_t stereoOut[kMixChunkFrames * 2];
+        int32_t mixAccum[kMixChunkFrames * 2];
+
+        while (true) {
+            std::deque<SSfxQueueCmd> localCmds;
+            pthread_mutex_lock(&s_sfxMutex);
+            localCmds.swap(s_sfxCmdQueue);
+            pthread_mutex_unlock(&s_sfxMutex);
+
+            DWORD nowMs = ELTimer_GetMSec();
+            for (const SSfxQueueCmd& cmd : localCmds) {
+                if (cmd.pcm && !cmd.pcm->empty()) {
+                    // Allocate a voice in the 32-channel C++ software mixer
+                    int chosen = -1;
+                    uint32_t oldestPos = 0;
+                    int oldestIdx = 0;
+                    for (int i = 0; i < kMaxActiveVoices; ++i) {
+                        if (!s_mixVoices[i].active) { chosen = i; break; }
+                        if (s_mixVoices[i].pos >= oldestPos) {
+                            oldestPos = s_mixVoices[i].pos;
+                            oldestIdx = i;
+                        }
+                    }
+                    if (chosen < 0) chosen = oldestIdx;
+                    s_mixVoices[chosen].pcm = cmd.pcm;
+                    s_mixVoices[chosen].pos = 0;
+                    s_mixVoices[chosen].gainL = cmd.leftVol;
+                    s_mixVoices[chosen].gainR = cmd.rightVol;
+                    s_mixVoices[chosen].active = true;
+                } else if (!cmd.diskPath.empty() && spObj && spLoadMid && spPlayMid) {
+                    auto it = compMap.find(cmd.diskPath);
+                    if (it == compMap.end()) {
+                        jstring jpath = env->NewStringUTF(cmd.diskPath.c_str());
+                        int id = (int)env->CallIntMethod(spObj, spLoadMid, jpath, 1);
+                        env->ExceptionClear();
+                        env->DeleteLocalRef(jpath);
+                        compMap[cmd.diskPath] = { id, nowMs };
+                        if (id > 0 && pendingComp.size() < 24)
+                            pendingComp.push_back({ id, cmd.leftVol, cmd.rightVol, nowMs + 50 });
+                    } else if (it->second.soundId > 0) {
+                        if (nowMs - it->second.loadMs < 50) {
+                            if (pendingComp.size() < 24)
+                                pendingComp.push_back({ it->second.soundId, cmd.leftVol, cmd.rightVol, it->second.loadMs + 50 });
+                        } else {
+                            env->CallIntMethod(spObj, spPlayMid, (jint)it->second.soundId, (jfloat)cmd.leftVol, (jfloat)cmd.rightVol, 1, 0, 1.0f);
+                            env->ExceptionClear();
+                        }
+                    }
+                }
+            }
+
+            if (!pendingComp.empty() && spObj && spPlayMid) {
+                for (size_t i = 0; i < pendingComp.size(); ) {
+                    if (nowMs >= pendingComp[i].readyMs) {
+                        env->CallIntMethod(spObj, spPlayMid, (jint)pendingComp[i].soundId, (jfloat)pendingComp[i].lVol, (jfloat)pendingComp[i].rVol, 1, 0, 1.0f);
+                        env->ExceptionClear();
+                        pendingComp.erase(pendingComp.begin() + i);
+                    } else {
+                        ++i;
+                    }
+                }
+            }
+
+            // Mix all active C++ voices into stereoOut
+            bool anyVoiceActive = false;
+            memset(mixAccum, 0, sizeof(mixAccum));
+            for (int v = 0; v < kMaxActiveVoices; ++v) {
+                SActiveMixVoice& voice = s_mixVoices[v];
+                if (!voice.active || !voice.pcm) continue;
+                anyVoiceActive = true;
+                const int16_t* src = voice.pcm->data();
+                uint32_t totalLen = (uint32_t)voice.pcm->size();
+                uint32_t curPos = voice.pos;
+                int32_t gL = (int32_t)(voice.gainL * 256.0f);
+                int32_t gR = (int32_t)(voice.gainR * 256.0f);
+
+                uint32_t count = std::min<uint32_t>(kMixChunkFrames, totalLen - curPos);
+                for (uint32_t f = 0; f < count; ++f) {
+                    int32_t s = src[curPos + f];
+                    mixAccum[f * 2 + 0] += (s * gL) >> 8;
+                    mixAccum[f * 2 + 1] += (s * gR) >> 8;
+                }
+                voice.pos = curPos + count;
+                if (voice.pos >= totalLen)
+                    voice.active = false;
+            }
+
+            if (anyVoiceActive && mixTrack && writeMid) {
+                for (int i = 0; i < kMixChunkFrames * 2; ++i) {
+                    int32_t v = mixAccum[i];
+                    // Soft-knee saturation prevents harsh clipping when many hits overlap
+                    if (v > 32767) v = 32767;
+                    else if (v < -32768) v = -32768;
+                    stereoOut[i] = (int16_t)v;
+                }
+                env->SetShortArrayRegion(mixJArray, 0, kMixChunkFrames * 2, stereoOut);
+                env->CallIntMethod(mixTrack, writeMid, mixJArray, 0, kMixChunkFrames * 2);
+                env->ExceptionClear();
+            } else {
+                usleep(8000);
+            }
+        }
+        return nullptr;
+    }
+} // anonymous namespace
 #endif
-}
 
 static void AndroidPlayAudioInternal(const char* c_szFileName, bool isLoopMusic, float volume, float pan) {
 #ifndef __APPLE__
     if (!g_pJavaVM) return;
 #endif
     if (!c_szFileName || !*c_szFileName) return;
-    FlushPendingAndroidSfx();
 
     if (volume <= 0.001f) {
         if (isLoopMusic) AndroidSetMusicVolume(0.0f);
@@ -5229,21 +5538,9 @@ static void AndroidPlayAudioInternal(const char* c_szFileName, bool isLoopMusic,
     if (pan < -1.0f) pan = -1.0f;
     else if (pan > 1.0f) pan = 1.0f;
 
-    DWORD nowMs = ELTimer_GetMSec();
-    if (!isLoopMusic) {
-        static DWORD s_lastFrameMs = 0;
-        static int s_soundsThisWindow = 0;
-        if (nowMs - s_lastFrameMs > 30) {
-            s_lastFrameMs = nowMs;
-            s_soundsThisWindow = 0;
-        }
-        if (++s_soundsThisWindow > 4) return;
-    }
-
-#ifndef __APPLE__
-    JNIEnv* env = nullptr;
-    if (g_pJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK || !env) return;
-#endif
+    // Equal-power 3D stereo panning (Left / Right ear balance)
+    float leftVol  = volume * (pan > 0.0f ? (1.0f - pan * 0.75f) : 1.0f);
+    float rightVol = volume * (pan < 0.0f ? (1.0f + pan * 0.75f) : 1.0f);
 
     const std::string baseDir = std::string(GetMobileBaseDir()) + "/";
     std::string origPath = c_szFileName;
@@ -5251,18 +5548,78 @@ static void AndroidPlayAudioInternal(const char* c_szFileName, bool isLoopMusic,
     std::string lowerPath = origPath;
     for (char& c : lowerPath) c = (char)tolower((unsigned char)c);
 
+#if !defined(__APPLE__)
+    if (!isLoopMusic) {
+        if (!s_bSfxThreadStarted) {
+            s_bSfxThreadStarted = true;
+            pthread_create(&s_sfxThread, nullptr, AndroidSfxMixerThreadProc, nullptr);
+            pthread_detach(s_sfxThread);
+        }
+
+        const std::vector<int16_t>* cachedPcm = nullptr;
+        std::string fallbackDisk;
+        bool foundInCache = false;
+
+        pthread_mutex_lock(&s_sfxMutex);
+        auto it = s_wavCache.find(lowerPath);
+        if (it != s_wavCache.end()) {
+            foundInCache = true;
+            if (it->second.valid) cachedPcm = &it->second.samples;
+            else if (it->second.isCompressedFallback) fallbackDisk = it->second.fallbackDiskPath;
+        }
+        pthread_mutex_unlock(&s_sfxMutex);
+
+        if (!foundInCache) {
+            SDecodedWavPcm decoded;
+            CMappedFile file;
+            LPCVOID pData = nullptr;
+            std::string dPath = "d:/ymir work/" + lowerPath;
+            if (CEterPackManager::Instance().Get(file, c_szFileName, &pData) ||
+                CEterPackManager::Instance().Get(file, lowerPath.c_str(), &pData) ||
+                CEterPackManager::Instance().Get(file, dPath.c_str(), &pData)) {
+                if (pData && file.Size() > 0 && file.Size() < (4 * 1024 * 1024)) {
+                    if (DecodeWavToMono44100((const uint8_t*)pData, file.Size(), decoded.samples)) {
+                        decoded.valid = true;
+                    } else {
+                        std::string flatRel = "temp/";
+                        for (char c : lowerPath) flatRel += (isalnum((unsigned char)c) || c == '.') ? c : '_';
+                        std::string flatAbs = baseDir + flatRel;
+                        if (access(flatAbs.c_str(), F_OK) != 0) {
+                            if (FILE* fp = fopen(flatAbs.c_str(), "wb")) {
+                                fwrite(pData, 1, file.Size(), fp);
+                                fclose(fp);
+                            }
+                        }
+                        decoded.isCompressedFallback = true;
+                        decoded.fallbackDiskPath = flatAbs;
+                    }
+                }
+            }
+            pthread_mutex_lock(&s_sfxMutex);
+            auto ins = s_wavCache.emplace(lowerPath, std::move(decoded)).first;
+            if (ins->second.valid) cachedPcm = &ins->second.samples;
+            else if (ins->second.isCompressedFallback) fallbackDisk = ins->second.fallbackDiskPath;
+            pthread_mutex_unlock(&s_sfxMutex);
+        }
+
+        if (cachedPcm || !fallbackDisk.empty()) {
+            pthread_mutex_lock(&s_sfxMutex);
+            if (s_sfxCmdQueue.size() < 64) {
+                s_sfxCmdQueue.push_back({ lowerPath, fallbackDisk, cachedPcm, leftVol, rightVol });
+            }
+            pthread_mutex_unlock(&s_sfxMutex);
+        }
+        return;
+    }
+#endif
+
+    // Background Music (or iOS fallback) path
     static std::unordered_map<std::string, std::string> s_resolvedPaths;
     std::string diskPath;
     auto itPath = s_resolvedPaths.find(lowerPath);
     if (itPath != s_resolvedPaths.end()) {
         diskPath = itPath->second;
     } else {
-        // Throttle new audio file disk extractions to at most 1 per 60ms to prevent I/O lag spikes
-        static DWORD s_lastExtractMs = 0;
-        if (!isLoopMusic && (nowMs - s_lastExtractMs < 60))
-            return;
-        s_lastExtractMs = nowMs;
-
         std::string flatRel = "temp/";
         for (char c : lowerPath) flatRel += (isalnum((unsigned char)c) || c == '.') ? c : '_';
         std::string flatAbs = baseDir + flatRel;
@@ -5280,7 +5637,7 @@ static void AndroidPlayAudioInternal(const char* c_szFileName, bool isLoopMusic,
             if (CEterPackManager::Instance().Get(file, c_szFileName, &pData) ||
                 CEterPackManager::Instance().Get(file, lowerPath.c_str(), &pData) ||
                 CEterPackManager::Instance().Get(file, dPath.c_str(), &pData)) {
-                if (pData && file.Size() > 0 && file.Size() < (isLoopMusic ? (48 * 1024 * 1024) : (512 * 1024))) {
+                if (pData && file.Size() > 0 && file.Size() < (48 * 1024 * 1024)) {
                     if (FILE* fp = fopen(flatAbs.c_str(), "wb")) {
                         fwrite(pData, 1, file.Size(), fp);
                         fclose(fp);
@@ -5289,178 +5646,94 @@ static void AndroidPlayAudioInternal(const char* c_szFileName, bool isLoopMusic,
                 }
             }
         }
-        // Always cache even when empty ("") so missing sound files never search EterPack again!
         s_resolvedPaths[lowerPath] = diskPath;
     }
     if (diskPath.empty()) return;
-
-    // Equal-power 3D stereo panning (Left / Right ear balance)
-    float leftVol  = volume * (pan > 0.0f ? (1.0f - pan * 0.75f) : 1.0f);
-    float rightVol = volume * (pan < 0.0f ? (1.0f + pan * 0.75f) : 1.0f);
-    static uint32_t s_pitchJitterCounter = 0;
 
 #ifdef __APPLE__
     if (isLoopMusic) {
         IOSPlayAudioFile(diskPath.c_str(), true, volume);
     } else {
-        float rate = 1.0f + ((int)((++s_pitchJitterCounter) % 5) - 2) * 0.012f;
-        IOSPlayAudioFile3D(diskPath.c_str(), volume, pan, rate);
+        IOSPlayAudioFile3D(diskPath.c_str(), volume, pan, 1.0f);
     }
     return;
 #else
-    if (isLoopMusic) {
-        if (s_bgmPlayer && s_curBgmPath == diskPath) {
-            AndroidSetMusicVolume(volume);
-            return;
-        }
-        if (s_bgmPlayer) {
-            AndroidStopMusic();
-        }
-        jclass mpCls = env->FindClass("android/media/MediaPlayer");
-        jclass fisCls = env->FindClass("java/io/FileInputStream");
-        if (!mpCls || !fisCls) {
-            env->ExceptionClear();
-            if (mpCls) env->DeleteLocalRef(mpCls);
-            if (fisCls) env->DeleteLocalRef(fisCls);
-            return;
-        }
-        jobject mp = env->NewObject(mpCls, env->GetMethodID(mpCls, "<init>", "()V"));
-        if (env->ExceptionCheck() || !mp) {
-            env->ExceptionClear();
-            env->DeleteLocalRef(fisCls);
-            env->DeleteLocalRef(mpCls);
-            return;
-        }
+    JNIEnv* env = nullptr;
+    if (g_pJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK || !env) return;
 
-        // Open FileInputStream in our app process and pass FileDescriptor so Android 10+ Scoped Storage never blocks MediaPlayer!
-        jstring jpath = env->NewStringUTF(diskPath.c_str());
-        jmethodID fisCtor = env->GetMethodID(fisCls, "<init>", "(Ljava/lang/String;)V");
-        jmethodID getFdMid = env->GetMethodID(fisCls, "getFD", "()Ljava/io/FileDescriptor;");
-        jmethodID closeFisMid = env->GetMethodID(fisCls, "close", "()V");
-        jobject fisObj = fisCtor ? env->NewObject(fisCls, fisCtor, jpath) : nullptr;
-        bool err = env->ExceptionCheck() || !fisObj;
+    if (s_bgmPlayer && s_curBgmPath == diskPath) {
+        AndroidSetMusicVolume(volume);
+        return;
+    }
+    if (s_bgmPlayer) {
+        AndroidStopMusic();
+    }
+    jclass mpCls = env->FindClass("android/media/MediaPlayer");
+    jclass fisCls = env->FindClass("java/io/FileInputStream");
+    if (!mpCls || !fisCls) {
         env->ExceptionClear();
-
-        if (!err && fisObj) {
-            jobject fdObj = env->CallObjectMethod(fisObj, getFdMid);
-            err = env->ExceptionCheck() || !fdObj;
-            env->ExceptionClear();
-            if (!err && fdObj) {
-                jmethodID setDsFdMid = env->GetMethodID(mpCls, "setDataSource", "(Ljava/io/FileDescriptor;)V");
-                env->CallVoidMethod(mp, setDsFdMid, fdObj);
-                err = env->ExceptionCheck();
-                env->ExceptionClear();
-                env->DeleteLocalRef(fdObj);
-            }
-            env->CallVoidMethod(fisObj, closeFisMid);
-            env->ExceptionClear();
-            env->DeleteLocalRef(fisObj);
-        } else {
-            env->CallVoidMethod(mp, env->GetMethodID(mpCls, "setDataSource", "(Ljava/lang/String;)V"), jpath);
-            err = env->ExceptionCheck();
-            env->ExceptionClear();
-        }
-        env->DeleteLocalRef(jpath);
-
-        if (!err) {
-            env->CallVoidMethod(mp, env->GetMethodID(mpCls, "prepare", "()V"));
-            err = env->ExceptionCheck();
-            env->ExceptionClear();
-        }
-        if (!err) {
-            env->CallVoidMethod(mp, env->GetMethodID(mpCls, "setLooping", "(Z)V"), (jboolean)JNI_TRUE);
-            env->ExceptionClear();
-            env->CallVoidMethod(mp, env->GetMethodID(mpCls, "setVolume", "(FF)V"), (jfloat)volume, (jfloat)volume);
-            env->ExceptionClear();
-            env->CallVoidMethod(mp, env->GetMethodID(mpCls, "start", "()V"));
-            env->ExceptionClear();
-            s_bgmPlayer = env->NewGlobalRef(mp);
-            s_curBgmPath = diskPath;
-        } else {
-            env->CallVoidMethod(mp, env->GetMethodID(mpCls, "release", "()V"));
-            env->ExceptionClear();
-        }
-        env->DeleteLocalRef(mp);
+        if (mpCls) env->DeleteLocalRef(mpCls);
+        if (fisCls) env->DeleteLocalRef(fisCls);
+        return;
+    }
+    jobject mp = env->NewObject(mpCls, env->GetMethodID(mpCls, "<init>", "()V"));
+    if (env->ExceptionCheck() || !mp) {
+        env->ExceptionClear();
         env->DeleteLocalRef(fisCls);
         env->DeleteLocalRef(mpCls);
-    } else {
-        struct SSfxEntry { int soundId; DWORD loadTimeMs; DWORD lastPlayMs; int overlapCount; };
-        static std::unordered_map<std::string, SSfxEntry> s_sfxMap;
-        static jmethodID s_loadMid = nullptr;
-        static jmethodID s_unloadMid = nullptr;
+        return;
+    }
 
-        if (!s_soundPool) {
-            jclass spCls = env->FindClass("android/media/SoundPool");
-            if (!spCls) { env->ExceptionClear(); return; }
-            jmethodID spCtor = env->GetMethodID(spCls, "<init>", "(III)V");
-            // 24 concurrent channels so multi-hit sword swings, skills, and monster sounds layer smoothly
-            jobject sp = env->NewObject(spCls, spCtor, 24, 3, 0);
-            if (env->ExceptionCheck() || !sp) {
-                env->ExceptionClear();
-                env->DeleteLocalRef(spCls);
-                return;
-            }
-            s_soundPool = env->NewGlobalRef(sp);
-            s_loadMid = env->GetMethodID(spCls, "load", "(Ljava/lang/String;I)I");
-            s_spPlayMid = env->GetMethodID(spCls, "play", "(IFFIIF)I");
-            s_unloadMid = env->GetMethodID(spCls, "unload", "(I)Z");
-            env->DeleteLocalRef(sp);
-            env->DeleteLocalRef(spCls);
-        }
+    jstring jpath = env->NewStringUTF(diskPath.c_str());
+    jmethodID fisCtor = env->GetMethodID(fisCls, "<init>", "(Ljava/lang/String;)V");
+    jmethodID getFdMid = env->GetMethodID(fisCls, "getFD", "()Ljava/io/FileDescriptor;");
+    jmethodID closeFisMid = env->GetMethodID(fisCls, "close", "()V");
+    jobject fisObj = fisCtor ? env->NewObject(fisCls, fisCtor, jpath) : nullptr;
+    bool err = env->ExceptionCheck() || !fisObj;
+    env->ExceptionClear();
 
-        auto it = s_sfxMap.find(diskPath);
-        if (it == s_sfxMap.end()) {
-            // LRU eviction of oldest single sound when cache reaches 80 entries (never wipe all sounds at once)
-            if (s_sfxMap.size() >= 80 && s_unloadMid) {
-                auto oldestIt = s_sfxMap.begin();
-                for (auto curIt = s_sfxMap.begin(); curIt != s_sfxMap.end(); ++curIt) {
-                    if (curIt->second.lastPlayMs < oldestIt->second.lastPlayMs)
-                        oldestIt = curIt;
-                }
-                if (oldestIt->second.soundId > 0) {
-                    env->CallBooleanMethod(s_soundPool, s_unloadMid, (jint)oldestIt->second.soundId);
-                    env->ExceptionClear();
-                }
-                s_sfxMap.erase(oldestIt);
-            }
-            jstring jpath = env->NewStringUTF(diskPath.c_str());
-            int id = (int)env->CallIntMethod(s_soundPool, s_loadMid, jpath, 1);
+    if (!err && fisObj) {
+        jobject fdObj = env->CallObjectMethod(fisObj, getFdMid);
+        err = env->ExceptionCheck() || !fdObj;
+        env->ExceptionClear();
+        if (!err && fdObj) {
+            jmethodID setDsFdMid = env->GetMethodID(mpCls, "setDataSource", "(Ljava/io/FileDescriptor;)V");
+            env->CallVoidMethod(mp, setDsFdMid, fdObj);
+            err = env->ExceptionCheck();
             env->ExceptionClear();
-            env->DeleteLocalRef(jpath);
-            s_sfxMap[diskPath] = { id, nowMs, nowMs, 0 };
-            if (id > 0 && s_pendingSfxPlays.size() < 16) {
-                s_pendingSfxPlays.push_back({ id, leftVol, rightVol, 1.0f, nowMs + 55 });
-            }
-            return;
+            env->DeleteLocalRef(fdObj);
         }
-
-        SSfxEntry& entry = it->second;
-        if (entry.soundId <= 0) return;
-
-        DWORD dtMs = nowMs - entry.lastPlayMs;
-        // Only suppress exact duplicate triggers within < 10ms; allow colliding hits (10ms..70ms) to layer naturally!
-        if (dtMs < 10) return;
-
-        float rate = 1.0f;
-        if (dtMs < 85) {
-            entry.overlapCount = (entry.overlapCount + 1) & 3;
-            static const float s_overlapRates[4] = { 0.975f, 1.022f, 0.988f, 1.012f };
-            rate = s_overlapRates[entry.overlapCount];
-        } else {
-            entry.overlapCount = 0;
-        }
-        entry.lastPlayMs = nowMs;
-
-        if (nowMs - entry.loadTimeMs < 55) {
-            if (s_pendingSfxPlays.size() < 16) {
-                s_pendingSfxPlays.push_back({ entry.soundId, leftVol, rightVol, rate, entry.loadTimeMs + 55 });
-            }
-            return;
-        }
-
-        env->CallIntMethod(s_soundPool, s_spPlayMid, (jint)entry.soundId, (jfloat)leftVol, (jfloat)rightVol, 1, 0, (jfloat)rate);
+        env->CallVoidMethod(fisObj, closeFisMid);
+        env->ExceptionClear();
+        env->DeleteLocalRef(fisObj);
+    } else {
+        env->CallVoidMethod(mp, env->GetMethodID(mpCls, "setDataSource", "(Ljava/lang/String;)V"), jpath);
+        err = env->ExceptionCheck();
         env->ExceptionClear();
     }
+    env->DeleteLocalRef(jpath);
+
+    if (!err) {
+        env->CallVoidMethod(mp, env->GetMethodID(mpCls, "prepare", "()V"));
+        err = env->ExceptionCheck();
+        env->ExceptionClear();
+    }
+    if (!err) {
+        env->CallVoidMethod(mp, env->GetMethodID(mpCls, "setLooping", "(Z)V"), (jboolean)JNI_TRUE);
+        env->ExceptionClear();
+        env->CallVoidMethod(mp, env->GetMethodID(mpCls, "setVolume", "(FF)V"), (jfloat)volume, (jfloat)volume);
+        env->ExceptionClear();
+        env->CallVoidMethod(mp, env->GetMethodID(mpCls, "start", "()V"));
+        env->ExceptionClear();
+        s_bgmPlayer = env->NewGlobalRef(mp);
+        s_curBgmPath = diskPath;
+    } else {
+        env->CallVoidMethod(mp, env->GetMethodID(mpCls, "release", "()V"));
+        env->ExceptionClear();
+    }
+    env->DeleteLocalRef(mp);
+    env->DeleteLocalRef(fisCls);
+    env->DeleteLocalRef(mpCls);
 #endif
 }
 
