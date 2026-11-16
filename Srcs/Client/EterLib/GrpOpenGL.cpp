@@ -689,7 +689,7 @@ namespace {
         "    float origLight = clamp(dot(N, L), 0.0, 1.0);\n" \
         "    float lightIntensity = 0.3 + 0.2 * origLight;\n" \
         "    vec3 lightResult = uPsAmbient + (uPsMatDiffuse * uPsLightDiffuse) * lightIntensity * 0.6;\n" \
-        "    float finalShadow = ComputeCascadeShadow(uTexture1, uHasTexture1, uTexture2, uHasTexture2, 0.00035, 0.00005, uPsShadowOpacity);\n" \
+        "    float finalShadow = ComputeCascadeShadow(uTexture1, uHasTexture1, uTexture2, uHasTexture2, 0.00005, 0.00004, uPsShadowOpacity);\n" \
         "    lightResult *= (1.0 - finalShadow);\n" \
         "    vec4 outCol = vec4(lightResult, 1.0);\n" \
         "    if (uFogRange.y > uFogRange.x) {\n" \
@@ -1235,7 +1235,8 @@ namespace {
     void BindESVertexAttributes(DWORD dwFVF, const BYTE* basePtr, UINT stride) {
         DWORD fvf = ResolveFVF(dwFVF, stride);
 
-        if (s_lastAttrVbo == s_curArrayBuffer &&
+        if (s_curArrayBuffer != 0 &&
+            s_lastAttrVbo == s_curArrayBuffer &&
             s_lastAttrFvf == fvf &&
             s_lastAttrStride == stride &&
             s_lastAttrBasePtr == basePtr) {
@@ -1300,10 +1301,14 @@ namespace {
         if (uv1Ptr)  glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, (GLsizei)stride, uv1Ptr);
         if (normPtr) glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, (GLsizei)stride, normPtr);
 
-        s_lastAttrVbo = s_curArrayBuffer;
-        s_lastAttrFvf = fvf;
-        s_lastAttrStride = stride;
-        s_lastAttrBasePtr = basePtr;
+        if (s_curArrayBuffer != 0) {
+            s_lastAttrVbo = s_curArrayBuffer;
+            s_lastAttrFvf = fvf;
+            s_lastAttrStride = stride;
+            s_lastAttrBasePtr = basePtr;
+        } else {
+            s_lastAttrVbo = 0;
+        }
     }
 
     inline void UploadVec2IfChanged(GLint loc, float* cache, const float* val) {

@@ -22,9 +22,7 @@ void CActorInstance::INSTANCEBASE_Deform()
 {
 	if (!isShow())
 	{
-#ifndef __ANDROID__
 		UpdateAttachingInstances();
-#endif
 		return;
 	}
 	Deform();

@@ -215,12 +215,9 @@ void CActorInstance::OnRender()
 		BeginDiffuseRender();
 		RenderWithOneTexture();
 		EndDiffuseRender();
-		if (HaveBlendThing())
-		{
-			BeginOpacityRender();
-			BlendRenderWithOneTexture();
-			EndOpacityRender();
-		}
+		BeginOpacityRender();
+		BlendRenderWithOneTexture();
+		EndOpacityRender();
 		break;
 	case RENDER_MODE_BLEND:
 		if (m_fAlphaValue == 1.0f)
@@ -228,12 +225,9 @@ void CActorInstance::OnRender()
 			BeginDiffuseRender();
 			RenderWithOneTexture();
 			EndDiffuseRender();
-			if (HaveBlendThing())
-			{
-				BeginOpacityRender();
-				BlendRenderWithOneTexture();
-				EndOpacityRender();
-			}
+			BeginOpacityRender();
+			BlendRenderWithOneTexture();
+			EndOpacityRender();
 		}
 		else if (m_fAlphaValue > 0.0f)
 		{

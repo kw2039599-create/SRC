@@ -732,10 +732,10 @@ void CGraphicThingInstance::UpdateTransform(D3DXMATRIX * pMatrix, float fSeconds
 #include <unordered_map>
 #include "../SphereLib/Frustum.h"
 
-static inline bool IsAndroidActorInCameraFrustum(const CGraphicThingInstance* pkInst, float fPadRadius = 450.0f, bool bForDeform = false)
+static inline bool IsAndroidActorInCameraFrustum(const CGraphicThingInstance* pkInst, float fPadRadius = 550.0f, bool bForDeform = false)
 {
-	const D3DXVECTOR3& v3Pos = pkInst->GetPosition();
-	if (fabsf(v3Pos.x) < 250.0f && fabsf(v3Pos.y) < 250.0f)
+	const D3DXVECTOR3& v3PosCheck = pkInst->GetPosition();
+	if (fabsf(v3PosCheck.x) < 250.0f && fabsf(v3PosCheck.y) < 250.0f)
 		return true;
 
 	CCamera* pCam = CCameraManager::Instance().GetCurrentCamera();
@@ -744,13 +744,13 @@ static inline bool IsAndroidActorInCameraFrustum(const CGraphicThingInstance* pk
 
 	const D3DXVECTOR3& v3Eye = pCam->GetEye();
 	const D3DXVECTOR3& v3Target = pCam->GetTarget();
+	const D3DXVECTOR3& v3Pos = pkInst->GetPosition();
 
 	const float tdx = v3Pos.x - v3Target.x;
 	const float tdy = v3Pos.y - v3Target.y;
 	const float targetDistSq = tdx * tdx + tdy * tdy;
 
-	// Always keep the main player (at camera target) and shadow-casting actors (when shadows are enabled) active
-	const float safeTargetRadius = (bForDeform && Frustum::Instance().graphicsLevel > 0) ? 3000.0f : 120.0f;
+	const float safeTargetRadius = (bForDeform && Frustum::Instance().graphicsLevel > 0) ? 750.0f : 600.0f;
 	if (targetDistSq <= (safeTargetRadius * safeTargetRadius))
 		return true;
 
@@ -791,24 +791,12 @@ static inline bool IsAndroidActorInCameraFrustum(const CGraphicThingInstance* pk
 	if (zCam < -fPadRadius)
 		return false;
 
-	// Extract exact camera frustum tangents from the active projection matrix (no view distance cap)
-	float tanHalfX = 0.52f;
-	float tanHalfY = 0.30f;
-	if (IDirect3DDevice8* pDev = GetCurrentGLDevice())
-	{
-		if (pDev->m_matProj._11 > 0.1f && pDev->m_matProj._22 > 0.1f)
-		{
-			tanHalfX = (1.0f / pDev->m_matProj._11) + 0.04f;
-			tanHalfY = (1.0f / pDev->m_matProj._22) + 0.04f;
-		}
-	}
-
 	const float xCam = fabsf(vx * s_R.x + vy * s_R.y);
-	if (xCam > (zCam * tanHalfX + fPadRadius))
+	if (xCam > (zCam * 1.35f + fPadRadius))
 		return false;
 
 	const float yCam = fabsf(vx * s_U.x + vy * s_U.y + vz * s_U.z);
-	if (yCam > (zCam * tanHalfY + fPadRadius))
+	if (yCam > (zCam * 0.95f + fPadRadius))
 		return false;
 
 	return true;

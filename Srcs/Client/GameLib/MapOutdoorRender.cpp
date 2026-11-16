@@ -283,6 +283,7 @@ void CMapOutdoor::SetInverseViewAndDynamicShaodwMatrices()
 
 	m_matViewInverse = pCamera->GetInverseViewMatrix();
 
+#ifndef __ANDROID__
 	D3DXVECTOR3 v3Target = pCamera->GetTarget();
 
 	D3DXVECTOR3 v3LightEye(v3Target.x - 1.732f * 1250.0f,
@@ -292,6 +293,7 @@ void CMapOutdoor::SetInverseViewAndDynamicShaodwMatrices()
 	auto val = D3DXVECTOR3(0.0f, 0.0f, 1.0f);
 	D3DXMatrixLookAtRH(&m_matLightView, &v3LightEye, &v3Target, &val);
 	m_matDynamicShadow = m_matViewInverse * m_matLightView * m_matDynamicShadowScale;
+#endif
 }
 
 void CMapOutdoor::OnRender()

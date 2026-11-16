@@ -359,124 +359,6 @@ bool CParticleSystemInstance::OnUpdate(float fElapsedTime)
 
 namespace NParticleRenderer
 {
-#ifdef __ANDROID__
-	struct SAndroidParticleAccessor : public CParticleInstance
-	{
-		static inline DWORD GetColor(CParticleInstance* pInstance)
-		{
-			return (DWORD)static_cast<SAndroidParticleAccessor*>(pInstance)->m_dcColor;
-		}
-	};
-
-	struct SAndroidBatchedParticleVertex
-	{
-		D3DXVECTOR3 pos;
-		DWORD color;
-		float u, v;
-	};
-
-	class CAndroidParticleBatcher
-	{
-	public:
-		enum { MAX_BATCH_QUADS = 512 };
-
-		static inline void Reset()
-		{
-			s_quadCount = 0;
-			s_pBoundTex = GetCurrentGLDevice() ? GetCurrentGLDevice()->m_pBoundTextures[0] : NULL;
-		}
-
-		static inline void PushQuad(const TPTVertex* pVerts, DWORD dwColor)
-		{
-			IDirect3DDevice8* pDev = GetCurrentGLDevice();
-			LPDIRECT3DBaseTexture8 pCurTex = pDev ? pDev->m_pBoundTextures[0] : NULL;
-			if (s_quadCount > 0 && pCurTex != s_pBoundTex)
-			{
-				FlushWithTexture(s_pBoundTex, pCurTex);
-			}
-			s_pBoundTex = pCurTex;
-
-			if (s_quadCount >= MAX_BATCH_QUADS)
-			{
-				Flush();
-			}
-
-			SAndroidBatchedParticleVertex* dst = &s_verts[s_quadCount * 4];
-			dst[0].pos = pVerts[0].position; dst[0].color = dwColor; dst[0].u = pVerts[0].texCoord.x; dst[0].v = pVerts[0].texCoord.y;
-			dst[1].pos = pVerts[1].position; dst[1].color = dwColor; dst[1].u = pVerts[1].texCoord.x; dst[1].v = pVerts[1].texCoord.y;
-			dst[2].pos = pVerts[2].position; dst[2].color = dwColor; dst[2].u = pVerts[2].texCoord.x; dst[2].v = pVerts[2].texCoord.y;
-			dst[3].pos = pVerts[3].position; dst[3].color = dwColor; dst[3].u = pVerts[3].texCoord.x; dst[3].v = pVerts[3].texCoord.y;
-			++s_quadCount;
-		}
-
-		static inline void Flush()
-		{
-			if (s_quadCount == 0)
-				return;
-
-			EnsureIndicesInitialized();
-			const UINT numVerts = s_quadCount * 4;
-			const UINT numTris  = s_quadCount * 2;
-			s_quadCount = 0;
-
-			STATEMANAGER.DrawIndexedPrimitiveUP(
-				D3DPT_TRIANGLELIST,
-				0,
-				numVerts,
-				numTris,
-				s_indices,
-				D3DFMT_INDEX16,
-				s_verts,
-				sizeof(SAndroidBatchedParticleVertex));
-		}
-
-	private:
-		static inline void FlushWithTexture(LPDIRECT3DBaseTexture8 pBatchTex, LPDIRECT3DBaseTexture8 pRestoreTex)
-		{
-			if (IDirect3DDevice8* pDev = GetCurrentGLDevice())
-			{
-				pDev->SetTexture(0, pBatchTex);
-				Flush();
-				pDev->SetTexture(0, pRestoreTex);
-			}
-			else
-			{
-				Flush();
-			}
-		}
-
-		static inline void EnsureIndicesInitialized()
-		{
-			if (s_bIndicesInit)
-				return;
-			s_bIndicesInit = true;
-			for (UINT i = 0; i < MAX_BATCH_QUADS; ++i)
-			{
-				const WORD base = (WORD)(i * 4);
-				// Matches D3DPT_TRIANGLESTRIP quad winding (0,1,2) and (2,1,3) with CULL_NONE
-				s_indices[i * 6 + 0] = base + 0;
-				s_indices[i * 6 + 1] = base + 1;
-				s_indices[i * 6 + 2] = base + 2;
-				s_indices[i * 6 + 3] = base + 2;
-				s_indices[i * 6 + 4] = base + 1;
-				s_indices[i * 6 + 5] = base + 3;
-			}
-		}
-
-		static SAndroidBatchedParticleVertex s_verts[MAX_BATCH_QUADS * 4];
-		static WORD s_indices[MAX_BATCH_QUADS * 6];
-		static UINT s_quadCount;
-		static LPDIRECT3DBaseTexture8 s_pBoundTex;
-		static bool s_bIndicesInit;
-	};
-
-	SAndroidBatchedParticleVertex CAndroidParticleBatcher::s_verts[MAX_BATCH_QUADS * 4];
-	WORD CAndroidParticleBatcher::s_indices[MAX_BATCH_QUADS * 6];
-	UINT CAndroidParticleBatcher::s_quadCount = 0;
-	LPDIRECT3DBaseTexture8 CAndroidParticleBatcher::s_pBoundTex = NULL;
-	bool CAndroidParticleBatcher::s_bIndicesInit = false;
-#endif
-
 	struct TwoSideRenderer
 	{
 		const D3DXMATRIX * pmat;
@@ -488,18 +370,10 @@ namespace NParticleRenderer
 		inline void operator () (CParticleInstance * pInstance)
 		{
 			pInstance->Transform(pmat,D3DXToRadian(-30.0f));
-#ifdef __ANDROID__
-			CAndroidParticleBatcher::PushQuad(pInstance->GetParticleMeshPointer(), SAndroidParticleAccessor::GetColor(pInstance));
-#else
 			STATEMANAGER.DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, pInstance->GetParticleMeshPointer(), sizeof(TPTVertex));
-#endif
 
 			pInstance->Transform(pmat,D3DXToRadian(+30.0f));
-#ifdef __ANDROID__
-			CAndroidParticleBatcher::PushQuad(pInstance->GetParticleMeshPointer(), SAndroidParticleAccessor::GetColor(pInstance));
-#else
 			STATEMANAGER.DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, pInstance->GetParticleMeshPointer(), sizeof(TPTVertex));
-#endif
 		}
 	};
 
@@ -514,23 +388,11 @@ namespace NParticleRenderer
 		inline void operator () (CParticleInstance * pInstance)
 		{
 			pInstance->Transform(pmat);
-#ifdef __ANDROID__
-			CAndroidParticleBatcher::PushQuad(pInstance->GetParticleMeshPointer(), SAndroidParticleAccessor::GetColor(pInstance));
-#else
 			STATEMANAGER.DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, pInstance->GetParticleMeshPointer(), sizeof(TPTVertex));
-#endif
 			pInstance->Transform(pmat,D3DXToRadian(-60.0f));
-#ifdef __ANDROID__
-			CAndroidParticleBatcher::PushQuad(pInstance->GetParticleMeshPointer(), SAndroidParticleAccessor::GetColor(pInstance));
-#else
 			STATEMANAGER.DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, pInstance->GetParticleMeshPointer(), sizeof(TPTVertex));
-#endif
 			pInstance->Transform(pmat,D3DXToRadian(+60.0f));
-#ifdef __ANDROID__
-			CAndroidParticleBatcher::PushQuad(pInstance->GetParticleMeshPointer(), SAndroidParticleAccessor::GetColor(pInstance));
-#else
 			STATEMANAGER.DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, pInstance->GetParticleMeshPointer(), sizeof(TPTVertex));
-#endif
 		}
 	};
 
@@ -539,11 +401,7 @@ namespace NParticleRenderer
 		inline void operator () (CParticleInstance * pInstance)
 		{
 			pInstance->Transform();
-#ifdef __ANDROID__
-			CAndroidParticleBatcher::PushQuad(pInstance->GetParticleMeshPointer(), SAndroidParticleAccessor::GetColor(pInstance));
-#else
 			STATEMANAGER.DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, pInstance->GetParticleMeshPointer(), sizeof(TPTVertex));
-#endif
 		}
 	};
 	struct AttachRenderer
@@ -557,11 +415,7 @@ namespace NParticleRenderer
 		inline void operator () (CParticleInstance * pInstance)
 		{
 			pInstance->Transform(pmat);
-#ifdef __ANDROID__
-			CAndroidParticleBatcher::PushQuad(pInstance->GetParticleMeshPointer(), SAndroidParticleAccessor::GetColor(pInstance));
-#else
 			STATEMANAGER.DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, pInstance->GetParticleMeshPointer(), sizeof(TPTVertex));
-#endif
 		}
 	};
 }
@@ -578,19 +432,7 @@ void CParticleSystemInstance::OnRender()
 	if (m_pParticleProperty->m_byDestBlendType == 7)
 		m_pParticleProperty->m_byDestBlendType = 2;
 	STATEMANAGER.SetRenderState(D3DRS_DESTBLEND, m_pParticleProperty->m_byDestBlendType);
-
-#ifdef __ANDROID__
-	DWORD colorOp = m_pParticleProperty->m_byColorOperationType;
-	if (colorOp == D3DTOP_BLENDFACTORALPHA)
-		colorOp = D3DTOP_BLENDDIFFUSEALPHA;
-	STATEMANAGER.SetTextureStageState(0, D3DTSS_COLOROP, colorOp);
-	STATEMANAGER.SaveTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
-	STATEMANAGER.SaveTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
-	STATEMANAGER.SetVertexShader(D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1);
-	NParticleRenderer::CAndroidParticleBatcher::Reset();
-#else
 	STATEMANAGER.SetTextureStageState(0, D3DTSS_COLOROP, m_pParticleProperty->m_byColorOperationType);
-#endif
 
 	if (m_pParticleProperty->m_byBillboardType < BILLBOARD_TYPE_2FACE)
 	{
@@ -625,13 +467,6 @@ void CParticleSystemInstance::OnRender()
 			ForEachParticleRendering(NParticleRenderer::ThreeSideRenderer(mc_pmatLocal));
 		}
 	}
-
-#ifdef __ANDROID__
-	NParticleRenderer::CAndroidParticleBatcher::Flush();
-	STATEMANAGER.RestoreTextureStageState(0, D3DTSS_COLORARG1);
-	STATEMANAGER.RestoreTextureStageState(0, D3DTSS_ALPHAARG1);
-	STATEMANAGER.SetVertexShader(D3DFVF_XYZ | D3DFVF_TEX1);
-#endif
 }
 
 void CParticleSystemInstance::OnSetDataPointer(CEffectElementBase * pElement)

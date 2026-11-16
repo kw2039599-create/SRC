@@ -19,8 +19,8 @@ static inline bool IsAndroidEffectInCameraFrustum(const D3DXMATRIX& rMatGlobal, 
 	const float py = rMatGlobal._42 + v3SphereOffset.y;
 	const float pz = rMatGlobal._43 + v3SphereOffset.z;
 
-	// Never cull unpositioned effects at the origin
-	if (fabsf(px) < 1.0f && fabsf(py) < 1.0f && fabsf(pz) < 1.0f)
+	// Never cull effects at the origin or on the introSelect / introCreate character pedestal (±70, ±70)
+	if (fabsf(px) < 350.0f && fabsf(py) < 350.0f)
 		return true;
 
 	const D3DXVECTOR3& v3Eye = pCam->GetEye();
@@ -55,12 +55,12 @@ static inline bool IsAndroidEffectInCameraFrustum(const D3DXMATRIX& rMatGlobal, 
 			s_R.x * s_F.y - s_R.y * s_F.x);
 	}
 
-	const float pad = ((fSphereRadius > 220.0f) ? fSphereRadius : 220.0f) + fExtraPad;
+	const float pad = ((fSphereRadius > 260.0f) ? fSphereRadius : 260.0f) + fExtraPad;
 
-	// Always keep effects on the main player (camera target) active
+	// Always keep effects near the camera target (main player) active
 	const float tdx = px - v3Target.x;
 	const float tdy = py - v3Target.y;
-	if ((tdx * tdx + tdy * tdy) <= (120.0f * 120.0f))
+	if ((tdx * tdx + tdy * tdy) <= (550.0f * 550.0f))
 		return true;
 
 	const float vx = px - v3Eye.x;
@@ -71,23 +71,12 @@ static inline bool IsAndroidEffectInCameraFrustum(const D3DXMATRIX& rMatGlobal, 
 	if (zCam < -pad)
 		return false;
 
-	float tanHalfX = 0.52f;
-	float tanHalfY = 0.30f;
-	if (IDirect3DDevice8* pDev = GetCurrentGLDevice())
-	{
-		if (pDev->m_matProj._11 > 0.1f && pDev->m_matProj._22 > 0.1f)
-		{
-			tanHalfX = (1.0f / pDev->m_matProj._11) + 0.04f;
-			tanHalfY = (1.0f / pDev->m_matProj._22) + 0.04f;
-		}
-	}
-
 	const float xCam = fabsf(vx * s_R.x + vy * s_R.y);
-	if (xCam > (zCam * tanHalfX + pad))
+	if (xCam > (zCam * 1.35f + pad))
 		return false;
 
 	const float yCam = fabsf(vx * s_U.x + vy * s_U.y + vz * s_U.z);
-	if (yCam > (zCam * tanHalfY + pad))
+	if (yCam > (zCam * 0.95f + pad))
 		return false;
 
 	return true;
@@ -174,8 +163,6 @@ void CEffectInstance::OnUpdate()
 {
 #ifndef __ANDROID__
 	Transform();
-#else
-	UpdateSound();
 #endif
 
 #ifdef WORLD_EDITOR
@@ -184,13 +171,14 @@ void CEffectInstance::OnUpdate()
 	const float fCurTime = CTimer::Instance().GetCurrentSecond();
 	float fElapsedTime = fCurTime - m_fLastTime;
 #ifdef __ANDROID__
-	if (!m_ignoreFrustum && m_dwFrame > 2)
+	++m_dwFrame;
+	// Only throttle off-screen effects in the actual game world (coordinates > 1000), never on introSelect/introCreate pedestals (±70)
+	if (!m_ignoreFrustum && m_dwFrame > 2 &&
+		(fabsf(m_matGlobal._41) > 1000.0f || fabsf(m_matGlobal._42) > 1000.0f))
 	{
-		if (!IsAndroidEffectInCameraFrustum(m_matGlobal, m_v3BoundingSpherePosition, m_fBoundingSphereRadius, 150.0f))
+		if (!IsAndroidEffectInCameraFrustum(m_matGlobal, m_v3BoundingSpherePosition, m_fBoundingSphereRadius, 250.0f))
 		{
-			// Off-screen effect: only step simulation every 8th frame so one-shot effects still expire
-			// without burning CPU on 200 off-screen players' shining/aura particles every frame
-			if ((m_dwFrame & 7) != 0)
+			if ((m_dwFrame & 3) != 0)
 				return;
 		}
 	}
@@ -199,8 +187,8 @@ void CEffectInstance::OnUpdate()
 	if (fElapsedTime < 0.0f)
 		fElapsedTime = 0.0f;
 #ifdef __ANDROID__
-	else if (fElapsedTime > 0.10f)
-		fElapsedTime = 0.10f;
+	else if (fElapsedTime > 0.25f)
+		fElapsedTime = 0.25f;
 #else
 	else if (fElapsedTime > 0.05f)
 		fElapsedTime = 0.05f;

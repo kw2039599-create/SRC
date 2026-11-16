@@ -1916,14 +1916,13 @@ bool CMapOutdoor::BeginRenderCharacterShadowToTexture3()
 	float newTargetValue;
 	if (Frustum::Instance().shadowType == 2) {
 #ifdef __ANDROID__
-		newTargetValue = 16000.0f;
+		newTargetValue = 12000.0f;
 #else
 		newTargetValue = 35000.0f;
 #endif
 	}
 	else {
-		// Mode 4 uses 9000.0f (+20m radius); Mode 3 uses original 5000.0f
-		newTargetValue = (false) ? 9000.0f : 5000.0f;
+		newTargetValue = 10000.0f;
 	}
 	if (newTargetValue != targetValue) {
 		targetValue = newTargetValue;
@@ -2113,8 +2112,7 @@ bool CMapOutdoor::BeginRenderCharacterShadowToTexture4()
 		&v3Target,
 		&vv);
 
-	// Mode 4 uses 8000.0f; Mode 3 uses original 4000.0f
-	const float fShadowSpaceSize4 = (false) ? 8000.0f : 4000.0f;
+	const float fShadowSpaceSize4 = 6500.0f;
 	SnapShadowSpaceMatrix(matLightView, fShadowSpaceSize4);
 	D3DXMatrixOrthoRH(&matLightProj, fShadowSpaceSize4, fShadowSpaceSize4, 1.0f, 300000.0f);
 
@@ -2230,8 +2228,12 @@ void CMapOutdoor::CreateCharacterShadowTextureOriginal()
 
 	ReleaseCharacterShadowTextureOriginal();
 
+#ifdef __ANDROID__
+	m_wShadowMapSize = 2048;
+#else
 	if (IsLowTextureMemory())
 		SetShadowTextureSize(128);
+#endif
 
 	m_ShadowMapViewport.X = 1;
 	m_ShadowMapViewport.Y = 1;
@@ -2245,6 +2247,17 @@ void CMapOutdoor::CreateCharacterShadowTextureOriginal()
 		TraceError("CMapOutdoor Unable to create Character Shadow render target texture\n");
 		return;
 	}
+
+#ifdef __ANDROID__
+	if (m_lpCharacterShadowMapTextureOriginal && m_lpCharacterShadowMapTextureOriginal->glId)
+	{
+		glBindTexture(GL_TEXTURE_2D, m_lpCharacterShadowMapTextureOriginal->glId);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		m_lpCharacterShadowMapTextureOriginal->lastWrapS = GL_CLAMP_TO_EDGE;
+		m_lpCharacterShadowMapTextureOriginal->lastWrapT = GL_CLAMP_TO_EDGE;
+	}
+#endif
 
 	if (FAILED(m_lpCharacterShadowMapTextureOriginal->GetSurfaceLevel(0, &m_lpCharacterShadowMapRenderTargetSurfaceOriginal)))
 	{
@@ -2290,10 +2303,13 @@ bool CMapOutdoor::BeginRenderCharacterShadowToTextureOriginal()
 		&v3Target,
 		&val);
 
-	#ifdef __ANDROID__
-	SnapShadowSpaceMatrix(matLightView, 2550.0f);
-#endif
+#ifdef __ANDROID__
+	const float fOrigShadowSize = 4800.0f;
+	SnapShadowSpaceMatrix(matLightView, fOrigShadowSize);
+	D3DXMatrixOrthoRH(&matLightProj, fOrigShadowSize, fOrigShadowSize, 1.0f, 15000.0f);
+#else
 	D3DXMatrixOrthoRH(&matLightProj, 2550.0f, 2550.0f, 1.0f, 15000.0f);
+#endif
 
 	STATEMANAGER.SaveTransform(D3DTS_VIEW, &matLightView);
 	STATEMANAGER.SaveTransform(D3DTS_PROJECTION, &matLightProj);

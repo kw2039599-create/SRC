@@ -482,17 +482,43 @@ int CSoundManager::PlayAmbienceSound3D(float fx, float fy, float fz, const char 
 
 void CSoundManager::PlayCharacterSound3D(float fx, float fy, float fz, const char * c_szFileName, BOOL bCheckFrequency)
 {
-	if (0.0f == GetSoundVolume())
+	if (0.0f == GetSoundVolume() || !c_szFileName || !*c_szFileName)
 		return;
 
+#ifdef __ANDROID__
+	{
+		static float s_fLimitDistance = 4500.0f * 4500.0f;
+		float lx = m_fxPosition, ly = m_fyPosition;
+		if (fabsf(lx) < 1.0f && fabsf(ly) < 1.0f)
+		{
+			if (CCamera* pCam = CCameraManager::Instance().GetCurrentCamera())
+			{
+				lx = pCam->GetTarget().x;
+				ly = pCam->GetTarget().y;
+			}
+		}
+		float fdx = (fx - lx) * (fx - lx);
+		float fdy1 = fy - ly;
+		float fdy2 = fy + ly;
+		float fdyMin = (fabsf(fdy1) <= fabsf(fdy2)) ? fdy1 : fdy2;
+		if (fdx + fdyMin * fdyMin > s_fLimitDistance)
+			return;
+
+		float fCurSec = CTimer::Instance().GetCurrentSecond();
+		// Only block duplicate triggers on the exact same frame (8ms) when bCheckFrequency is FALSE
+		float fMinInterval = bCheckFrequency ? 0.025f : 0.008f;
+		auto itor = m_PlaySoundHistoryMap.find(c_szFileName);
+		if (m_PlaySoundHistoryMap.end() != itor && (fCurSec - itor->second) < fMinInterval)
+			return;
+
+		m_PlaySoundHistoryMap[c_szFileName] = fCurSec;
+	}
+#else
 	if (bCheckFrequency)
 	{
 		static float s_fLimitDistance = 5000*5000;
 		float fdx = (fx - m_fxPosition) * (fx - m_fxPosition);
-		float fdy1 = fy - m_fyPosition;
-		float fdy2 = fy + m_fyPosition;
-		float fdyMin = (fabsf(fdy1) <= fabsf(fdy2)) ? fdy1 : fdy2;
-		float fdy = fdyMin * fdyMin;
+		float fdy = (fy - m_fyPosition) * (fy - m_fyPosition);
 
 		if (fdx+fdy > s_fLimitDistance)
 			return;
@@ -501,14 +527,16 @@ void CSoundManager::PlayCharacterSound3D(float fx, float fy, float fz, const cha
 		if (m_PlaySoundHistoryMap.end() != itor)
 		{
 			float fTime = itor->second;
-			if (CTimer::Instance().GetCurrentSecond() - fTime < 0.018f)
+			if (CTimer::Instance().GetCurrentSecond() - fTime < 0.04f)
 			{
 				return;
 			}
 		}
 
-		m_PlaySoundHistoryMap[c_szFileName] = CTimer::Instance().GetCurrentSecond();
+		m_PlaySoundHistoryMap.erase(c_szFileName);
+		m_PlaySoundHistoryMap.emplace(c_szFileName, CTimer::Instance().GetCurrentSecond());
 	}
+#endif
 
 #ifdef __ANDROID__
 	PlayMobilePositional3DSound(fx, fy, fz, m_fxPosition, m_fyPosition, m_fzPosition, m_fSoundScale, GetSoundVolume(), c_szFileName);

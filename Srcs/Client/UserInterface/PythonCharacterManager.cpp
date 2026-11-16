@@ -540,9 +540,13 @@ void CPythonCharacterManager::Render()
 
 void CPythonCharacterManager::RenderShadowMainInstance()
 {
+#ifdef __ANDROID__
+	RenderShadowAllInstances();
+#else
 	CInstanceBase* pkInstMain=GetMainInstancePtr();
 	if (pkInstMain)
 		pkInstMain->RenderToShadowMap();
+#endif
 }
 
 void CPythonCharacterManager::RenderShadowAllInstances()
@@ -558,7 +562,7 @@ void CPythonCharacterManager::RenderShadowAllInstances()
 
 	TPixelPosition kPPosMain;
 	pkInstMain->NEW_GetPixelPosition(&kPPosMain);
-	constexpr float fShadowCutoffDistSq = 3000.0f * 3000.0f;
+	constexpr float fShadowCutoffDistSq = 6000.0f * 6000.0f;
 	const bool bKeepOffscreenShadows = (Frustum::Instance().graphicsLevel > 0);
 
 	for (TCharacterInstanceMap::iterator i = m_kAliveInstMap.begin(); i != m_kAliveInstMap.end(); ++i)
