@@ -123,12 +123,14 @@ void CEffectInstance::DestroySystem()
 
 void CEffectInstance::UpdateSound()
 {
+#ifndef __ANDROID__
 	if (m_pSoundInstanceVector)
 	{
 		CSoundManager& rkSndMgr=CSoundManager::Instance();
 		rkSndMgr.UpdateSoundInstance(m_matGlobal._41, m_matGlobal._42, m_matGlobal._43, m_dwFrame, m_pSoundInstanceVector);
 	}
 	++m_dwFrame;
+#endif
 }
 
 struct FEffectUpdator
@@ -171,6 +173,11 @@ void CEffectInstance::OnUpdate()
 	const float fCurTime = CTimer::Instance().GetCurrentSecond();
 	float fElapsedTime = fCurTime - m_fLastTime;
 #ifdef __ANDROID__
+	if (m_pSoundInstanceVector)
+	{
+		CSoundManager& rkSndMgr = CSoundManager::Instance();
+		rkSndMgr.UpdateSoundInstance(m_matGlobal._41, m_matGlobal._42, m_matGlobal._43, m_dwFrame, m_pSoundInstanceVector);
+	}
 	++m_dwFrame;
 	// Only throttle off-screen effects in the actual game world (coordinates > 1000), never on introSelect/introCreate pedestals (±70)
 	if (!m_ignoreFrustum && m_dwFrame > 2 &&

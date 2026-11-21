@@ -28,8 +28,10 @@ void CActorInstance::__MotionEventProcess(BOOL isPC)
 	{
 		DWORD dwNextFrame = DWORD(GetAttackingElapsedTime() * g_fGameFPS);
 #ifdef __ANDROID__
-		if (m_kCurMotNode.dwFrameCount > 0 && dwNextFrame > m_kCurMotNode.dwFrameCount)
-			dwNextFrame = m_kCurMotNode.dwFrameCount;
+		const float fSpd = (m_kCurMotNode.fSpeedRatio > 1.0f) ? m_kCurMotNode.fSpeedRatio : 1.0f;
+		const DWORD dwMaxUnscaledFrame = DWORD(m_kCurMotNode.dwFrameCount * fSpd) + 4;
+		if (m_kCurMotNode.dwFrameCount > 0 && dwNextFrame > dwMaxUnscaledFrame)
+			dwNextFrame = dwMaxUnscaledFrame;
 #endif
 		for (; m_kCurMotNode.dwcurFrame < dwNextFrame; ++m_kCurMotNode.dwcurFrame)
 		{
@@ -327,6 +329,7 @@ void CActorInstance::SetLoopMotion(DWORD dwMotion, float fBlendTime, float fSpee
 		return;
 	}
 
+	const WORD wFallbackMode = m_pkHorse ? CRaceMotionData::MODE_HORSE : CRaceMotionData::MODE_GENERAL;
 	MOTION_KEY dwMotionKey;
 #ifdef __ANDROID__
 	if (dwMotion == CRaceMotionData::NAME_INTRO_WAIT)
@@ -342,15 +345,15 @@ void CActorInstance::SetLoopMotion(DWORD dwMotion, float fBlendTime, float fSpee
 		#endif
 		{
 #ifdef __ANDROID__
-			if (!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, dwMotion, &dwMotionKey) &&
-				!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey))
+			if (!m_pkCurRaceData->GetMotionKey(wFallbackMode, dwMotion, &dwMotionKey) &&
+				!m_pkCurRaceData->GetMotionKey(wFallbackMode, CRaceMotionData::NAME_WAIT, &dwMotionKey))
 #endif
 			return;
 		}
 		#ifdef ENABLE_WALK_RUN_ANI_ALTERNATIVE
-		else if (m_pkCurRaceData->GetMotionKey(CRaceMotionData::NAME_RUN, dwMotion, &dwMotionKey))
+		else if (m_pkCurRaceData->GetMotionKey(m_wcurMotionMode, CRaceMotionData::NAME_RUN, &dwMotionKey))
 		{
-			m_wcurMotionMode = CRaceMotionData::NAME_RUN;
+			// Use NAME_RUN within the current motion mode without corrupting m_wcurMotionMode
 		}
 		else
 			return;
@@ -359,8 +362,8 @@ void CActorInstance::SetLoopMotion(DWORD dwMotion, float fBlendTime, float fSpee
 #ifdef __ANDROID__
 	if (GetMotionDuration(dwMotionKey) <= 0.001f)
 	{
-		if (!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, dwMotion, &dwMotionKey) || GetMotionDuration(dwMotionKey) <= 0.001f)
-			m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey);
+		if (!m_pkCurRaceData->GetMotionKey(wFallbackMode, dwMotion, &dwMotionKey) || GetMotionDuration(dwMotionKey) <= 0.001f)
+			m_pkCurRaceData->GetMotionKey(wFallbackMode, CRaceMotionData::NAME_WAIT, &dwMotionKey);
 	}
 #endif
 
@@ -400,25 +403,55 @@ bool CActorInstance::InterceptMotion(EMotionPushType iMotionType, WORD wMotion, 
 	if (!m_pkCurRaceData->GetMotionKey(m_wcurMotionMode, wMotion, &dwMotionKey))
 	{
 #ifdef __ANDROID__
-		if (wMotion == CRaceMotionData::NAME_SPAWN)
+		if (m_pkHorse)
 		{
-			iMotionType = MOTION_TYPE_LOOP;
-			wMotion = CRaceMotionData::NAME_WAIT;
+			if (!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_HORSE, wMotion, &dwMotionKey) ||
+				GetMotionDuration(dwMotionKey) <= 0.001f)
+				return false;
 		}
-		if (!m_pkCurRaceData->GetMotionKey(m_wcurMotionMode, wMotion, &dwMotionKey) &&
-			!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, wMotion, &dwMotionKey) &&
-			!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey))
-#endif
+		else
+		{
+			if (wMotion == CRaceMotionData::NAME_SPAWN)
+			{
+				iMotionType = MOTION_TYPE_LOOP;
+				wMotion = CRaceMotionData::NAME_WAIT;
+			}
+			if (wMotion != CRaceMotionData::NAME_WAIT &&
+				wMotion != CRaceMotionData::NAME_WALK &&
+				wMotion != CRaceMotionData::NAME_RUN)
+				return false;
+
+			if (!m_pkCurRaceData->GetMotionKey(m_wcurMotionMode, wMotion, &dwMotionKey) &&
+				!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, wMotion, &dwMotionKey) &&
+				!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey))
+				return false;
+		}
+#else
 		return false;
+#endif
 	}
 #ifdef __ANDROID__
 	if (GetMotionDuration(dwMotionKey) <= 0.001f)
 	{
-		if (!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, wMotion, &dwMotionKey) || GetMotionDuration(dwMotionKey) <= 0.001f)
+		if (m_pkHorse)
 		{
-			iMotionType = MOTION_TYPE_LOOP;
-			wMotion = CRaceMotionData::NAME_WAIT;
-			m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey);
+			if (!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_HORSE, wMotion, &dwMotionKey) ||
+				GetMotionDuration(dwMotionKey) <= 0.001f)
+				return false;
+		}
+		else
+		{
+			if (wMotion != CRaceMotionData::NAME_WAIT &&
+				wMotion != CRaceMotionData::NAME_WALK &&
+				wMotion != CRaceMotionData::NAME_RUN)
+				return false;
+
+			if (!m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, wMotion, &dwMotionKey) || GetMotionDuration(dwMotionKey) <= 0.001f)
+			{
+				iMotionType = MOTION_TYPE_LOOP;
+				wMotion = CRaceMotionData::NAME_WAIT;
+				m_pkCurRaceData->GetMotionKey(CRaceMotionData::MODE_GENERAL, CRaceMotionData::NAME_WAIT, &dwMotionKey);
+			}
 		}
 	}
 #endif

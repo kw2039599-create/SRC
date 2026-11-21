@@ -1082,6 +1082,22 @@ bool AndroidRenderCharGlyph(int fontSize, unsigned short ch, int* outW, int* out
     env->ExceptionClear();
 #endif
 
+    // One-time stem contrast sharpening before caching in s_glyphCache (0 per-frame cost)
+    const int totalGlyphPixels = 64 * h;
+    for (int i = 0; i < totalGlyphPixels; ++i) {
+        uint32_t px = outPixels64[i];
+        uint32_t a = (px >> 24) & 0xFFu;
+        if (a == 0) a = px & 0xFFu;
+        if (a > 0) {
+            if (a < 22u) {
+                outPixels64[i] = 0;
+            } else {
+                uint32_t sharpA = (a >= 165u) ? 255u : ((a - 22u) * 255u) / 143u;
+                outPixels64[i] = (sharpA << 24) | (sharpA << 16) | (sharpA << 8) | sharpA;
+            }
+        }
+    }
+
     if (s_glyphCache.size() > 2048) s_glyphCache.clear();
     SGlyphCacheEntry entry;
     entry.w = w;
@@ -1428,8 +1444,9 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
     env->GetJavaVM(&g_pJavaVM);
 #endif
 
-    if (width > 0 && height > 0 && (access("worldonline.cfg", F_OK) != 0 || access("cfg_defaults_v3.flag", F_OK) != 0)) {
-        if (FILE* f = fopen("cfg_defaults_v3.flag", "wb")) fclose(f);
+    if (width > 0 && height > 0 && (access("worldonline.cfg", F_OK) != 0 || access("cfg_defaults_v4.flag", F_OK) != 0)) {
+        unlink("worldonline.cfg");
+        if (FILE* f = fopen("cfg_defaults_v4.flag", "wb")) fclose(f);
         if (access("worldonline.cfg", F_OK) != 0) {
             if (FILE* cfgFp = fopen("worldonline.cfg", "wb")) {
                 fprintf(cfgFp,
@@ -1442,7 +1459,7 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
                     "OBJECT_CULLING\t\t\t\t1\n"
                     "VISIBILITY\t\t\t\t\t3\n"
                     "MUSIC_VOLUME\t\t\t\t0.100\n"
-                    "VOICE_VOLUME\t\t\t\t1\n"
+                    "VOICE_VOLUME\t\t\t\t5\n"
                     "GAMMA\t\t\t\t\t\t3\n"
                     "IS_SAVE_ID\t\t\t\t\t0\n"
                     "SAVE_ID\t\t\t\t\t0\n"
@@ -1629,8 +1646,92 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
         return;
     }
 	PyRun_SimpleString(
-        "import __builtin__, sys, imp, time as _t\n"
+        "import __builtin__, sys, imp, weakref, time as _t\n"
         "_t.clock = getattr(_t, 'clock', _t.time)\n"
+        "__builtin__._g_mobileScrollBars = []\n"
+        "__builtin__._g_activeMobileScrollBar = None\n"
+        "__builtin__._g_activeMobileScrollTrackH = 200.0\n"
+        "def _MobileHookScrollBars():\n"
+        "    try:\n"
+        "        import ui\n"
+        "        if getattr(ui, '_mobileScrollHooked', False): return\n"
+        "        ui._mobileScrollHooked = True\n"
+        "        for clsName in ('ScrollBar', 'ThinScrollBar', 'SmallThinScrollBar'):\n"
+        "            cls = getattr(ui, clsName, None)\n"
+        "            if cls is None: continue\n"
+        "            origInit = cls.__init__\n"
+        "            def _makeInit(oInit):\n"
+        "                def _wrappedInit(self, *a, **k):\n"
+        "                    oInit(self, *a, **k)\n"
+        "                    try: __builtin__._g_mobileScrollBars.append(weakref.ref(self))\n"
+        "                    except: pass\n"
+        "                return _wrappedInit\n"
+        "            cls.__init__ = _makeInit(origInit)\n"
+        "    except:\n"
+        "        pass\n"
+        "__builtin__._MobileHookScrollBars = _MobileHookScrollBars\n"
+        "def _MobileBeginTouchScroll(mx, my):\n"
+        "    __builtin__._MobileHookScrollBars()\n"
+        "    __builtin__._g_activeMobileScrollBar = None\n"
+        "    alive = []\n"
+        "    bestSb = None\n"
+        "    bestArea = 999999999\n"
+        "    for r in __builtin__._g_mobileScrollBars:\n"
+        "        sb = r()\n"
+        "        if sb is None: continue\n"
+        "        alive.append(r)\n"
+        "        try:\n"
+        "            if not sb.IsShow(): continue\n"
+        "            cur = sb\n"
+        "            vis = True\n"
+        "            topWnd = sb\n"
+        "            while cur is not None:\n"
+        "                if not cur.IsShow(): vis = False; break\n"
+        "                p = cur.GetParentProxy() if hasattr(cur, 'GetParentProxy') else None\n"
+        "                if p is None or p == cur: break\n"
+        "                topWnd = p\n"
+        "                cur = p\n"
+        "            if not vis: continue\n"
+        "            checkWnd = sb.GetParentProxy() if hasattr(sb, 'GetParentProxy') and sb.GetParentProxy() else topWnd\n"
+        "            for cand in (checkWnd, topWnd):\n"
+        "                if cand is None: continue\n"
+        "                gx, gy = cand.GetGlobalPosition()\n"
+        "                gw, gh = cand.GetWidth(), cand.GetHeight()\n"
+        "                if gw <= 40 or gh <= 40: continue\n"
+        "                if gx <= mx <= gx + gw and gy <= my <= gy + gh:\n"
+        "                    # Treat outer edges of movable top window as draggable window borders\n"
+        "                    tx, ty = topWnd.GetGlobalPosition()\n"
+        "                    tw, th = topWnd.GetWidth(), topWnd.GetHeight()\n"
+        "                    if tw < 900 and th < 680:\n"
+        "                        if (my <= ty + 36) or (my >= ty + th - 18) or (mx <= tx + 22) or (mx >= tx + tw - 22):\n"
+        "                            continue\n"
+        "                    area = gw * gh\n"
+        "                    if area < bestArea:\n"
+        "                        bestArea = area\n"
+        "                        bestSb = sb\n"
+        "        except:\n"
+        "            pass\n"
+        "    __builtin__._g_mobileScrollBars = alive\n"
+        "    if bestSb is not None:\n"
+        "        __builtin__._g_activeMobileScrollBar = bestSb\n"
+        "        try: __builtin__._g_activeMobileScrollTrackH = float(max(120, bestSb.GetHeight()))\n"
+        "        except: __builtin__._g_activeMobileScrollTrackH = 220.0\n"
+        "        return 1\n"
+        "    return 0\n"
+        "__builtin__._MobileBeginTouchScroll = _MobileBeginTouchScroll\n"
+        "def _MobileUpdateTouchScroll(stepDy):\n"
+        "    sb = __builtin__._g_activeMobileScrollBar\n"
+        "    if sb is None: return 0\n"
+        "    try:\n"
+        "        if not sb.IsShow(): return 0\n"
+        "        curPos = float(sb.GetPos())\n"
+        "        trackH = float(getattr(__builtin__, '_g_activeMobileScrollTrackH', 220.0))\n"
+        "        newPos = max(0.0, min(1.0, curPos - (float(stepDy) / (trackH * 0.85))))\n"
+        "        sb.SetPos(newPos)\n"
+        "        return 1\n"
+        "    except:\n"
+        "        return 0\n"
+        "__builtin__._MobileUpdateTouchScroll = _MobileUpdateTouchScroll\n"
         "_orig_init_builtin = imp.init_builtin\n"
         "def _fast_init_builtin(name):\n"
         "    m = sys.modules.get(name)\n"
@@ -2642,6 +2743,8 @@ struct SMobilePointerSlot {
     bool isDraggingCamera = false;
     bool isDraggingWindow = false;
     bool holdDragCancelled = false;
+    bool canTouchScroll = false;
+    bool isTouchScrolling = false;
     UI::CWindow* pHoldDragWnd = nullptr;
 };
 
@@ -2761,6 +2864,13 @@ static void ApplySmartTouchMagnetism(int inX, int inY, int* ioX, int* ioY, bool*
         if (outIsScrollThumb) *outIsScrollThumb = isThumb;
         UI::CWindowManager::Instance().RunMouseMove(*ioX, *ioY);
         return;
+    }
+    // Never snap away from a TitleBar or draggable window header onto nearby tab buttons
+    for (UI::CWindow* pWalk = pDirect; pWalk != nullptr; pWalk = pWalk->GetParent()) {
+        const char* wName = pWalk->GetName();
+        if (wName && (strstr(wName, "Title") != nullptr || strstr(wName, "title") != nullptr)) {
+            return;
+        }
     }
 
     UI::CWindow* pBestTarget = nullptr;
@@ -2897,21 +3007,72 @@ static DWORD Pick3DActorAtScreenPos(int sx, int sy) {
     return bestVID;
 }
 
+static bool IsMobileItemHoldOrAttachedActive() {
+    bool bActive = false;
+    PyObject* pMm = PyImport_AddModule("mouseModule");
+    PyObject* pMc = (pMm && PyObject_HasAttrString(pMm, "mouseController")) ? PyObject_GetAttrString(pMm, "mouseController") : nullptr;
+    PyObject* pIsAtt = (pMc && pMc != Py_None && PyObject_HasAttrString(pMc, "isAttached")) ? PyObject_CallMethod(pMc, "isAttached", NULL) : nullptr;
+    if (pIsAtt && PyObject_IsTrue(pIsAtt)) bActive = true;
+    Py_XDECREF(pIsAtt);
+    Py_XDECREF(pMc);
+
+    if (!bActive) {
+        PyObject* pCi = PyImport_AddModule("constInfo");
+        PyObject* pInv = (pCi && PyObject_HasAttrString(pCi, "wndInventory")) ? PyObject_GetAttrString(pCi, "wndInventory") : nullptr;
+        PyObject* pPend = (pInv && pInv != Py_None && PyObject_HasAttrString(pInv, "_mobilePendingHoldSlot")) ? PyObject_GetAttrString(pInv, "_mobilePendingHoldSlot") : nullptr;
+        if (pPend && pPend != Py_None && PyObject_IsTrue(pPend)) bActive = true;
+        Py_XDECREF(pPend);
+        Py_XDECREF(pInv);
+
+        if (!bActive && pCi && PyObject_HasAttrString(pCi, "GetInterfaceInstance")) {
+            PyObject* pItf = PyObject_CallMethod(pCi, "GetInterfaceInstance", NULL);
+            PyObject* pSpec = (pItf && pItf != Py_None && PyObject_HasAttrString(pItf, "wndSpecialStorage")) ? PyObject_GetAttrString(pItf, "wndSpecialStorage") : nullptr;
+            PyObject* pSpecPend = (pSpec && pSpec != Py_None && PyObject_HasAttrString(pSpec, "_mobilePendingHoldSlot")) ? PyObject_GetAttrString(pSpec, "_mobilePendingHoldSlot") : nullptr;
+            if (pSpecPend && pSpecPend != Py_None && PyObject_IsTrue(pSpecPend)) bActive = true;
+            Py_XDECREF(pSpecPend);
+            Py_XDECREF(pSpec);
+            Py_XDECREF(pItf);
+        }
+    }
+    if (PyErr_Occurred()) PyErr_Clear();
+    return bActive;
+}
+
+static bool CheckMobileTouchScrollableAt(int mx, int my) {
+    PyObject* pBuiltin = PyImport_AddModule("__builtin__");
+    if (!pBuiltin || !PyObject_HasAttrString(pBuiltin, "_MobileBeginTouchScroll")) {
+        if (PyErr_Occurred()) PyErr_Clear();
+        return false;
+    }
+    PyObject* pRes = PyObject_CallMethod(pBuiltin, "_MobileBeginTouchScroll", "(ii)", mx, my);
+    bool canScroll = (pRes && PyInt_Check(pRes) && PyInt_AsLong(pRes) != 0);
+    Py_XDECREF(pRes);
+    if (PyErr_Occurred()) PyErr_Clear();
+    return canScroll;
+}
+
+static void UpdateMobileTouchScroll(int stepDy) {
+    if (stepDy == 0) return;
+    PyObject* pBuiltin = PyImport_AddModule("__builtin__");
+    if (!pBuiltin || !PyObject_HasAttrString(pBuiltin, "_MobileUpdateTouchScroll")) {
+        if (PyErr_Occurred()) PyErr_Clear();
+        return;
+    }
+    PyObject* pRes = PyObject_CallMethod(pBuiltin, "_MobileUpdateTouchScroll", "(i)", stepDy);
+    Py_XDECREF(pRes);
+    if (PyErr_Occurred()) PyErr_Clear();
+}
+
 static UI::CWindow* FindHoldDraggableWindow(int x, int y) {
+    if (IsMobileItemHoldOrAttachedActive()) {
+        return nullptr;
+    }
     UI::CWindowManager::Instance().RunMouseMove(x, y);
     UI::CWindow* pPointWnd = SanitizeButtonChildPickFlags(UI::CWindowManager::Instance().GetPointWindow());
     if (!pPointWnd) return nullptr;
 
-    // Never hijack scrollbars, sliders, buttons, or editlines into a window drag!
     bool isThumb = false, isBtn = false;
     if (IsScrollOrSliderOrButtonWidget(pPointWnd, &isThumb, &isBtn)) {
-        return nullptr;
-    }
-
-    int testX = x, testY = y;
-    bool snapBtn = false, snapThumb = false;
-    ApplySmartTouchMagnetism(x, y, &testX, &testY, &snapBtn, &snapThumb);
-    if (snapThumb || snapBtn) {
         return nullptr;
     }
 
@@ -2991,186 +3152,29 @@ static volatile DWORD s_dwLastTouchDownMs = 0;
 static void EnsureAndroidLiveEditTextOnUiThread(JNIEnv* env) {
 #if !defined(__APPLE__)
     if (!env) return;
+    jclass mainActCls = env->FindClass("com/worldonline/client/MainActivity");
+    if (!mainActCls) { env->ExceptionClear(); return; }
 
     if (!s_pLiveEditText) {
-        jclass atCls = env->FindClass("android/app/ActivityThread");
-        if (!atCls) { env->ExceptionClear(); return; }
-        jmethodID curAtMid = env->GetStaticMethodID(atCls, "currentActivityThread", "()Landroid/app/ActivityThread;");
-        jobject atObj = curAtMid ? env->CallStaticObjectMethod(atCls, curAtMid) : nullptr;
+        jmethodID getEtMid = env->GetStaticMethodID(mainActCls, "getOrCreateLiveEditText", "()Landroid/widget/EditText;");
+        jobject etObj = getEtMid ? env->CallStaticObjectMethod(mainActCls, getEtMid) : nullptr;
         env->ExceptionClear();
-
-        jobject activityObj = nullptr;
-        if (atObj) {
-            jfieldID mActFid = env->GetFieldID(atCls, "mActivities", "Landroid/util/ArrayMap;");
-            env->ExceptionClear();
-            if (!mActFid) {
-                mActFid = env->GetFieldID(atCls, "mActivities", "Ljava/util/Map;");
-                env->ExceptionClear();
-            }
-            jobject mapObj = mActFid ? env->GetObjectField(atObj, mActFid) : nullptr;
-            env->ExceptionClear();
-            if (mapObj) {
-                jclass mapCls = env->FindClass("java/util/Map");
-                jmethodID valuesMid = env->GetMethodID(mapCls, "values", "()Ljava/util/Collection;");
-                jobject colObj = valuesMid ? env->CallObjectMethod(mapObj, valuesMid) : nullptr;
-                env->ExceptionClear();
-                if (colObj) {
-                    jclass colCls = env->FindClass("java/util/Collection");
-                    jmethodID toArrMid = env->GetMethodID(colCls, "toArray", "()[Ljava/lang/Object;");
-                    jobjectArray arr = toArrMid ? (jobjectArray)env->CallObjectMethod(colObj, toArrMid) : nullptr;
-                    env->ExceptionClear();
-                    if (arr) {
-                        jsize len = env->GetArrayLength(arr);
-                        for (jsize i = 0; i < len; ++i) {
-                            jobject rec = env->GetObjectArrayElement(arr, i);
-                            if (!rec) continue;
-                            jclass recCls = env->GetObjectClass(rec);
-                            jfieldID actFid = env->GetFieldID(recCls, "activity", "Landroid/app/Activity;");
-                            jfieldID pausedFid = env->GetFieldID(recCls, "paused", "Z");
-                            env->ExceptionClear();
-                            if (actFid) {
-                                jobject cand = env->GetObjectField(rec, actFid);
-                                jboolean isPaused = pausedFid ? env->GetBooleanField(rec, pausedFid) : JNI_FALSE;
-                                env->ExceptionClear();
-                                if (cand) {
-                                    if (!isPaused || !activityObj) {
-                                        if (activityObj) env->DeleteLocalRef(activityObj);
-                                        activityObj = cand;
-                                        if (!isPaused) {
-                                            env->DeleteLocalRef(recCls);
-                                            env->DeleteLocalRef(rec);
-                                            break;
-                                        }
-                                    } else {
-                                        env->DeleteLocalRef(cand);
-                                    }
-                                }
-                            }
-                            env->DeleteLocalRef(recCls);
-                            env->DeleteLocalRef(rec);
-                        }
-                        env->DeleteLocalRef(arr);
-                    }
-                    env->DeleteLocalRef(colCls);
-                    env->DeleteLocalRef(colObj);
-                }
-                env->DeleteLocalRef(mapCls);
-                env->DeleteLocalRef(mapObj);
-            }
-            env->DeleteLocalRef(atObj);
-        }
-        env->DeleteLocalRef(atCls);
-
-        if (activityObj) {
-            jclass actCls = env->FindClass("android/app/Activity");
-            jmethodID findMid = env->GetMethodID(actCls, "findViewById", "(I)Landroid/view/View;");
-            jobject contentView = findMid ? env->CallObjectMethod(activityObj, findMid, (jint)16908290) : nullptr; // android.R.id.content
-            env->ExceptionClear();
-
-            if (contentView) {
-                jclass etCls = env->FindClass("android/widget/EditText");
-                jmethodID etCtor = env->GetMethodID(etCls, "<init>", "(Landroid/content/Context;)V");
-                jobject etObj = etCtor ? env->NewObject(etCls, etCtor, activityObj) : nullptr;
-                env->ExceptionClear();
-
-                if (etObj) {
-                    // TYPE_CLASS_TEXT (1) | TYPE_TEXT_FLAG_NO_SUGGESTIONS (0x80000) | TYPE_TEXT_FLAG_MULTI_LINE (0x20000)
-                    // (Do NOT set 0x90 VISIBLE_PASSWORD so Android keyboards allow switching to Arabic)
-                    jmethodID setInputTypeMid = env->GetMethodID(etCls, "setInputType", "(I)V");
-                    if (setInputTypeMid) env->CallVoidMethod(etObj, setInputTypeMid, (jint)0x000A0001);
-                    env->ExceptionClear();
-
-                    // IME_FLAG_NO_EXTRACT_UI (0x10000000) | IME_FLAG_NO_FULLSCREEN (0x2000000) | IME_ACTION_DONE (6)
-                    jmethodID setImeOptMid = env->GetMethodID(etCls, "setImeOptions", "(I)V");
-                    if (setImeOptMid) env->CallVoidMethod(etObj, setImeOptMid, (jint)0x12000006);
-                    env->ExceptionClear();
-
-                    jmethodID setBgMid = env->GetMethodID(etCls, "setBackgroundColor", "(I)V");
-                    if (setBgMid) env->CallVoidMethod(etObj, setBgMid, (jint)0);
-                    jmethodID setTcMid = env->GetMethodID(etCls, "setTextColor", "(I)V");
-                    if (setTcMid) env->CallVoidMethod(etObj, setTcMid, (jint)0);
-                    jmethodID setCurMid = env->GetMethodID(etCls, "setCursorVisible", "(Z)V");
-                    if (setCurMid) env->CallVoidMethod(etObj, setCurMid, (jboolean)JNI_FALSE);
-                    jmethodID setFocMid = env->GetMethodID(etCls, "setFocusable", "(Z)V");
-                    if (setFocMid) env->CallVoidMethod(etObj, setFocMid, (jboolean)JNI_TRUE);
-                    jmethodID setFocTouchMid = env->GetMethodID(etCls, "setFocusableInTouchMode", "(Z)V");
-                    if (setFocTouchMid) env->CallVoidMethod(etObj, setFocTouchMid, (jboolean)JNI_TRUE);
-                    env->ExceptionClear();
-
-                    jclass lpCls = env->FindClass("android/view/ViewGroup$LayoutParams");
-                    jmethodID lpCtor = env->GetMethodID(lpCls, "<init>", "(II)V");
-                    jobject lpObj = lpCtor ? env->NewObject(lpCls, lpCtor, (jint)1, (jint)1) : nullptr;
-                    env->ExceptionClear();
-
-                    jclass vgCls = env->FindClass("android/view/ViewGroup");
-                    jclass viewCls = env->FindClass("android/view/View");
-                    jmethodID getChildCountMid = env->GetMethodID(vgCls, "getChildCount", "()I");
-                    jmethodID getChildAtMid = env->GetMethodID(vgCls, "getChildAt", "(I)Landroid/view/View;");
-                    jmethodID setChildFocMid = env->GetMethodID(viewCls, "setFocusable", "(Z)V");
-                    jmethodID setChildFocTouchMid = env->GetMethodID(viewCls, "setFocusableInTouchMode", "(Z)V");
-                    // Prevent GLSurfaceView from stealing input focus away from s_pLiveEditText on touch
-                    if (getChildCountMid && getChildAtMid && setChildFocMid && setChildFocTouchMid) {
-                        jint cCount = env->CallIntMethod(contentView, getChildCountMid);
-                        for (jint ci = 0; ci < cCount; ++ci) {
-                            jobject ch = env->CallObjectMethod(contentView, getChildAtMid, ci);
-                            if (ch) {
-                                env->CallVoidMethod(ch, setChildFocMid, (jboolean)JNI_FALSE);
-                                env->CallVoidMethod(ch, setChildFocTouchMid, (jboolean)JNI_FALSE);
-                                env->DeleteLocalRef(ch);
-                            }
-                        }
-                        env->ExceptionClear();
-                    }
-                    env->DeleteLocalRef(viewCls);
-
-                    jmethodID addViewMid = env->GetMethodID(vgCls, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
-                    if (addViewMid && lpObj) {
-                        env->CallVoidMethod(contentView, addViewMid, etObj, lpObj);
-                        if (!env->ExceptionCheck()) {
-                            s_pLiveEditText = env->NewGlobalRef(etObj);
-                            s_bResetLiveEditTextPending = true;
-                        }
-                        env->ExceptionClear();
-                    }
-                    if (lpObj) env->DeleteLocalRef(lpObj);
-                    env->DeleteLocalRef(lpCls);
-                    env->DeleteLocalRef(vgCls);
-                    env->DeleteLocalRef(etObj);
-                }
-                env->DeleteLocalRef(etCls);
-                env->DeleteLocalRef(contentView);
-            }
-            env->DeleteLocalRef(actCls);
-            env->DeleteLocalRef(activityObj);
-        }
-    }
-
-    if (s_pLiveEditText) {
-        jclass etCls = env->FindClass("android/widget/EditText");
-        if (s_bResetLiveEditTextPending || !s_bSoftKeyboardVisible) {
+        if (etObj) {
+            s_pLiveEditText = env->NewGlobalRef(etObj);
+            s_u16LastEditText.assign(64, u' ');
             s_bResetLiveEditTextPending = false;
-            jstring padStr = env->NewStringUTF("                                ");
-            jclass tvCls = env->FindClass("android/widget/TextView");
-            jmethodID setTextMid = env->GetMethodID(tvCls, "setText", "(Ljava/lang/CharSequence;)V");
-            if (setTextMid) env->CallVoidMethod(s_pLiveEditText, setTextMid, padStr);
-            env->ExceptionClear();
-            jmethodID setSelMid = env->GetMethodID(etCls, "setSelection", "(I)V");
-            if (setSelMid) env->CallVoidMethod(s_pLiveEditText, setSelMid, (jint)32);
-            env->ExceptionClear();
-            s_u16LastEditText.assign(32, u' ');
-            env->DeleteLocalRef(tvCls);
-            env->DeleteLocalRef(padStr);
+            env->DeleteLocalRef(etObj);
         }
-        jclass viewCls = env->FindClass("android/view/View");
-        jmethodID reqFocMid = env->GetMethodID(viewCls, "requestFocus", "()Z");
-        if (reqFocMid) env->CallBooleanMethod(s_pLiveEditText, reqFocMid);
-        env->ExceptionClear();
-        jmethodID setSelMid = env->GetMethodID(etCls, "setSelection", "(I)V");
-        if (setSelMid) env->CallVoidMethod(s_pLiveEditText, setSelMid, (jint)s_u16LastEditText.size());
-        env->ExceptionClear();
-        env->DeleteLocalRef(viewCls);
-        env->DeleteLocalRef(etCls);
     }
+
+    if (s_pLiveEditText && (s_bResetLiveEditTextPending || !s_bSoftKeyboardVisible)) {
+        s_bResetLiveEditTextPending = false;
+        s_u16LastEditText.assign(64, u' ');
+        jmethodID resetMid = env->GetStaticMethodID(mainActCls, "resetLiveEditTextOnUiThread", "()V");
+        if (resetMid) env->CallStaticVoidMethod(mainActCls, resetMid);
+        env->ExceptionClear();
+    }
+    env->DeleteLocalRef(mainActCls);
 #endif
 }
 
@@ -3259,18 +3263,31 @@ static bool PollAndroidLiveEditText(JNIEnv* env) {
     if (!env || !s_bSoftKeyboardVisible || !s_pLiveEditText)
         return false;
 
+    static jclass s_mainActCls = nullptr;
+    static jmethodID s_isResettingMid = nullptr;
     static jmethodID s_getTextMid = nullptr;
     static jmethodID s_toStringMid = nullptr;
     if (!s_getTextMid) {
+        jclass localMain = env->FindClass("com/worldonline/client/MainActivity");
+        if (localMain) {
+            s_mainActCls = (jclass)env->NewGlobalRef(localMain);
+            s_isResettingMid = env->GetStaticMethodID(s_mainActCls, "isResettingLiveEditText", "()Z");
+            env->DeleteLocalRef(localMain);
+        }
         jclass tvCls = env->FindClass("android/widget/TextView");
         s_getTextMid = env->GetMethodID(tvCls, "getText", "()Ljava/lang/CharSequence;");
         env->DeleteLocalRef(tvCls);
         jclass objCls = env->FindClass("java/lang/Object");
         s_toStringMid = env->GetMethodID(objCls, "toString", "()Ljava/lang/String;");
         env->DeleteLocalRef(objCls);
+        env->ExceptionClear();
     }
     if (!s_getTextMid || !s_toStringMid)
         return false;
+    if (s_mainActCls && s_isResettingMid && env->CallStaticBooleanMethod(s_mainActCls, s_isResettingMid) == JNI_TRUE) {
+        env->ExceptionClear();
+        return false;
+    }
 
     jobject csObj = env->CallObjectMethod(s_pLiveEditText, s_getTextMid);
     if (env->ExceptionCheck() || !csObj) {
@@ -3309,14 +3326,14 @@ static bool PollAndroidLiveEditText(JNIEnv* env) {
         }
     }
 
-    if (cleanStr.size() > 32 && cleanStr[0] != u' ' && s_u16LastEditText.size() >= 32 && s_u16LastEditText.substr(0, 32) == std::u16string(32, u' ')) {
+    if (cleanStr.size() > 64 && cleanStr[0] != u' ' && s_u16LastEditText.size() >= 64 && s_u16LastEditText.substr(0, 64) == std::u16string(64, u' ')) {
         size_t trailingSpaces = 0;
         while (trailingSpaces < cleanStr.size() && cleanStr[cleanStr.size() - 1 - trailingSpaces] == u' ') {
             ++trailingSpaces;
         }
-        if (trailingSpaces >= 32) {
-            std::u16string typedPart = cleanStr.substr(0, cleanStr.size() - 32);
-            cleanStr = std::u16string(32, u' ') + typedPart;
+        if (trailingSpaces >= 64) {
+            std::u16string typedPart = cleanStr.substr(0, cleanStr.size() - 64);
+            cleanStr = std::u16string(64, u' ') + typedPart;
         }
     }
 
@@ -3336,8 +3353,16 @@ static bool PollAndroidLiveEditText(JNIEnv* env) {
     }
 
     s_u16LastEditText = cleanStr;
-    if (cleanStr.size() < 8 || cleanStr.size() > 160) {
-        s_bResetLiveEditTextPending = true;
+    // Immediately refill the 64 spaces on the UI thread when holding Delete so continuous backspace never stops!
+    if (cleanStr.size() < 16 || cleanStr.size() > 200) {
+        s_u16LastEditText.assign(64, u' ');
+        jclass mainActCls = env->FindClass("com/worldonline/client/MainActivity");
+        if (mainActCls) {
+            jmethodID resetMid = env->GetStaticMethodID(mainActCls, "resetLiveEditTextOnUiThread", "()V");
+            if (resetMid) env->CallStaticVoidMethod(mainActCls, resetMid);
+            env->ExceptionClear();
+            env->DeleteLocalRef(mainActCls);
+        }
     }
 
     SyncMobileLiveTypingToPython();
@@ -3382,6 +3407,7 @@ void AndroidToggleSoftKeyboard(bool show) {
             }
         }
         s_bExplicitKeyboardRequest = false;
+        s_bResetLiveEditTextPending = true;
         s_dwLastKeyboardOpenMs = nowMs;
     } else {
         s_bExplicitKeyboardRequest = false;
@@ -3445,70 +3471,16 @@ void AndroidToggleSoftKeyboard(bool show) {
     JNIEnv* env = nullptr;
     if (g_pJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK || !env) return;
 
-    jclass actThreadCls = env->FindClass("android/app/ActivityThread");
-    if (!actThreadCls) { env->ExceptionClear(); return; }
-    jmethodID curAppMid = env->GetStaticMethodID(actThreadCls, "currentApplication", "()Landroid/app/Application;");
-    jobject appObj = curAppMid ? env->CallStaticObjectMethod(actThreadCls, curAppMid) : nullptr;
-    if (appObj) {
-        jclass ctxCls = env->FindClass("android/content/Context");
-        jmethodID getSysMid = env->GetMethodID(ctxCls, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
-        jstring immStr = env->NewStringUTF("input_method");
-        jobject immObj = env->CallObjectMethod(appObj, getSysMid, immStr);
-        if (immObj) {
-            jclass immCls = env->GetObjectClass(immObj);
-            bool handledDirectly = false;
-            if (s_pLiveEditText) {
-                if (show) {
-                    jmethodID showMid = env->GetMethodID(immCls, "showSoftInput", "(Landroid/view/View;I)Z");
-                    if (showMid) {
-                        handledDirectly = (env->CallBooleanMethod(immObj, showMid, s_pLiveEditText, (jint)0) == JNI_TRUE);
-                        env->ExceptionClear();
-                    }
-                } else {
-                    jclass viewCls = env->FindClass("android/view/View");
-                    jmethodID tokMid = env->GetMethodID(viewCls, "getWindowToken", "()Landroid/os/IBinder;");
-                    jobject token = tokMid ? env->CallObjectMethod(s_pLiveEditText, tokMid) : nullptr;
-                    env->ExceptionClear();
-                    if (token) {
-                        jmethodID hideMid = env->GetMethodID(immCls, "hideSoftInputFromWindow", "(Landroid/os/IBinder;I)Z");
-                        if (hideMid) {
-                            env->CallBooleanMethod(immObj, hideMid, token, (jint)0);
-                            handledDirectly = true;
-                        }
-                        env->ExceptionClear();
-                        env->DeleteLocalRef(token);
-                    }
-                    env->DeleteLocalRef(viewCls);
-                }
-            }
-            if (!handledDirectly) {
-                jmethodID visHMid = env->GetMethodID(immCls, "getInputMethodWindowVisibleHeight", "()I");
-                env->ExceptionClear();
-                bool shouldToggle = true;
-                if (visHMid) {
-                    jint kbH = env->CallIntMethod(immObj, visHMid);
-                    if (!env->ExceptionCheck()) {
-                        bool isCurrentlyOpen = (kbH > 0);
-                        shouldToggle = (isCurrentlyOpen != show);
-                    }
-                    env->ExceptionClear();
-                }
-                if (shouldToggle) {
-                    jmethodID toggleMid = env->GetMethodID(immCls, "toggleSoftInput", "(II)V");
-                    if (toggleMid) {
-                        env->CallVoidMethod(immObj, toggleMid, show ? 2 : 0, 0);
-                    }
-                }
-            }
-            env->DeleteLocalRef(immCls);
-            env->DeleteLocalRef(immObj);
+    EnsureAndroidLiveEditTextOnUiThread(env);
+    jclass mainActCls = env->FindClass("com/worldonline/client/MainActivity");
+    if (mainActCls) {
+        jmethodID setKbMid = env->GetStaticMethodID(mainActCls, "setSoftKeyboardVisibleOnUiThread", "(Z)V");
+        if (setKbMid) {
+            env->CallStaticVoidMethod(mainActCls, setKbMid, (jboolean)(show ? JNI_TRUE : JNI_FALSE));
         }
-        env->DeleteLocalRef(immStr);
-        env->DeleteLocalRef(ctxCls);
-        env->DeleteLocalRef(appObj);
+        env->ExceptionClear();
+        env->DeleteLocalRef(mainActCls);
     }
-    env->DeleteLocalRef(actThreadCls);
-    env->ExceptionClear();
 #endif
 }
 
@@ -3615,6 +3587,8 @@ static int FindBestActiveSlotForPoint(int pidHint, int x, int y, bool forMove) {
     return onlyIdx;
 }
 
+static bool IsPointOnUILayer(int x, int y);
+
 static void ReleasePointerSlot(int idx, int x, int y, int maskedAction) {
     if (idx < 0 || idx >= 4) return;
     SMobilePointerSlot& slot = s_pointers[idx];
@@ -3627,14 +3601,20 @@ static void ReleasePointerSlot(int idx, int x, int y, int maskedAction) {
         ResetJoystickState();
     } else if (slot.role == TOUCH_ROLE_UI) {
         bool wasDraggingWnd = slot.isDraggingWindow;
+        bool wasTouchScrolling = slot.isTouchScrolling;
         UI::CWindow* pDraggedWnd = slot.pHoldDragWnd;
         slot.active = false;
         slot.role = TOUCH_ROLE_NONE;
         slot.isDraggingCamera = false;
         slot.isDraggingWindow = false;
         slot.holdDragCancelled = false;
+        slot.canTouchScroll = false;
+        slot.isTouchScrolling = false;
         slot.pHoldDragWnd = nullptr;
         UpdateUiTouchDownFlag();
+        if (wasTouchScrolling) {
+            return;
+        }
         if (wasDraggingWnd) {
             if (pDraggedWnd && pDraggedWnd->GetName() &&
                 (strcmp(pDraggedWnd->GetName(), "ChatWindow") == 0 || strcmp(pDraggedWnd->GetName(), "MobileChatCatcher") == 0)) {
@@ -3663,6 +3643,33 @@ static void ReleasePointerSlot(int idx, int x, int y, int maskedAction) {
         g_AndroidMouseY = my;
         UI::CWindowManager::Instance().RunMouseMove(mx, my);
         UI::CWindowManager::Instance().RunMouseLeftButtonUp(mx, my);
+
+        // If an item was detached via press-and-hold and dragged to a destination slot (or 3D ground), complete the drop on release!
+        int dragDistSq = (rx - slot.startX) * (rx - slot.startX) + (ry - slot.startY) * (ry - slot.startY);
+        if (dragDistSq > 100) {
+            PyObject* pMm = PyImport_AddModule("mouseModule");
+            PyObject* pMc = pMm ? PyObject_GetAttrString(pMm, "mouseController") : nullptr;
+            PyObject* pIsAtt = pMc ? PyObject_CallMethod(pMc, "isAttached", NULL) : nullptr;
+            bool bAttached = (pIsAtt && PyObject_IsTrue(pIsAtt));
+            Py_XDECREF(pIsAtt);
+            Py_XDECREF(pMc);
+            if (PyErr_Occurred()) PyErr_Clear();
+
+            if (bAttached) {
+                UI::CWindowManager::Instance().RunMouseLeftButtonDown(mx, my);
+                UI::CWindowManager::Instance().RunMouseLeftButtonUp(mx, my);
+                if (!IsPointOnUILayer(mx, my)) {
+                    PyRun_SimpleString(
+                        "try:\n"
+                        "    import mouseModule\n"
+                        "    if mouseModule.mouseController.isAttached():\n"
+                        "        mouseModule.mouseController.DeattachObject()\n"
+                        "except:\n"
+                        "    pass\n"
+                    );
+                }
+            }
+        }
         return;
     } else if (slot.role == TOUCH_ROLE_WORLD) {
         DWORD heldMs = ELTimer_GetMSec() - slot.downTimeMs;
@@ -3845,6 +3852,92 @@ static PyObject* mobileInput_ShowKeyboard(PyObject* self, PyObject* args) {
     return Py_BuildValue("i", 1);
 }
 
+static PyObject* mobileInput_OpenURL(PyObject* self, PyObject* args) {
+    const char* url = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &url) || !url || !*url)
+        return Py_BuildValue("i", 0);
+#if !defined(__APPLE__)
+    if (g_pJavaVM) {
+        JNIEnv* env = nullptr;
+        if (g_pJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_OK && env) {
+            jclass atCls = env->FindClass("android/app/ActivityThread");
+            if (atCls) {
+                jmethodID curAppMid = env->GetStaticMethodID(atCls, "currentApplication", "()Landroid/app/Application;");
+                jobject appObj = curAppMid ? env->CallStaticObjectMethod(atCls, curAppMid) : nullptr;
+                env->ExceptionClear();
+                if (appObj) {
+                    jclass uriCls = env->FindClass("android/net/Uri");
+                    jclass intentCls = env->FindClass("android/content/Intent");
+                    if (uriCls && intentCls) {
+                        jmethodID parseMid = env->GetStaticMethodID(uriCls, "parse", "(Ljava/lang/String;)Landroid/net/Uri;");
+                        jstring jurl = env->NewStringUTF(url);
+                        jobject uriObj = parseMid ? env->CallStaticObjectMethod(uriCls, parseMid, jurl) : nullptr;
+                        env->ExceptionClear();
+                        if (uriObj) {
+                            jstring jact = env->NewStringUTF("android.intent.action.VIEW");
+                            jmethodID intentCtor = env->GetMethodID(intentCls, "<init>", "(Ljava/lang/String;Landroid/net/Uri;)V");
+                            jobject intentObj = intentCtor ? env->NewObject(intentCls, intentCtor, jact, uriObj) : nullptr;
+                            env->ExceptionClear();
+                            if (intentObj) {
+                                jmethodID addFlagsMid = env->GetMethodID(intentCls, "addFlags", "(I)Landroid/content/Intent;");
+                                if (addFlagsMid) env->CallObjectMethod(intentObj, addFlagsMid, (jint)0x10000000); // FLAG_ACTIVITY_NEW_TASK
+                                jclass ctxCls = env->GetObjectClass(appObj);
+                                jmethodID startActMid = env->GetMethodID(ctxCls, "startActivity", "(Landroid/content/Intent;)V");
+                                if (startActMid) env->CallVoidMethod(appObj, startActMid, intentObj);
+                                env->ExceptionClear();
+                                env->DeleteLocalRef(ctxCls);
+                                env->DeleteLocalRef(intentObj);
+                            }
+                            env->DeleteLocalRef(jact);
+                            env->DeleteLocalRef(uriObj);
+                        }
+                        env->DeleteLocalRef(jurl);
+                    }
+                    if (uriCls) env->DeleteLocalRef(uriCls);
+                    if (intentCls) env->DeleteLocalRef(intentCls);
+                    env->DeleteLocalRef(appObj);
+                }
+                env->DeleteLocalRef(atCls);
+            }
+        }
+    }
+#endif
+    return Py_BuildValue("i", 1);
+}
+
+static PyObject* mobileInput_CloseApp(PyObject* /*self*/, PyObject* /*args*/) {
+#if !defined(__APPLE__)
+    if (g_pJavaVM) {
+        JNIEnv* env = nullptr;
+        if (g_pJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_OK && env) {
+            if (s_pLiveEditText) {
+                jclass viewCls = env->FindClass("android/view/View");
+                jmethodID getCtxMid = viewCls ? env->GetMethodID(viewCls, "getContext", "()Landroid/content/Context;") : nullptr;
+                jobject actObj = getCtxMid ? env->CallObjectMethod(s_pLiveEditText, getCtxMid) : nullptr;
+                env->ExceptionClear();
+                if (actObj) {
+                    jclass actCls = env->FindClass("android/app/Activity");
+                    if (actCls && env->IsInstanceOf(actObj, actCls)) {
+                        jmethodID moveBackMid = env->GetMethodID(actCls, "moveTaskToBack", "(Z)Z");
+                        if (moveBackMid) env->CallBooleanMethod(actObj, moveBackMid, (jboolean)JNI_TRUE);
+                        env->ExceptionClear();
+                        jmethodID finishMid = env->GetMethodID(actCls, "finishAndRemoveTask", "()V");
+                        env->ExceptionClear();
+                        if (!finishMid) finishMid = env->GetMethodID(actCls, "finish", "()V");
+                        if (finishMid) env->CallVoidMethod(actObj, finishMid);
+                        env->ExceptionClear();
+                    }
+                    if (actCls) env->DeleteLocalRef(actCls);
+                    env->DeleteLocalRef(actObj);
+                }
+                if (viewCls) env->DeleteLocalRef(viewCls);
+            }
+        }
+    }
+#endif
+    return Py_BuildValue("i", 1);
+}
+
 static PyObject* mobileInput_FindNearestEnemyVID(PyObject* self, PyObject* args) {
     float maxDist = 2500.0f;
     int cycleNext = 0;
@@ -3906,7 +3999,7 @@ static PyObject* mobileInput_FindNearestEnemyVID(PyObject* self, PyObject* args)
     return Py_BuildValue("i", (int)chosenVID);
 }
 
-#define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
+//#define ENABLE_MOBILE_PERF_DEBUGGER // <-- Comment out to disable the profiler
 
 #ifdef ENABLE_MOBILE_PERF_DEBUGGER
 #include <time.h>
@@ -4061,6 +4154,8 @@ static PyMethodDef s_mobileInputMethods[] = {
     { "IsRectTouchHeld",     mobileInput_IsRectTouchHeld,     METH_VARARGS, "Check if any touch started in rect" },
     { "GetScreenSize",       mobileInput_GetScreenSize,       METH_VARARGS, "Get native Android screen size" },
     { "ShowKeyboard",        mobileInput_ShowKeyboard,        METH_VARARGS, "Show or hide Android soft keyboard" },
+    { "OpenURL",             mobileInput_OpenURL,             METH_VARARGS, "Open external URL in mobile browser" },
+    { "CloseApp",            mobileInput_CloseApp,            METH_VARARGS, "Finish Android Activity cleanly" },
     { "FindNearestEnemyVID", mobileInput_FindNearestEnemyVID, METH_VARARGS, "Find nearest enemy VID" },
 #ifdef ENABLE_MOBILE_PERF_DEBUGGER
     { "RecordPhaseTime",     mobileInput_RecordPhaseTime,     METH_VARARGS, "Record engine phase ms" },
@@ -4186,7 +4281,9 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_render(JNIEnv* env,
                     slot.role = TOUCH_ROLE_UI;
                     slot.isDraggingWindow = false;
                     slot.holdDragCancelled = false;
-                    slot.pHoldDragWnd = s_bLastTouchSnappedToButton ? nullptr : FindHoldDraggableWindow(mx, my);
+                    slot.canTouchScroll = false;
+                    slot.isTouchScrolling = false;
+                    slot.pHoldDragWnd = nullptr;
                     UpdateUiTouchDownFlag();
                     g_AndroidMouseX = mx;
                     g_AndroidMouseY = my;
@@ -4194,7 +4291,11 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_render(JNIEnv* env,
                     // Check if the touched UI widget belongs to the Chat system; if not, force-close open ChatWindow!
                     UI::CWindow* pTouched = UI::CWindowManager::Instance().GetPointWindow();
                     bool isChatWidget = false;
+                    bool isScrollDragThumb = false;
                     for (UI::CWindow* pWalk = pTouched; pWalk != nullptr; pWalk = pWalk->GetParent()) {
+                        if (dynamic_cast<UI::CDragButton*>(pWalk) != nullptr) {
+                            isScrollDragThumb = true;
+                        }
                         const char* wName = pWalk->GetName();
                         if (wName && (strcmp(wName, "ChatWindow") == 0 ||
                                       strcmp(wName, "ChatInputSet") == 0 ||
@@ -4218,18 +4319,29 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_render(JNIEnv* env,
                         "except:\n"
                         "    pass\n", isChatWidget ? mx : -1, isChatWidget ? my : -1, mx, my);
                     PyRun_SimpleString(tapCheckCmd);
+
+                    // 1. Run LeftButtonDown FIRST so Python's SelectItemSlot sets _mobilePendingHoldSlot on occupied item slots!
                     UI::CWindowManager::Instance().RunMouseMove(mx, my);
                     UI::CWindowManager::Instance().RunMouseLeftButtonDown(mx, my);
+
+                    // 2. Now check if this touch is inside a scrollable window body OR on a draggable empty slot / window edge
+                    if (!isScrollDragThumb && !IsMobileItemHoldOrAttachedActive() && CheckMobileTouchScrollableAt(mx, my)) {
+                        slot.canTouchScroll = true;
+                        slot.pHoldDragWnd = nullptr;
+                    } else if (!s_bLastTouchSnappedToButton && !IsMobileItemHoldOrAttachedActive()) {
+                        slot.pHoldDragWnd = FindHoldDraggableWindow(mx, my);
+                    }
                 }
                 // 3. 3D World (Orbit / Pinch-to-Zoom / Fast-Tap)
                 else {
                     s_iLastTouchDownX = ev.x;
                     s_iLastTouchDownY = ev.y;
+                    g_AndroidMouseX = ev.x;
+                    g_AndroidMouseY = ev.y;
                     s_bLastTouchSnappedToButton = false;
                     slot.role = TOUCH_ROLE_WORLD;
                     s_fCamVelRoll *= 0.25f;
                     s_fCamVelPitch *= 0.25f;
-                    // Auto-close open ChatWindow when tapping on the 3D world
                     PyRun_SimpleString(
                    "try:\n"
                    "    import constInfo\n"
@@ -4238,9 +4350,7 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_render(JNIEnv* env,
                    "except:\n"
                    "    pass\n"
                );
-               if (!s_bUiTouchDown) {
-                   UI::CWindowManager::Instance().RunMouseMove(-5000, -5000);
-               }
+               UI::CWindowManager::Instance().RunMouseMove(ev.x, ev.y);
                 }
             }
             else if (maskedAction == 2) { // ACTION_MOVE
@@ -4279,9 +4389,30 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_render(JNIEnv* env,
                     int totalDy = ev.y - slot.startY;
                     int distSq = totalDx * totalDx + totalDy * totalDy;
 
-                    if (!slot.isDraggingWindow && !slot.holdDragCancelled) {
+                    // If holding/detaching an occupied item slot, NEVER hijack into window drag or scroll!
+                    if (IsMobileItemHoldOrAttachedActive()) {
+                        slot.holdDragCancelled = true;
+                        slot.pHoldDragWnd = nullptr;
+                        slot.canTouchScroll = false;
+                        slot.isTouchScrolling = false;
+                    }
+
+                    // Universal Touch-Scrolling inside any window with a visible ScrollBar
+                    if (slot.canTouchScroll && !slot.isDraggingWindow) {
+                        if (!slot.isTouchScrolling && abs(totalDy) > 7 && abs(totalDy) >= abs(totalDx)) {
+                            slot.isTouchScrolling = true;
+                            slot.holdDragCancelled = true;
+                            slot.pHoldDragWnd = nullptr;
+                            UI::CWindowManager::Instance().RunMouseLeftButtonUp(-5000, -5000);
+                        }
+                        if (slot.isTouchScrolling) {
+                            UpdateMobileTouchScroll(stepDy);
+                            continue;
+                        }
+                    }
+
+                    if (!slot.isDraggingWindow && !slot.holdDragCancelled && !slot.isTouchScrolling) {
                         if (heldMs >= 120 && slot.pHoldDragWnd != nullptr && distSq > 16) {
-                            // Easy & responsive hold-drag after 120ms!
                             slot.isDraggingWindow = true;
                             UI::CWindowManager::Instance().RunMouseLeftButtonUp(-5000, -5000);
                             PyRun_SimpleString(
@@ -4322,6 +4453,9 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_render(JNIEnv* env,
                     }
                 }
                 else if (slot.role == TOUCH_ROLE_WORLD) {
+                    g_AndroidMouseX = ev.x;
+                    g_AndroidMouseY = ev.y;
+                    UI::CWindowManager::Instance().RunMouseMove(ev.x, ev.y);
                     int wIdx0 = -1, wIdx1 = -1;
                     int worldTouchCount = CountActiveWorldPointers(&wIdx0, &wIdx1);
                     if (worldTouchCount >= 2 && wIdx0 >= 0 && wIdx1 >= 0) {
@@ -5224,7 +5358,7 @@ namespace {
     static pthread_t s_sfxMixerThread;
     static pthread_t s_sfxCompThread;
 
-#if !defined(__APPLE__)
+// Enabled on BOTH Android and iOS so iOS uses the 64-voice C++ in-memory WAV mixer
     static int16_t DecodeImaAdpcmNib(uint8_t nibble, int32_t& predictor, int32_t& stepIndex) {
         static const int16_t kStepTable[89] = {
             7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
@@ -5461,6 +5595,7 @@ namespace {
         return true;
     }
 
+    #if !defined(__APPLE__)
     // Separate helper thread ONLY for rare compressed (.mp3 / .asi) sound effects so SoundPool.load never touches the 64-voice PCM mixer thread
     static void* AndroidCompressedSfxThreadProc(void*) {
         if (!g_pJavaVM) return nullptr;
@@ -5536,16 +5671,136 @@ namespace {
     }
 #endif
 
-    // Dedicated 64-voice C++ software mixer thread (Android) / Async Audio thread (iOS)
+#ifdef __APPLE__
+    struct SfxIOSAudioStreamBasicDesc {
+        double mSampleRate;
+        uint32_t mFormatID;
+        uint32_t mFormatFlags;
+        uint32_t mBytesPerPacket;
+        uint32_t mFramesPerPacket;
+        uint32_t mBytesPerFrame;
+        uint32_t mChannelsPerFrame;
+        uint32_t mBitsPerChannel;
+        uint32_t mReserved;
+    };
+    struct SfxIOSAudioQueueBuffer {
+        uint32_t mAudioDataBytesCapacity;
+        void* mAudioData;
+        uint32_t mAudioDataByteSize;
+        void* mUserData;
+        uint32_t mPacketDescriptionCapacity;
+        void* mPacketDescriptions;
+        uint32_t mPacketDescriptionCount;
+    };
+    typedef void* SfxIOSAudioQueueRef;
+    typedef SfxIOSAudioQueueBuffer* SfxIOSAudioQueueBufferRef;
+    typedef void (*SfxIOSAudioQueueOutputCB)(void*, SfxIOSAudioQueueRef, SfxIOSAudioQueueBufferRef);
+    typedef int32_t (*PFN_SfxAQNewOutput)(const SfxIOSAudioStreamBasicDesc*, SfxIOSAudioQueueOutputCB, void*, void*, void*, uint32_t, SfxIOSAudioQueueRef*);
+    typedef int32_t (*PFN_SfxAQAllocBuf)(SfxIOSAudioQueueRef, uint32_t, SfxIOSAudioQueueBufferRef*);
+    typedef int32_t (*PFN_SfxAQEnqueueBuf)(SfxIOSAudioQueueRef, SfxIOSAudioQueueBufferRef, uint32_t, const void*);
+    typedef int32_t (*PFN_SfxAQStart)(SfxIOSAudioQueueRef, const void*);
+
+    static pthread_mutex_t s_iosVoicesMutex = PTHREAD_MUTEX_INITIALIZER;
+    static SMixVoice s_iosVoices[kMaxMixVoices];
+    static PFN_SfxAQEnqueueBuf s_pfnSfxAQEnqueue = nullptr;
+
+    static void SfxIOSAudioOutputCallback(void*, SfxIOSAudioQueueRef outAQ, SfxIOSAudioQueueBufferRef outBuf) {
+        if (!outBuf || !outBuf->mAudioData) return;
+        constexpr int kIosBufFrames = 1024;
+        int32_t mixAccum[kIosBufFrames * 2];
+        memset(mixAccum, 0, sizeof(mixAccum));
+        int16_t* stereoOut = (int16_t*)outBuf->mAudioData;
+        bool anyActive = false;
+
+        pthread_mutex_lock(&s_iosVoicesMutex);
+        for (int v = 0; v < kMaxMixVoices; ++v) {
+            SMixVoice& vc = s_iosVoices[v];
+            if (!vc.active || !vc.pcm || vc.pcm->empty()) continue;
+            anyActive = true;
+
+            const int16_t* src = vc.pcm->data();
+            const uint32_t totalSamples = (uint32_t)vc.pcm->size();
+            const uint32_t endFp = totalSamples << 8;
+            uint32_t curFp = vc.posFp;
+            const uint32_t stepFp = vc.stepFp;
+            const int32_t gL = vc.gainL;
+            const int32_t gR = vc.gainR;
+
+            for (int f = 0; f < kIosBufFrames; ++f) {
+                if (curFp >= endFp) {
+                    vc.active = false;
+                    break;
+                }
+                int32_t s = src[curFp >> 8];
+                mixAccum[f * 2 + 0] += (s * gL) >> 8;
+                mixAccum[f * 2 + 1] += (s * gR) >> 8;
+                curFp += stepFp;
+            }
+            vc.posFp = curFp;
+            if (curFp >= endFp) vc.active = false;
+        }
+        pthread_mutex_unlock(&s_iosVoicesMutex);
+
+        if (anyActive) {
+            for (int i = 0; i < kIosBufFrames * 2; ++i) {
+                int32_t x = mixAccum[i];
+                if (x > 24576) {
+                    int32_t excess = x - 24576;
+                    x = 24576 + (excess * 8191) / (8191 + excess);
+                } else if (x < -24576) {
+                    int32_t excess = -24576 - x;
+                    x = -24576 - (excess * 8191) / (8191 + excess);
+                }
+                stereoOut[i] = (int16_t)x;
+            }
+        } else {
+            memset(stereoOut, 0, kIosBufFrames * 2 * sizeof(int16_t));
+        }
+        outBuf->mAudioDataByteSize = kIosBufFrames * 2 * sizeof(int16_t);
+        if (s_pfnSfxAQEnqueue) {
+            s_pfnSfxAQEnqueue(outAQ, outBuf, 0, nullptr);
+        }
+    }
+#endif
+
+    // Dedicated 64-voice C++ software mixer thread (Android & iOS)
     static void* MobileSfxMixerThreadProc(void*) {
 #ifdef __APPLE__
-        typedef void* (*PFN_AutoreleasePush)(void);
-        typedef void  (*PFN_AutoreleasePop)(void*);
-        PFN_AutoreleasePush pfnPush = (PFN_AutoreleasePush)dlsym(RTLD_DEFAULT, "objc_autoreleasePoolPush");
-        PFN_AutoreleasePop  pfnPop  = (PFN_AutoreleasePop)dlsym(RTLD_DEFAULT, "objc_autoreleasePoolPop");
-        std::unordered_map<int, std::string> iosPaths;
-        std::unordered_map<int, DWORD> iosLastPlay;
+        void* hAQ = dlopen("/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox", RTLD_LAZY);
+        if (!hAQ) hAQ = RTLD_DEFAULT;
+        PFN_SfxAQNewOutput pfnNewOut = (PFN_SfxAQNewOutput)dlsym(hAQ, "AudioQueueNewOutput");
+        PFN_SfxAQAllocBuf  pfnAlloc  = (PFN_SfxAQAllocBuf)dlsym(hAQ, "AudioQueueAllocateBuffer");
+        s_pfnSfxAQEnqueue            = (PFN_SfxAQEnqueueBuf)dlsym(hAQ, "AudioQueueEnqueueBuffer");
+        PFN_SfxAQStart     pfnStart  = (PFN_SfxAQStart)dlsym(hAQ, "AudioQueueStart");
+
+        SfxIOSAudioQueueRef iosQueue = nullptr;
+        if (pfnNewOut && pfnAlloc && s_pfnSfxAQEnqueue && pfnStart) {
+            SfxIOSAudioStreamBasicDesc fmt{};
+            fmt.mSampleRate = (double)kMixSampleRate;
+            fmt.mFormatID = 0x6C70636Du; // 'lpcm'
+            fmt.mFormatFlags = 0xCu;     // SignedInteger | Packed
+            fmt.mBytesPerPacket = 4;
+            fmt.mFramesPerPacket = 1;
+            fmt.mBytesPerFrame = 4;
+            fmt.mChannelsPerFrame = 2;
+            fmt.mBitsPerChannel = 16;
+            if (pfnNewOut(&fmt, SfxIOSAudioOutputCallback, nullptr, nullptr, nullptr, 0, &iosQueue) == 0 && iosQueue) {
+                for (int i = 0; i < 4; ++i) {
+                    SfxIOSAudioQueueBufferRef buf = nullptr;
+                    if (pfnAlloc(iosQueue, 1024 * 4, &buf) == 0 && buf) {
+                        memset(buf->mAudioData, 0, 1024 * 4);
+                        buf->mAudioDataByteSize = 1024 * 4;
+                        s_pfnSfxAQEnqueue(iosQueue, buf, 0, nullptr);
+                    }
+                }
+                pfnStart(iosQueue, nullptr);
+            }
+        }
+
+        std::unordered_map<int, SDecodedSfxBuffer> soundBank;
+        std::unordered_map<int, DWORD> compLastPlay;
         std::deque<SSfxPlayReq> localCmds;
+        uint32_t jitterSeq = 0;
 
         while (true) {
             pthread_mutex_lock(&s_sfxQueueMutex);
@@ -5553,27 +5808,119 @@ namespace {
             pthread_mutex_unlock(&s_sfxQueueMutex);
 
             if (!localCmds.empty()) {
-                void* pool = pfnPush ? pfnPush() : nullptr;
                 DWORD nowMs = ELTimer_GetMSec();
-                for (const SSfxPlayReq& req : localCmds) {
-                    if (!req.rawPackBytes.empty() && !req.diskPath.empty()) {
-                        if (FILE* fp = fopen(req.diskPath.c_str(), "wb")) {
-                            fwrite(req.rawPackBytes.data(), 1, req.rawPackBytes.size(), fp);
-                            fclose(fp);
+                for (SSfxPlayReq& req : localCmds) {
+                    auto it = soundBank.find(req.soundId);
+                    if (it == soundBank.end()) {
+                        SDecodedSfxBuffer dec;
+                        dec.diskPath = req.diskPath;
+                        if (!req.rawPackBytes.empty()) {
+                            if (DecodeWavToMono44100(req.rawPackBytes.data(), req.rawPackBytes.size(), dec.pcm)) {
+                                dec.valid = true;
+                            } else {
+                                dec.isCompressedFallback = true;
+                                if (!req.diskPath.empty()) {
+                                    if (FILE* fp = fopen(req.diskPath.c_str(), "wb")) {
+                                        fwrite(req.rawPackBytes.data(), 1, req.rawPackBytes.size(), fp);
+                                        fclose(fp);
+                                    }
+                                }
+                            }
+                        } else if (!req.diskPath.empty()) {
+                            FILE* fp = fopen(req.diskPath.c_str(), "rb");
+                            if (fp) {
+                                fseek(fp, 0, SEEK_END);
+                                long sz = ftell(fp);
+                                fseek(fp, 0, SEEK_SET);
+                                if (sz > 44 && sz < (4 * 1024 * 1024)) {
+                                    std::vector<uint8_t> buf((size_t)sz);
+                                    if (fread(buf.data(), 1, (size_t)sz, fp) == (size_t)sz &&
+                                        DecodeWavToMono44100(buf.data(), buf.size(), dec.pcm)) {
+                                        dec.valid = true;
+                                    } else {
+                                        dec.isCompressedFallback = true;
+                                    }
+                                }
+                                fclose(fp);
+                            }
                         }
-                        iosPaths[req.soundId] = req.diskPath;
-                    } else if (!req.diskPath.empty()) {
-                        iosPaths[req.soundId] = req.diskPath;
+                        it = soundBank.emplace(req.soundId, std::move(dec)).first;
                     }
-                    auto itP = iosPaths.find(req.soundId);
-                    if (itP == iosPaths.end() || itP->second.empty()) continue;
-                    auto itT = iosLastPlay.find(req.soundId);
-                    if (itT != iosLastPlay.end() && (nowMs - itT->second) < 8) continue;
-                    iosLastPlay[req.soundId] = nowMs;
-                    IOSPlayAudioFile3D(itP->second.c_str(), req.volume, req.pan, 1.0f);
+
+                    const SDecodedSfxBuffer& sfx = it->second;
+                    if (sfx.isCompressedFallback) {
+                        if (!sfx.diskPath.empty()) {
+                            auto itT = compLastPlay.find(req.soundId);
+                            if (itT == compLastPlay.end() || (nowMs - itT->second) >= 25) {
+                                compLastPlay[req.soundId] = nowMs;
+                                IOSPlayAudioFile3D(sfx.diskPath.c_str(), req.volume, req.pan, 1.0f);
+                            }
+                        }
+                        continue;
+                    }
+                    if (!sfx.valid || sfx.pcm.empty()) continue;
+
+                    int32_t gL = (int32_t)(req.leftVol * 256.0f);
+                    int32_t gR = (int32_t)(req.rightVol * 256.0f);
+                    if (gL <= 1 && gR <= 1) continue;
+
+                    pthread_mutex_lock(&s_iosVoicesMutex);
+                    int sameCount = 0;
+                    int oldestSameIdx = -1;
+                    uint32_t oldestSamePos = 0;
+                    bool mergedSameFrame = false;
+
+                    for (int v = 0; v < kMaxMixVoices; ++v) {
+                        if (s_iosVoices[v].active && s_iosVoices[v].soundId == req.soundId) {
+                            if (nowMs - s_iosVoices[v].startMs < 6 && s_iosVoices[v].posFp < (512u << 8)) {
+                                s_iosVoices[v].gainL = std::min<int32_t>(320, std::max<int32_t>(s_iosVoices[v].gainL, gL));
+                                s_iosVoices[v].gainR = std::min<int32_t>(320, std::max<int32_t>(s_iosVoices[v].gainR, gR));
+                                mergedSameFrame = true;
+                                break;
+                            }
+                            ++sameCount;
+                            if (s_iosVoices[v].posFp >= oldestSamePos) {
+                                oldestSamePos = s_iosVoices[v].posFp;
+                                oldestSameIdx = v;
+                            }
+                        }
+                    }
+                    if (!mergedSameFrame) {
+                        int chosenSlot = -1;
+                        if (sameCount >= kMaxSameSoundVoices && oldestSameIdx >= 0) {
+                            chosenSlot = oldestSameIdx;
+                        } else {
+                            for (int v = 0; v < kMaxMixVoices; ++v) {
+                                if (!s_iosVoices[v].active) {
+                                    chosenSlot = v;
+                                    break;
+                                }
+                            }
+                            if (chosenSlot < 0) {
+                                int bestIdx = 0;
+                                uint32_t maxProgress = 0;
+                                for (int v = 0; v < kMaxMixVoices; ++v) {
+                                    if (s_iosVoices[v].posFp >= maxProgress) {
+                                        maxProgress = s_iosVoices[v].posFp;
+                                        bestIdx = v;
+                                    }
+                                }
+                                chosenSlot = bestIdx;
+                            }
+                        }
+                        static const uint32_t kDetuneSteps[4] = { 256, 253, 259, 255 };
+                        s_iosVoices[chosenSlot].soundId = req.soundId;
+                        s_iosVoices[chosenSlot].pcm = &sfx.pcm;
+                        s_iosVoices[chosenSlot].posFp = 0;
+                        s_iosVoices[chosenSlot].stepFp = (sameCount > 0) ? kDetuneSteps[(++jitterSeq) & 3] : 256u;
+                        s_iosVoices[chosenSlot].gainL = gL;
+                        s_iosVoices[chosenSlot].gainR = gR;
+                        s_iosVoices[chosenSlot].startMs = nowMs;
+                        s_iosVoices[chosenSlot].active = true;
+                    }
+                    pthread_mutex_unlock(&s_iosVoicesMutex);
                 }
                 localCmds.clear();
-                if (pfnPop && pool) pfnPop(pool);
             }
             usleep(4000);
         }
@@ -5588,10 +5935,11 @@ namespace {
         jmethodID writeMid = nullptr;
         jshortArray mixJArray = env->NewShortArray(kMixSliceFrames * 2);
 
+        jmethodID playMid = nullptr;
         if (atCls) {
             jmethodID minBufMid = env->GetStaticMethodID(atCls, "getMinBufferSize", "(III)I");
             jmethodID ctorMid = env->GetMethodID(atCls, "<init>", "(IIIIII)V");
-            jmethodID playMid = env->GetMethodID(atCls, "play", "()V");
+            playMid = env->GetMethodID(atCls, "play", "()V");
             writeMid = env->GetMethodID(atCls, "write", "([SII)I");
 
             jint minBuf = env->CallStaticIntMethod(atCls, minBufMid, (jint)kMixSampleRate, (jint)12 /*OUT_STEREO*/, (jint)2 /*PCM_16BIT*/);
@@ -5599,7 +5947,7 @@ namespace {
             int bufBytes = std::max<int>((int)minBuf, kMixSliceFrames * 4 * 4);
             mixTrack = env->NewObject(atCls, ctorMid, (jint)3 /*STREAM_MUSIC*/, (jint)kMixSampleRate, (jint)12, (jint)2, (jint)bufBytes, (jint)1 /*MODE_STREAM*/);
             env->ExceptionClear();
-            if (mixTrack) {
+            if (mixTrack && playMid) {
                 env->CallVoidMethod(mixTrack, playMid);
                 env->ExceptionClear();
             }
@@ -5763,6 +6111,10 @@ namespace {
             }
 
             if (anyActive) {
+                if ((nowMs - lastActiveVoiceMs) >= 1500 && mixTrack && playMid) {
+                    env->CallVoidMethod(mixTrack, playMid);
+                    env->ExceptionClear();
+                }
                 lastActiveVoiceMs = nowMs;
                 for (int i = 0; i < kMixSliceFrames * 2; ++i) {
                     int32_t x = mixAccum[i];
@@ -5865,9 +6217,13 @@ static void AndroidPlayAudioInternal(const char* c_szFileName, bool isLoopMusic,
             CMappedFile file;
             LPCVOID pData = nullptr;
             std::string dPath = "d:/ymir work/" + lowerPath;
+            std::string strippedPath = lowerPath;
+            if (strippedPath.compare(0, 13, "d:/ymir work/") == 0)
+                strippedPath = strippedPath.substr(13);
             if (CEterPackManager::Instance().Get(file, c_szFileName, &pData) ||
                 CEterPackManager::Instance().Get(file, lowerPath.c_str(), &pData) ||
-                CEterPackManager::Instance().Get(file, dPath.c_str(), &pData)) {
+                CEterPackManager::Instance().Get(file, dPath.c_str(), &pData) ||
+                CEterPackManager::Instance().Get(file, strippedPath.c_str(), &pData)) {
                 if (pData && file.Size() > 0 && file.Size() < (4 * 1024 * 1024)) {
                     rawPackBytes.assign((const uint8_t*)pData, (const uint8_t*)pData + file.Size());
                 }

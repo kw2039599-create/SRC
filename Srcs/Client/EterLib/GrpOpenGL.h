@@ -1164,10 +1164,7 @@ inline GLMATRIX* D3DXMatrixOrthoRH(GLMATRIX* pOut, float w, float h, float zn, f
 }
 inline GLMATRIX* D3DXMatrixOrthoOffCenterRH(GLMATRIX* pOut, float l, float r, float b, float t, float zn, float zf) {
 	D3DXMatrixIdentity(pOut);
-	if (l == 0.0f && t == 0.0f && r > 0.0f && b > 0.0f) {
-		l -= 0.5f; r -= 0.5f;
-		t -= 0.5f; b -= 0.5f;
-	}
+	// In OpenGL ES 3.0, pixel and texel centers both lie at (0.5, 0.5). Do NOT shift by -0.5f so 2D text & UI map 1:1 to pixels!
 	if (r != l) { pOut->m[0][0] = 2.0f / (r - l); pOut->m[3][0] = (l + r) / (l - r); }
 	if (t != b) { pOut->m[1][1] = 2.0f / (t - b); pOut->m[3][1] = (t + b) / (b - t); }
 	if (zn != zf) { pOut->m[2][2] = 1.0f / (zn - zf); pOut->m[3][2] = zn / (zn - zf); }
@@ -2499,11 +2496,15 @@ inline HRESULT IDirect3DTexture8::UnlockRect(UINT Level) {
 		glBindTexture(GL_TEXTURE_2D, glId);
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 		if (format == D3DFMT_A4R4G4B4) {
+			// High-contrast alpha LUT for CGraphicFontTexture 4-bit font atlases (eliminates muddy gray text halo)
+			static const DWORD s_crispFontAlphaLUT[16] = {
+				0, 0, 28, 64, 104, 144, 180, 210, 232, 245, 252, 255, 255, 255, 255, 255
+			};
 			std::vector<DWORD> rgba((size_t)w * (size_t)h);
 			const WORD* src = (const WORD*)pLockedData;
 			for (int i = 0; i < w * h; ++i) {
 				WORD c = src[i];
-				DWORD a = ((c >> 12) & 0xF) * 17;
+				DWORD a = s_crispFontAlphaLUT[(c >> 12) & 0xF];
 				DWORD r = ((c >> 8) & 0xF) * 17;
 				DWORD g = ((c >> 4) & 0xF) * 17;
 				DWORD b = (c & 0xF) * 17;

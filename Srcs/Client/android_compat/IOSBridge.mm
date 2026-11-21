@@ -26,6 +26,9 @@ extern "C" {
 @implementation WorldOnlineHiddenTextField
 - (void)deleteBackward {
     Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
+    if (self.text.length < 16) {
+        self.text = @"                                                                ";
+    }
 }
 @end
 
@@ -107,7 +110,7 @@ extern "C" bool IOSRenderCharGlyph(int pxSize, unsigned short ch, int* outW, int
     @autoreleasepool {
         unichar uc = (unichar)ch;
         NSString* str = [NSString stringWithCharacters:&uc length:1];
-        UIFont* font = [UIFont systemFontOfSize:(CGFloat)pxSize];
+        UIFont* font = [UIFont systemFontOfSize:(CGFloat)pxSize weight:UIFontWeightMedium];
         NSDictionary* attrs = @{
             NSFontAttributeName: font,
             NSForegroundColorAttributeName: [UIColor whiteColor]
@@ -132,10 +135,14 @@ extern "C" bool IOSRenderCharGlyph(int pxSize, unsigned short ch, int* outW, int
         CGColorSpaceRelease(cs);
         if (!ctx) return false;
 
+        CGContextSetAllowsAntialiasing(ctx, true);
+        CGContextSetShouldAntialias(ctx, true);
+        CGContextSetAllowsFontSmoothing(ctx, false);
         CGContextTranslateCTM(ctx, 0.0, 64.0);
         CGContextScaleCTM(ctx, 1.0, -1.0);
         UIGraphicsPushContext(ctx);
-        [str drawAtPoint:CGPointMake(0.5, 0.5) withAttributes:attrs];
+        // Draw on exact integer pixel origin (0.0, 0.0) instead of (0.5, 0.5) to prevent subpixel blur
+        [str drawAtPoint:CGPointMake(0.0, 0.0) withAttributes:attrs];
         UIGraphicsPopContext();
         CGContextRelease(ctx);
         return true;
@@ -145,8 +152,12 @@ extern "C" bool IOSRenderCharGlyph(int pxSize, unsigned short ch, int* outW, int
 extern "C" void IOSToggleSoftKeyboard(bool show) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!s_hiddenTextField) return;
-        if (show) [s_hiddenTextField becomeFirstResponder];
-        else [s_hiddenTextField resignFirstResponder];
+        if (show) {
+            s_hiddenTextField.text = @"                                                                ";
+            [s_hiddenTextField becomeFirstResponder];
+        } else {
+            [s_hiddenTextField resignFirstResponder];
+        }
     });
 }
 
@@ -164,12 +175,22 @@ extern "C" void IOSStopMusic() {
     }
 }
 
+static NSMutableDictionary<NSString*, NSData*>* s_sfxDataCache = nil;
+
 extern "C" void IOSPlayAudioFile3D(const char* diskPath, float volume, float pan, float rate) {
     if (!diskPath || !*diskPath || volume <= 0.001f) return;
     @autoreleasepool {
         NSString* pathStr = [NSString stringWithUTF8String:diskPath];
-        NSURL* url = [NSURL fileURLWithPath:pathStr];
-        if (!url) return;
+        if (!pathStr) return;
+
+        if (!s_sfxDataCache) s_sfxDataCache = [[NSMutableDictionary alloc] init];
+        NSData* audioData = s_sfxDataCache[pathStr];
+        if (!audioData) {
+            audioData = [NSData dataWithContentsOfFile:pathStr];
+            if (!audioData) return;
+            if (s_sfxDataCache.count > 128) [s_sfxDataCache removeAllObjects];
+            s_sfxDataCache[pathStr] = audioData;
+        }
 
         if (!s_activeSfxPlayers) s_activeSfxPlayers = [[NSMutableArray alloc] init];
         for (NSInteger i = (NSInteger)s_activeSfxPlayers.count - 1; i >= 0; --i) {
@@ -177,9 +198,9 @@ extern "C" void IOSPlayAudioFile3D(const char* diskPath, float volume, float pan
                 [s_activeSfxPlayers removeObjectAtIndex:i];
             }
         }
-        if (s_activeSfxPlayers.count >= 24) return;
+        if (s_activeSfxPlayers.count >= 16) return;
         NSError* err = nil;
-        AVAudioPlayer* sfx = [[AVAudioPlayer alloc] initWithContentsOfURL:url error:&err];
+        AVAudioPlayer* sfx = [[AVAudioPlayer alloc] initWithData:audioData error:&err];
         if (sfx && !err) {
             sfx.volume = (volume > 1.0f) ? 1.0f : volume;
             sfx.pan = (pan < -1.0f) ? -1.0f : ((pan > 1.0f) ? 1.0f : pan);
@@ -776,11 +797,63 @@ static NSString* const kTrailerFileName = @"trailer.mp4";
     return NO;
 }
 
+- (void)excludePathFromiCloudBackup:(NSString*)path {
+    if (!path) return;
+    NSURL* url = [NSURL fileURLWithPath:path];
+    if (url) {
+        [url setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];
+    }
+}
+
+- (BOOL)requestUserDownloadConsentWithBytes:(long long)totalBytes fileCount:(int)fileCount {
+    if (totalBytes <= 0 || fileCount <= 0) return YES;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    __block BOOL approved = NO;
+    double sizeMb = (double)totalBytes / (1024.0 * 1024.0);
+
+    [self updateUIStatus:@"بانتظار الموافقة على تحميل التحديث..."
+                  detail:[NSString stringWithFormat:@"حجم التحميل المطلوب: %.1f MB", sizeMb]
+                progress:0.0f
+               showRetry:NO];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString* msg = [NSString stringWithFormat:
+            @"تحتاج اللعبة إلى تحميل ملفات إضافية (%d ملف) بحجم إجمالي %.1f MB لتشغيل اللعبة.\n\nيُنصح بالاتصال بشبكة Wi-Fi. هل تريد بدء التحميل الآن؟",
+            fileCount, sizeMb];
+
+        UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"تحديث ملفات اللعبة - World Online"
+                                                                       message:msg
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+
+        [alert addAction:[UIAlertAction actionWithTitle:@"تحميل الآن"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction* action) {
+            approved = YES;
+            dispatch_semaphore_signal(sem);
+        }]];
+
+        [alert addAction:[UIAlertAction actionWithTitle:@"لاحقاً"
+                                                  style:UIAlertActionStyleCancel
+                                                handler:^(UIAlertAction* action) {
+            approved = NO;
+            dispatch_semaphore_signal(sem);
+        }]];
+
+        [self presentViewController:alert animated:YES completion:nil];
+    });
+
+    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    return approved;
+}
+
 - (void)runPatchWorker {
     NSString* base = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    [self excludePathFromiCloudBackup:base];
     NSFileManager* fm = [NSFileManager defaultManager];
     for (NSString* d in @[@"UserData", @"UserData/environment", @"shop", @"temp", @"upload", @"mark"]) {
-        [fm createDirectoryAtPath:[base stringByAppendingPathComponent:d] withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString* subPath = [base stringByAppendingPathComponent:d];
+        [fm createDirectoryAtPath:subPath withIntermediateDirectories:YES attributes:nil error:nil];
+        [self excludePathFromiCloudBackup:subPath];
     }
 
     NSData* mData = [self fetchManifest:[NSString stringWithFormat:@"%@manifest.json?t=%lld", kPatchBaseUrl, (long long)([[NSDate date] timeIntervalSince1970] * 1000)]];
@@ -839,6 +912,16 @@ static NSString* const kTrailerFileName = @"trailer.mp4";
 
     [def setObject:cache forKey:kPatchCachePrefKey];
     [def synchronize];
+
+    if (todo.count > 0 && totalBytes > 0) {
+        if (![self requestUserDownloadConsentWithBytes:totalBytes fileCount:(int)todo.count]) {
+            [self updateUIStatus:@"تم إلغاء التحميل."
+                          detail:@"اضغط على إعادة المحاولة لتحميل ملفات اللعبة."
+                        progress:0.0f
+                       showRetry:YES];
+            return;
+        }
+    }
 
     long long doneBytes = 0;
     for (int i = 0; i < (int)todo.count; ++i) {

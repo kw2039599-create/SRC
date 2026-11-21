@@ -368,12 +368,12 @@ static void PlayMobilePositional3DSound(float fx, float fy, float fz, float lx, 
 	if (baseVol <= 0.001f || !c_szFileName || !*c_szFileName)
 		return;
 
-	// If listener position has not been updated yet, fall back to the active camera target (main player)
-	if (fabsf(lx) < 1.0f && fabsf(ly) < 1.0f)
+	// Anchor 3D sound distance to the camera target (main character) so zooming out the mobile camera doesn't mute nearby hits
+	if (CCamera* pCam = CCameraManager::Instance().GetCurrentCamera())
 	{
-		if (CCamera* pCam = CCameraManager::Instance().GetCurrentCamera())
+		const D3DXVECTOR3& v3Target = pCam->GetTarget();
+		if (fabsf(v3Target.x) > 1.0f || fabsf(v3Target.y) > 1.0f)
 		{
-			const D3DXVECTOR3& v3Target = pCam->GetTarget();
 			lx = v3Target.x;
 			ly = v3Target.y;
 			lz = v3Target.z;
@@ -489,12 +489,13 @@ void CSoundManager::PlayCharacterSound3D(float fx, float fy, float fz, const cha
 	{
 		static float s_fLimitDistance = 4500.0f * 4500.0f;
 		float lx = m_fxPosition, ly = m_fyPosition;
-		if (fabsf(lx) < 1.0f && fabsf(ly) < 1.0f)
+		if (CCamera* pCam = CCameraManager::Instance().GetCurrentCamera())
 		{
-			if (CCamera* pCam = CCameraManager::Instance().GetCurrentCamera())
+			const D3DXVECTOR3& v3Target = pCam->GetTarget();
+			if (fabsf(v3Target.x) > 1.0f || fabsf(v3Target.y) > 1.0f)
 			{
-				lx = pCam->GetTarget().x;
-				ly = pCam->GetTarget().y;
+				lx = v3Target.x;
+				ly = v3Target.y;
 			}
 		}
 		float fdx = (fx - lx) * (fx - lx);
@@ -505,10 +506,9 @@ void CSoundManager::PlayCharacterSound3D(float fx, float fy, float fz, const cha
 			return;
 
 		float fCurSec = CTimer::Instance().GetCurrentSecond();
-		// Only block duplicate triggers on the exact same frame (8ms) when bCheckFrequency is FALSE
-		float fMinInterval = bCheckFrequency ? 0.025f : 0.008f;
+		float fMinInterval = bCheckFrequency ? 0.025f : 0.006f;
 		auto itor = m_PlaySoundHistoryMap.find(c_szFileName);
-		if (m_PlaySoundHistoryMap.end() != itor && (fCurSec - itor->second) < fMinInterval)
+		if (m_PlaySoundHistoryMap.end() != itor && fCurSec >= itor->second && (fCurSec - itor->second) < fMinInterval)
 			return;
 
 		m_PlaySoundHistoryMap[c_szFileName] = fCurSec;

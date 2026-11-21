@@ -654,7 +654,7 @@ if(ANDROID)
         z
         m
     )
-    target_link_options(${MOBILE_TARGET} PRIVATE "-Wl,-error-limit=0" "-Wl,--strip-all")
+    target_link_options(${MOBILE_TARGET} PRIVATE "-Wl,-error-limit=0" "-Wl,--strip-all" "-Wl,-z,max-page-size=16384")
 elseif(APPLE)
     set_source_files_properties(android_compat/IOSBridge.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     target_link_libraries(${MOBILE_TARGET}
