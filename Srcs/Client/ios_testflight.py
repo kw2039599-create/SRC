@@ -125,6 +125,9 @@ def prepare_bundle():
     pl['UILaunchStoryboardName'] = 'LaunchScreen'
     pl['UIRequiresFullScreen'] = True
     pl['ITSAppUsesNonExemptEncryption'] = False
+    pl['UIFileSharingEnabled'] = False
+    pl['LSSupportsOpeningDocumentsInPlace'] = False
+    pl['NSMicrophoneUsageDescription'] = 'Microphone access is required for in-game voice chat.'
     pl['UIDeviceFamily'] = [1, 2]
     if not str(pl.get('DTSDKName', '')).startswith('iphoneos26'):
         pl['DTSDKName'] = 'iphoneos26.0'
@@ -135,8 +138,8 @@ def prepare_bundle():
         pl['DTXcodeBuild'] = '17A324'
         bp = f'{APP_PATH}/{EXEC_NAME}'
         subprocess.check_call(['xcrun', 'vtool', '-set-build-version', 'ios', '15.0', '26.0', '-tool', 'ld', '1221.4', '-replace', '-output', bp, bp])
-    orient = ['UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight', 'UIInterfaceOrientationPortrait', 'UIInterfaceOrientationPortraitUpsideDown']
-    pl['UISupportedInterfaceOrientations'] = orient[:2]
+    orient = ['UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight']
+    pl['UISupportedInterfaceOrientations'] = orient
     pl['UISupportedInterfaceOrientations' + chr(126) + 'ipad'] = orient
     plistlib.dump(pl, open(ip_path, 'wb'))
     subprocess.check_call(['plutil', '-convert', 'binary1', ip_path])

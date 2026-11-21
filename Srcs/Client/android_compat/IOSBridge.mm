@@ -397,6 +397,15 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
 }
 
 - (BOOL)textField:(UITextField*)textField shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString*)string {
+    if (string.length == 0 && range.length > 0) {
+        for (NSUInteger i = 0; i < range.length; ++i) {
+            Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 67, 8);
+        }
+        if (textField.text.length < 16) {
+            textField.text = @"                                                                ";
+        }
+        return NO;
+    }
     for (NSUInteger i = 0; i < string.length; ++i) {
         unichar ch = [string characterAtIndex:i];
         Java_com_worldonline_client_NativeLib_keyEvent(nullptr, nullptr, 0, (int)ch);
@@ -879,7 +888,7 @@ static NSString* const kTrailerFileName = @"trailer.mp4";
         NSDictionary* it = files[i];
         NSString* rel = it[@"path"];
         NSString* lowerRel = [rel lowercaseString];
-        if ([lowerRel hasSuffix:@".apk"] || [lowerRel hasSuffix:@".exe"] || [lowerRel hasSuffix:@".dll"] || [lowerRel hasSuffix:@".so"])
+        if ([lowerRel hasSuffix:@".apk"] || [lowerRel hasSuffix:@".exe"] || [lowerRel hasSuffix:@".dll"] || [lowerRel hasSuffix:@".so"] || [lowerRel hasSuffix:@".pyd"])
             continue;
         long long sz = [it[@"size"] longLongValue];
         NSString* md5 = [it[@"md5"] lowercaseString];
