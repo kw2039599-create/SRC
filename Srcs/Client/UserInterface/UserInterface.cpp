@@ -798,7 +798,7 @@ bool Main(HINSTANCE hInstance, LPSTR lpCmdLine)
 	OpenConsoleWindow();
 	OpenLogFile(true); // true == uses syserr.txt and log.txt
 #else
-	OpenLogFile(true); // false == uses syserr.txt only
+	OpenLogFile(false); // false == uses syserr.txt only (no log.txt)
 #endif
 
 	static CLZO				lzo;

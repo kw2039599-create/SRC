@@ -1484,9 +1484,9 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
     if (FILE* fp = fopen("lib/python2.7/config/Makefile", "a")) fclose(fp);
     if (FILE* fp = fopen("include/python2.7/pyconfig.h", "a")) fclose(fp);
 
-    // 1. Open log.txt and syserr.txt
-    SetLogLevel(1);
-    InstallAndroidCrashHandler(); g_szCrashStage = "Init: OpenLogFile"; OpenLogFile(true);
+    // 1. Open syserr.txt only (disable verbose log.txt for release)
+    SetLogLevel(0);
+    InstallAndroidCrashHandler(); g_szCrashStage = "Init: OpenLogFile"; OpenLogFile(false);
     InstallAndroidCrashHandler();
     Tracen("worldonline Mobile: Log initialized [BUILD v5 - IOS FIX].");
 
