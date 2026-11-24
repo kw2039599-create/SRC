@@ -1120,13 +1120,25 @@ bool CPythonApplication::Process()
 #ifdef __ANDROID__
 				if (s_iAndroidFrame <= 30)
 					Tracenf("[Frame %d] Before OnUIRender", s_iAndroidFrame);
+				{
+					extern int g_AndroidRawTouchX;
+					extern int g_AndroidRawTouchY;
+					PyObject* pBuiltin = PyImport_AddModule("__builtin__");
+					if (pBuiltin && PyObject_HasAttrString(pBuiltin, "_UpdateMobileAttachedGhost"))
+					{
+						PyObject* pRes = PyObject_CallMethod(pBuiltin, "_UpdateMobileAttachedGhost", "(ii)", g_AndroidRawTouchX, g_AndroidRawTouchY);
+						Py_XDECREF(pRes);
+					}
+					if (PyErr_Occurred())
+						PyErr_Clear();
+				}
 #endif
 				OnUIRender();
 #ifdef __ANDROID__
-				if (s_iAndroidFrame <= 30)
-					Tracenf("[Frame %d] Before OnMouseRender", s_iAndroidFrame);
-#endif
+				m_bCursorVisible = FALSE;
+#else
 				OnMouseRender();
+#endif
 				/////////////////////
 
 				m_pyGraphic.End();

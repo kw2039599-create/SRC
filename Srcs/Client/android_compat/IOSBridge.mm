@@ -161,6 +161,34 @@ extern "C" void IOSToggleSoftKeyboard(bool show) {
     });
 }
 
+extern "C" void IOSOpenURL(const char* urlStr) {
+    if (!urlStr || !*urlStr) return;
+    NSString* nsUrl = [NSString stringWithUTF8String:urlStr];
+    if (!nsUrl) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSURL* url = [NSURL URLWithString:nsUrl];
+        if (url) {
+            [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+        }
+    });
+}
+
+extern "C" void IOSCloseApp() {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIApplication* app = [UIApplication sharedApplication];
+        SEL suspendSel = NSSelectorFromString(@"suspend");
+        if ([app respondsToSelector:suspendSel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [app performSelector:suspendSel];
+#pragma clang diagnostic pop
+        }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            _exit(0);
+        });
+    });
+}
+
 extern "C" void IOSSetMusicVolume(float volume) {
     if (s_bgmAudioPlayer) {
         s_bgmAudioPlayer.volume = (volume < 0.0f) ? 0.0f : ((volume > 1.0f) ? 1.0f : volume);

@@ -56,6 +56,8 @@ extern "C" {
     bool IOSDecodeImageFromMemory(const void* data, unsigned int size, unsigned int* outW, unsigned int* outH, std::vector<uint32_t>& outBGRA);
     bool IOSRenderCharGlyph(int pxSize, unsigned short ch, int* outW, int* outH, int* outAdv, uint32_t* outPixels64);
     void IOSToggleSoftKeyboard(bool show);
+    void IOSOpenURL(const char* urlStr);
+    void IOSCloseApp();
     void IOSSetMusicVolume(float volume);
     void IOSStopMusic();
     void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float volume);
@@ -247,6 +249,8 @@ int g_AndroidScreenWidth = 1280;
 int g_AndroidScreenHeight = 720;
 int g_AndroidMouseX = 640;
 int g_AndroidMouseY = 360;
+int g_AndroidRawTouchX = 640;
+int g_AndroidRawTouchY = 360;
 static JavaVM* g_pJavaVM = nullptr;
 
 #ifdef ENABLE_VOICE_CHAT
@@ -863,6 +867,46 @@ void MobileVoiceChat_PollCapturedSamples(VoiceChat* pVoiceChat) {
 #endif // ENABLE_VOICE_CHAT
 
 bool AndroidDecodeImageFromMemory(const void* data, unsigned int size, unsigned int* outW, unsigned int* outH, std::vector<uint32_t>& outBGRA) {
+    // Fast native decoder for 1-bit monochrome BMPs (such as CMonochromeCanvas 128x128 BotKiller Captcha)
+    if (data && size >= 62 && outW && outH) {
+        const uint8_t* b = static_cast<const uint8_t*>(data);
+        if (b[0] == 'B' && b[1] == 'M') {
+            uint32_t pixelOffset = 0;
+            int32_t bmpW = 0, bmpH = 0;
+            uint16_t planes = 0, bpp = 0;
+            memcpy(&pixelOffset, b + 10, 4);
+            memcpy(&bmpW, b + 18, 4);
+            memcpy(&bmpH, b + 22, 4);
+            memcpy(&planes, b + 26, 2);
+            memcpy(&bpp, b + 28, 2);
+            bool topDown = (bmpH < 0);
+            int32_t absH = topDown ? -bmpH : bmpH;
+            if (planes == 1 && bpp == 1 && bmpW > 0 && bmpW <= 1024 && absH > 0 && absH <= 1024 && pixelOffset <= size) {
+                uint32_t c0 = 0xFF000000u, c1 = 0xFFFFFFFFu;
+                if (pixelOffset >= 62) {
+                    c0 = 0xFF000000u | (uint32_t(b[56]) << 16) | (uint32_t(b[55]) << 8) | uint32_t(b[54]);
+                    c1 = 0xFF000000u | (uint32_t(b[60]) << 16) | (uint32_t(b[59]) << 8) | uint32_t(b[58]);
+                }
+                uint32_t rowStride = ((uint32_t(bmpW) + 31u) / 32u) * 4u;
+                if (pixelOffset + rowStride * uint32_t(absH) <= size) {
+                    *outW = (unsigned int)bmpW;
+                    *outH = (unsigned int)absH;
+                    outBGRA.resize((size_t)bmpW * (size_t)absH);
+                    const uint8_t* pix = b + pixelOffset;
+                    for (int32_t y = 0; y < absH; ++y) {
+                        int32_t srcY = topDown ? y : (absH - 1 - y);
+                        const uint8_t* row = pix + (size_t)srcY * rowStride;
+                        uint32_t* dst = &outBGRA[(size_t)y * (size_t)bmpW];
+                        for (int32_t x = 0; x < bmpW; ++x) {
+                            uint8_t bit = (row[x >> 3] >> (7 - (x & 7))) & 1u;
+                            dst[x] = bit ? c1 : c0;
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
+    }
 #ifdef __APPLE__
     return IOSDecodeImageFromMemory(data, size, outW, outH, outBGRA);
 #else
@@ -1732,6 +1776,58 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
         "    except:\n"
         "        return 0\n"
         "__builtin__._MobileUpdateTouchScroll = _MobileUpdateTouchScroll\n"
+        "__builtin__._g_mobileGhostImg = None\n"
+        "def _UpdateMobileAttachedGhost(rx, ry):\n"
+        "    try:\n"
+        "        import mouseModule, ui, item, player\n"
+        "        mc = getattr(mouseModule, 'mouseController', None)\n"
+        "        if mc is not None:\n"
+        "            mc.Render = lambda *a: None\n"
+        "            nl = getattr(mc, 'NumberLine', None)\n"
+        "            if nl is not None and nl.IsShow():\n"
+        "                nl.Hide()\n"
+        "        if mc is None or not mc.isAttached():\n"
+        "            if __builtin__._g_mobileGhostImg is not None and __builtin__._g_mobileGhostImg.IsShow():\n"
+        "                __builtin__._g_mobileGhostImg.Hide()\n"
+        "            return\n"
+        "        vnum = int(mc.GetAttachedItemIndex())\n"
+        "        cnt = int(mc.GetAttachedItemCount())\n"
+        "        attType = int(mc.GetAttachedType())\n"
+        "        if vnum <= 0 or attType != player.SLOT_TYPE_INVENTORY:\n"
+        "            if __builtin__._g_mobileGhostImg is not None and __builtin__._g_mobileGhostImg.IsShow():\n"
+        "                __builtin__._g_mobileGhostImg.Hide()\n"
+        "            return\n"
+        "        gImg = __builtin__._g_mobileGhostImg\n"
+        "        if gImg is None:\n"
+        "            gImg = ui.ExpandedImageBox('TOP_MOST')\n"
+        "            gImg.AddFlag('not_pick')\n"
+        "            gImg.AddFlag('float')\n"
+        "            gImg._lastVnum = -1\n"
+        "            cntTxt = ui.TextLine()\n"
+        "            cntTxt.SetParent(gImg)\n"
+        "            cntTxt.AddFlag('not_pick')\n"
+        "            cntTxt.SetOutline()\n"
+        "            gImg.cntTxt = cntTxt\n"
+        "            __builtin__._g_mobileGhostImg = gImg\n"
+        "        if getattr(gImg, '_lastVnum', -1) != vnum:\n"
+        "            item.SelectItem(vnum)\n"
+        "            gImg.LoadImage(item.GetIconImageFileName())\n"
+        "            gImg._lastVnum = vnum\n"
+        "        gw = max(32, gImg.GetWidth())\n"
+        "        gh = max(32, gImg.GetHeight())\n"
+        "        gImg.SetPosition(int(rx - gw / 2), int(ry - gh / 2))\n"
+        "        if cnt > 1:\n"
+        "            gImg.cntTxt.SetText(str(cnt))\n"
+        "            gImg.cntTxt.SetPosition(gw - 14, gh - 14)\n"
+        "            gImg.cntTxt.Show()\n"
+        "        else:\n"
+        "            gImg.cntTxt.Hide()\n"
+        "        if not gImg.IsShow():\n"
+        "            gImg.Show()\n"
+        "        gImg.SetTop()\n"
+        "    except:\n"
+        "        pass\n"
+        "__builtin__._UpdateMobileAttachedGhost = _UpdateMobileAttachedGhost\n"
         "_orig_init_builtin = imp.init_builtin\n"
         "def _fast_init_builtin(name):\n"
         "    m = sys.modules.get(name)\n"
@@ -1824,8 +1920,18 @@ enum EMobileIconType {
     MICON_CHAT_BUBBLE = 8,
     MICON_PLUS = 9,
     MICON_MINUS = 10,
-    MICON_MAP_PIN = 11
+    MICON_MAP_PIN = 11,
+    MICON_EMOTE_SMILEY = 12,
+    MICON_AUTO_COMBAT = 13,
+    MICON_QUEST_SCROLL = 14
 };
+
+// Deterministic 2D hash for fine chiseled stone surface grain
+static inline float StoneGrainNoise(int x, int y) {
+    uint32_t n = (uint32_t)(x * 374761393u + y * 668265263u);
+    n = (n ^ (n >> 13)) * 1274126177u;
+    return ((float)(n & 0xFFu) / 255.0f) - 0.5f; // -0.5 .. +0.5
+}
 
 static void WriteMobileRingTGA(const char* path, int size, float outerR, float rimW, float glassAlpha,
                                float rr, float rg, float rb, float ar, float ag, float ab,
@@ -1849,6 +1955,9 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
     float half = size * 0.5f;
     size_t idx = 0;
 
+    // Razor-thin stone bezel (no thick golden tires)
+    float thinRimW = fmaxf(1.6f, rimW * 0.38f);
+
     for (int y = 0; y < size; ++y) {
         float py = (y + 0.5f) - half;
         float ny = py / outerR;
@@ -1856,243 +1965,318 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
             float px = (x + 0.5f) - half;
             float nx = px / outerR;
             float d = hypotf(px, py);
+            float grain = StoneGrainNoise(x, y);
 
-            float r = 12.0f, g = 16.0f, b = 24.0f, a = 0.0f;
+            float r = 8.0f, g = 8.0f, b = 10.0f, a = 0.0f;
 
-            if (d < outerR + 3.5f) {
-                float sh = 1.0f - SmoothStepF(outerR - 1.0f, outerR + 3.5f, d);
-                if (isPressed) {
-                    r = ar * 0.65f; g = ag * 0.65f; b = ab * 0.65f;
-                    a = sh * 125.0f;
-                } else {
-                    a = sh * 85.0f;
-                }
+            // 1. Soft Outer Drop-Shadow
+            if (d < outerR + 3.0f) {
+                float sh = 1.0f - SmoothStepF(outerR - 0.5f, outerR + 3.0f, d);
+                a = sh * (isPressed ? 165.0f : 125.0f);
             }
 
-            float innerEdge = outerR - rimW;
+            float innerEdge = outerR - thinRimW;
             if (d <= outerR) {
-                float bodyMask = 1.0f - SmoothStepF(outerR - 1.2f, outerR + 0.4f, d);
-                float radRatio = d / (innerEdge > 1.0f ? innerEdge : 1.0f);
-                float sheen = fmaxf(0.0f, -0.55f * nx - 0.65f * ny);
-                if (isPressed) {
-                    r = 28.0f + ar * 0.28f + sheen * 40.0f;
-                    g = 34.0f + ag * 0.28f + sheen * 44.0f;
-                    b = 46.0f + ab * 0.28f + sheen * 50.0f;
-                    a = fmaxf(a, bodyMask * fminf(235.0f, glassAlpha + 50.0f));
-                } else {
-                    float vig = 0.70f + 0.30f * (radRatio * radRatio);
-                    r = (14.0f + sheen * 28.0f) * vig;
-                    g = (19.0f + sheen * 34.0f) * vig;
-                    b = (28.0f + sheen * 44.0f) * vig;
+                float bodyMask = 1.0f - SmoothStepF(outerR - 1.0f, outerR + 0.4f, d);
+                float radRatio = fminf(1.0f, d / (innerEdge > 1.0f ? innerEdge : 1.0f));
+                float sphereZ = sqrtf(fmaxf(0.0f, 1.0f - radRatio * radRatio));
+
+                if (iconType == MICON_JOY_KNOB) {
+                    // Frosted Pearl-White 3D Translucent Thumb Stick
+                    float pearlSpec = powf(fmaxf(0.0f, -0.42f * nx - 0.58f * ny + sphereZ * 0.68f), 2.4f);
+                    float topDome = SmoothStepF(-0.15f, -0.82f, ny) * (1.0f - SmoothStepF(0.0f, 0.85f, fabsf(nx)));
+                    float edgeRim = SmoothStepF(0.60f, 0.98f, radRatio);
+                    r = 214.0f + pearlSpec * 41.0f + topDome * 22.0f;
+                    g = 220.0f + pearlSpec * 35.0f + topDome * 20.0f;
+                    b = 230.0f + pearlSpec * 25.0f + topDome * 18.0f;
+                    float knobAlpha = (0.60f + 0.40f * pearlSpec + 0.35f * edgeRim) * (isPressed ? 252.0f : 230.0f);
+                    a = fmaxf(a, bodyMask * fminf(254.0f, knobAlpha));
+                } else if (iconType == MICON_JOY_BG) {
+                    // Smoked Dark-Slate Translucent Joystick Well
+                    float wellVig = 0.45f + 0.55f * (radRatio * radRatio);
+                    float topCrescent = SmoothStepF(-0.20f, -0.88f, ny) * SmoothStepF(0.95f, 0.45f, radRatio) * 0.35f;
+                    r = 16.0f * wellVig + topCrescent * 85.0f;
+                    g = 17.0f * wellVig + topCrescent * 88.0f;
+                    b = 20.0f * wellVig + topCrescent * 95.0f;
                     a = fmaxf(a, bodyMask * glassAlpha);
+                } else {
+                    // 3D Chiseled Dark Stone-Slate Sphere Interior + Top Glass Crescent Shade (No Red/Crimson!)
+                    float botStone = SmoothStepF(-0.15f, 0.88f, ny) * (0.30f + 0.70f * powf(radRatio, 1.25f));
+                    float boost = isPressed ? 1.45f : 1.0f;
+                    float stoneTex = grain * 10.0f;
+
+                    r = (16.0f + botStone * 28.0f) * boost + stoneTex;
+                    g = (17.0f + botStone * 30.0f) * boost + stoneTex;
+                    b = (20.0f + botStone * 35.0f) * boost + stoneTex;
+
+                    float crescentEnv = hypotf(nx * 1.12f, (ny + 0.46f) * 1.75f);
+                    float topCrescent = (1.0f - SmoothStepF(0.18f, 0.78f, crescentEnv)) * SmoothStepF(-0.05f, -0.78f, ny);
+                    float hotSpot = powf(fmaxf(0.0f, -0.45f * nx - 0.65f * ny + sphereZ * 0.35f), 4.5f);
+                    float glassShade = fminf(1.0f, topCrescent * 0.56f + hotSpot * 0.48f);
+
+                    r = r * (1.0f - glassShade * 0.50f) + 236.0f * (glassShade * 0.50f);
+                    g = g * (1.0f - glassShade * 0.50f) + 240.0f * (glassShade * 0.50f);
+                    b = b * (1.0f - glassShade * 0.50f) + 248.0f * (glassShade * 0.50f);
+
+                    float innerVig = SmoothStepF(0.76f, 0.99f, radRatio) * (1.0f - 0.5f * topCrescent);
+                    r *= (1.0f - innerVig * 0.52f);
+                    g *= (1.0f - innerVig * 0.52f);
+                    b *= (1.0f - innerVig * 0.52f);
+
+                    a = fmaxf(a, bodyMask * fminf(250.0f, glassAlpha + glassShade * 24.0f + (isPressed ? 18.0f : 0.0f)));
                 }
             }
 
-            float rimDist = fabsf(d - (outerR - rimW * 0.5f));
-            if (rimDist < rimW * 0.70f) {
-                float rimMask = 1.0f - SmoothStepF(rimW * 0.25f, rimW * 0.70f, rimDist);
-                float lGrad = 0.65f + 0.35f * (-0.6f * nx - 0.8f * ny);
-                float cr = isPressed ? (ar * 0.9f + 25.0f) : (rr * lGrad);
-                float cg = isPressed ? (ag * 0.9f + 25.0f) : (rg * lGrad);
-                float cb = isPressed ? (ab * 0.9f + 25.0f) : (rb * lGrad);
-                r = r * (1.0f - rimMask) + cr * rimMask;
-                g = g * (1.0f - rimMask) + cg * rimMask;
-                b = b * (1.0f - rimMask) + cb * rimMask;
-                a = fmaxf(a, rimMask * 245.0f);
-            }
-
-            float irDist = fabsf(d - (outerR - rimW - 3.2f));
-            if (irDist < 1.4f) {
-                float irMask = (1.0f - irDist / 1.4f) * 0.45f;
-                r = r * (1.0f - irMask) + ar * irMask;
-                g = g * (1.0f - irMask) + ag * irMask;
-                b = b * (1.0f - irMask) + ab * irMask;
-                a = fmaxf(a, irMask * 185.0f);
-            }
-
-            float iconMask = 0.0f;
-            if (iconType == MICON_JOY_BG) {
-                float recDist = fabsf(d - outerR * 0.42f);
-                if (recDist < 1.4f) iconMask = (1.0f - recDist / 1.4f) * 0.38f;
-                const float angles[4] = { 0.0f, 1.570796f, 3.141592f, 4.712389f };
-                for (int k = 0; k < 4; ++k) {
-                    float ca = cosf(angles[k]), sa = sinf(angles[k]);
-                    float tx = px * ca + py * sa;
-                    float ty = -px * sa + py * ca;
-                    if (tx >= outerR * 0.66f && tx <= outerR * 0.82f) {
-                        float span = (outerR * 0.82f - tx) * 0.65f;
-                        float edge = fabsf(ty) - span;
-                        if (edge < 1.2f)
-                            iconMask = fmaxf(iconMask, (1.0f - SmoothStepF(-0.4f, 1.2f, edge)) * 0.82f);
-                    }
-                }
-            } else if (iconType == MICON_JOY_KNOB) {
-                float cRing = fabsf(d - outerR * 0.48f);
-                if (cRing < 1.9f) iconMask = (1.0f - cRing / 1.9f) * (isPressed ? 0.90f : 0.60f);
-                if (d < outerR * 0.24f)
-                    iconMask = fmaxf(iconMask, (1.0f - SmoothStepF(outerR * 0.08f, outerR * 0.24f, d)) * 0.95f);
-            } else if (iconType == MICON_ATK_SWORDS) {
-                float s = outerR / 56.0f;
-                // 1. Cardinal diamond notches on the outer bezel + inner runic combat ring
-                float notchX = fabsf(px), notchY = fabsf(py);
-                float cardD = fminf(hypotf(notchX, notchY - (outerR - rimW * 0.5f)),
-                                    hypotf(notchX - (outerR - rimW * 0.5f), notchY));
-                if (cardD < 4.2f * s)
-                    iconMask = fmaxf(iconMask, (1.0f - SmoothStepF(2.2f * s, 4.2f * s, cardD)) * 0.90f);
-
-                float runeRing = fabsf(d - 38.0f * s);
-                if (runeRing < 1.5f * s) {
-                    float dash = sinf(atan2f(py, px) * 12.0f);
-                    if (dash > -0.2f)
-                        iconMask = fmaxf(iconMask, (1.0f - runeRing / (1.5f * s)) * 0.42f);
+            // 2. Thin Chiseled Stone-Slate Bezel Rim (with procedural stone grain texture)
+            if (iconType != MICON_JOY_KNOB) {
+                float rimCenter = outerR - thinRimW * 0.5f;
+                float rimDist = fabsf(d - rimCenter);
+                if (rimDist < thinRimW * 0.90f) {
+                    float rimMask = 1.0f - SmoothStepF(thinRimW * 0.25f, thinRimW * 0.90f, rimDist);
+                    float lGrad = 0.55f + 0.45f * (-0.55f * nx - 0.83f * ny);
+                    float stoneTex = grain * 26.0f;
+                    float specHighlight = powf(fmaxf(0.0f, -0.58f * nx - 0.81f * ny), 4.0f) * 45.0f;
+                    float cr = fminf(255.0f, fmaxf(20.0f, (isPressed ? ar : rr) * lGrad + stoneTex + specHighlight));
+                    float cg = fminf(255.0f, fmaxf(20.0f, (isPressed ? ag : rg) * lGrad + stoneTex + specHighlight));
+                    float cb = fminf(255.0f, fmaxf(22.0f, (isPressed ? ab : rb) * lGrad + stoneTex + specHighlight));
+                    r = r * (1.0f - rimMask) + cr * rimMask;
+                    g = g * (1.0f - rimMask) + cg * rimMask;
+                    b = b * (1.0f - rimMask) + cb * rimMask;
+                    a = fmaxf(a, rimMask * 252.0f);
                 }
 
-                // 2. Two crossed tapered broadswords (45-deg and 135-deg)
-                auto EvalSword = [&](float sx, float sy) -> float {
-                    // Rotate into sword-local space where u is along the blade (-26..+28) and v is perpendicular
-                    float m = 0.0f;
-                    // Tapered broadsword blade (u from -6 to +27)
-                    if (sx >= -6.0f * s && sx <= 27.5f * s) {
-                        float t = (sx + 6.0f * s) / (33.5f * s); // 0 at guard, 1 at tip
-                        float halfW = (t < 0.78f)
-                            ? (3.6f * s + t * 0.6f * s)
-                            : ((1.0f - (t - 0.78f) / 0.22f) * 4.1f * s);
-                        float absV = fabsf(sy);
-                        if (absV <= halfW + 1.0f * s) {
-                            float blade = 1.0f - SmoothStepF(fmaxf(0.0f, halfW - 0.9f * s), halfW + 0.9f * s, absV);
-                            // Central fuller (blood groove) for 3D metallic depth
-                            if (t > 0.06f && t < 0.72f && absV < 0.95f * s)
-                                blade *= 0.38f;
-                            m = fmaxf(m, blade);
+                float grooveDist = fabsf(d - (innerEdge - 1.0f));
+                if (grooveDist < 1.1f) {
+                    float gm = (1.0f - grooveDist / 1.1f) * 0.72f;
+                    r *= (1.0f - gm); g *= (1.0f - gm); b *= (1.0f - gm);
+                }
+            }
+
+            // 3. Crisp Sculpted Vector Icons (Polished Steel-Silver & Warm Ivory)
+            auto EvalIconDetail = [&](float ix, float iy, float& outTone) -> float {
+                outTone = 1.0f;
+                float id = hypotf(ix, iy);
+                float m = 0.0f;
+                if (iconType == MICON_JOY_BG) {
+                    float recDist = fabsf(id - outerR * 0.44f);
+                    if (recDist < 1.2f) m = (1.0f - recDist / 1.2f) * 0.20f;
+                } else if (iconType == MICON_JOY_KNOB) {
+                    float cRing = fabsf(id - outerR * 0.56f);
+                    if (cRing < 1.5f) m = (1.0f - cRing / 1.5f) * 0.38f;
+                } else if (iconType == MICON_ATK_SWORDS) {
+                    float s = outerR / 56.0f;
+                    float ax = fabsf(ix), ay = fabsf(iy);
+                    float rimInner = (outerR - thinRimW) / s;
+
+                    // 1. 4 Sculpted Cardinal Compass Spikes on the Inner Bezel + Concentric Combat Ring
+                    if (ay >= (rimInner - 6.8f) * s && ay <= (rimInner + 0.4f) * s) {
+                        float t = ((rimInner + 0.4f) * s - ay) / (7.2f * s);
+                        float halfW = (1.0f - t) * 3.8f * s;
+                        if (ax <= halfW + 0.7f * s) {
+                            m = fmaxf(m, 1.0f - SmoothStepF(fmaxf(0.0f, halfW - 0.5f * s), halfW + 0.7f * s, ax));
+                            outTone = (ix * iy >= 0.0f) ? 1.18f : 0.82f;
                         }
                     }
-                    // Flared winged crossguard (u around -7.5, v from -13 to +13)
-                    float guardCurve = -7.2f * s + (sy * sy) / (42.0f * s);
-                    float gDist = fabsf(sx - guardCurve);
-                    if (fabsf(sy) <= 13.5f * s) {
-                        float gThick = (2.4f - 0.08f * (fabsf(sy) / s)) * s;
-                        if (gDist <= gThick + 0.8f * s)
-                            m = fmaxf(m, 1.0f - SmoothStepF(fmaxf(0.0f, gThick - 0.6f * s), gThick + 0.8f * s, gDist));
+                    if (ax >= (rimInner - 6.8f) * s && ax <= (rimInner + 0.4f) * s) {
+                        float t = ((rimInner + 0.4f) * s - ax) / (7.2f * s);
+                        float halfW = (1.0f - t) * 3.8f * s;
+                        if (ay <= halfW + 0.7f * s) {
+                            m = fmaxf(m, 1.0f - SmoothStepF(fmaxf(0.0f, halfW - 0.5f * s), halfW + 0.7f * s, ay));
+                            outTone = (ix * iy >= 0.0f) ? 1.18f : 0.82f;
+                        }
                     }
-                    // Wrapped hilt grip (u from -18.5 to -8)
-                    if (sx >= -18.5f * s && sx <= -7.5f * s && fabsf(sy) <= 2.3f * s) {
-                        m = fmaxf(m, 1.0f - SmoothStepF(1.4f * s, 2.3f * s, fabsf(sy)));
+
+                    float runeRing = fabsf(id - 41.5f * s);
+                    if (runeRing < 1.3f * s) {
+                        m = fmaxf(m, (1.0f - runeRing / (1.3f * s)) * 0.40f);
                     }
-                    // Faceted round pommel (centered at u = -21.5, v = 0)
-                    float pomD = hypotf(sx + 21.5f * s, sy);
-                    if (pomD <= 4.2f * s) {
-                        m = fmaxf(m, 1.0f - SmoothStepF(2.8f * s, 4.2f * s, pomD));
+
+                    // Two Clean Crossed Tapered Broadswords
+                    auto EvalSword = [&](float sx, float sy, float& sTone) -> float {
+                        float sm = 0.0f;
+                        sTone = 1.0f;
+                        if (sx >= -6.0f * s && sx <= 27.5f * s) {
+                            float t = (sx + 6.0f * s) / (33.5f * s);
+                            float halfW = (t < 0.78f)
+                                ? (3.5f * s + t * 0.65f * s)
+                                : ((1.0f - (t - 0.78f) / 0.22f) * 4.15f * s);
+                            float absV = fabsf(sy);
+                            if (absV <= halfW + 0.9f * s) {
+                                sm = 1.0f - SmoothStepF(fmaxf(0.0f, halfW - 0.8f * s), halfW + 0.9f * s, absV);
+                                if (t > 0.06f && t < 0.72f && absV < 0.85f * s)
+                                    sTone = 0.42f;
+                                else
+                                    sTone = (sy < 0.0f) ? 1.18f : 0.84f;
+                            }
+                        }
+                        float guardCurve = -7.2f * s + (sy * sy) / (42.0f * s);
+                        if (fabsf(sy) <= 13.5f * s) {
+                            float gThick = (2.4f - 0.08f * (fabsf(sy) / s)) * s;
+                            float gDist = fabsf(sx - guardCurve);
+                            if (gDist <= gThick + 0.8f * s) {
+                                float gm = 1.0f - SmoothStepF(fmaxf(0.0f, gThick - 0.6f * s), gThick + 0.8f * s, gDist);
+                                if (gm > sm) { sm = gm; sTone = 1.10f; }
+                            }
+                        }
+                        if (sx >= -18.5f * s && sx <= -7.5f * s && fabsf(sy) <= 2.2f * s) {
+                            float hm = 1.0f - SmoothStepF(1.4f * s, 2.2f * s, fabsf(sy));
+                            if (hm > sm) { sm = hm; sTone = 0.68f; }
+                        }
+                        float pomD = hypotf(sx + 21.5f * s, sy);
+                        if (pomD <= 4.0f * s) {
+                            float pm = 1.0f - SmoothStepF(2.7f * s, 4.0f * s, pomD);
+                            if (pm > sm) { sm = pm; sTone = 1.12f; }
+                        }
+                        return sm;
+                    };
+
+                    float s1u = (ix - iy) * 0.70710678f, s1v = (ix + iy) * 0.70710678f;
+                    float s2u = (-ix - iy) * 0.70710678f, s2v = (ix - iy) * 0.70710678f;
+                    float t1 = 1.0f, t2 = 1.0f;
+                    float sw1 = EvalSword(s1u, s1v, t1);
+                    float sw2 = EvalSword(s2u, s2v, t2);
+                    if (sw1 > 0.08f) {
+                        if (sw1 >= m) { m = sw1; outTone = t1; }
+                    } else if (sw2 > 0.08f) {
+                        float underShadow = (fabsf(s1u) < 5.2f * s && fabsf(s1v) < 5.6f * s) ? 0.48f : 1.0f;
+                        if (sw2 * underShadow >= m) { m = sw2 * underShadow; outTone = t2 * underShadow; }
                     }
-                    return m;
-                };
+                } else if (iconType == MICON_MOUNT) {
+                    // Clean Sculpted Horse Head & Neck Silhouette (facing right)
+                    float ux = ix / (outerR / 28.0f);
+                    float uy = iy / (outerR / 28.0f);
+                    float hDist = 100.0f;
+                    hDist = fminf(hDist, DistToSegF(ux, uy, -6.5f, 11.2f,  4.5f, 11.2f) - 2.0f);
+                    hDist = fminf(hDist, DistToSegF(ux, uy, -3.2f,  9.5f, -4.2f, -1.5f) - 4.4f);
+                    hDist = fminf(hDist, DistToSegF(ux, uy, -4.2f, -1.5f, -1.5f, -7.5f) - 4.0f);
+                    hDist = fminf(hDist, hypotf(ux + 1.2f, uy + 6.5f) - 4.5f);
+                    hDist = fminf(hDist, DistToSegF(ux, uy,  0.0f, -6.8f,  9.2f, -2.5f) - 3.1f);
+                    hDist = fminf(hDist, DistToSegF(ux, uy, -1.0f, -3.8f,  6.5f, -1.5f) - 2.8f);
+                    hDist = fminf(hDist, DistToSegF(ux, uy, -2.2f, -9.0f, -0.5f,-13.8f) - 1.35f);
+                    hDist = fminf(hDist, DistToSegF(ux, uy, -4.2f, -8.2f, -3.5f,-12.8f) - 1.20f);
+                    hDist = fminf(hDist, DistToSegF(ux, uy, -6.2f, -6.5f, -8.5f,  2.5f) - 2.2f);
+                    hDist = fminf(hDist, DistToSegF(ux, uy, -8.2f,  1.5f, -7.2f,  8.5f) - 2.2f);
+                    if (hDist < 0.8f) {
+                        m = 1.0f - SmoothStepF(-0.5f, 0.8f, hDist);
+                        if (hypotf(ux - 1.2f, uy + 6.8f) < 1.15f || hypotf(ux - 7.8f, uy + 2.6f) < 0.85f)
+                            m *= 0.15f;
+                    }
+                } else if (iconType == MICON_LOOT) {
+                    // Clean Open Hand Silhouette (palm + thumb + 4 spread fingers)
+                    float ux = ix / (outerR / 28.0f);
+                    float uy = iy / (outerR / 28.0f);
+                    float palmD = hypotf(ux * 0.92f, (uy - 4.2f) * 1.05f) - 6.2f;
+                    float wristBox = fmaxf(fabsf(ux) - 4.2f, fabsf(uy - 8.5f) - 2.8f);
+                    float hDist = fminf(palmD, wristBox);
+                    hDist = fminf(hDist, DistToSegF(ux, uy, -4.5f,  4.5f, -10.5f, -1.5f) - 1.9f);
+                    hDist = fminf(hDist, DistToSegF(ux, uy, -4.2f,  0.5f,  -5.4f, -9.5f) - 1.65f);
+                    hDist = fminf(hDist, DistToSegF(ux, uy, -1.4f, -0.5f,  -1.6f,-11.8f) - 1.70f);
+                    hDist = fminf(hDist, DistToSegF(ux, uy,  1.6f,  0.0f,   2.2f,-10.5f) - 1.65f);
+                    hDist = fminf(hDist, DistToSegF(ux, uy,  4.3f,  1.5f,   5.6f, -7.2f) - 1.50f);
+                    if (hDist < 0.8f) {
+                        m = 1.0f - SmoothStepF(-0.5f, 0.8f, hDist);
+                        float crease = DistToSegF(ux, uy, -3.5f, 2.2f, 3.8f, 3.2f);
+                        if (crease < 0.7f) outTone = 0.55f;
+                    }
+                } else if (iconType == MICON_TARGET) {
+                    // Clean Crosshair Target Reticle
+                    float s = outerR / 28.0f;
+                    float rRing = fabsf(id - 11.0f * s);
+                    if (rRing < 1.8f * s) m = 1.0f - SmoothStepF(0.6f * s, 1.8f * s, rRing);
+                    if ((fabsf(ix) < 1.5f * s && fabsf(iy) >= 6.5f * s && fabsf(iy) <= 15.5f * s) ||
+                        (fabsf(iy) < 1.5f * s && fabsf(ix) >= 6.5f * s && fabsf(ix) <= 15.5f * s))
+                        m = fmaxf(m, 0.94f);
+                    if (id < 2.5f * s)
+                        m = fmaxf(m, 1.0f - SmoothStepF(1.0f * s, 2.5f * s, id));
+                } else if (iconType == MICON_PAGE) {
+                    float s = outerR / 28.0f;
+                    float orbD = fabsf(id - 13.0f * s);
+                    if (orbD < 1.8f * s && fabsf(ix) > 2.8f * s)
+                        m = 1.0f - SmoothStepF(0.7f * s, 1.8f * s, orbD);
+                } else if (iconType == MICON_CHAT_BUBBLE) {
+                    float s = outerR / 28.0f;
+                    float bd = hypotf(ix / (12.2f * s), (iy + 1.8f * s) / (9.6f * s));
+                    float tail = DistToSegF(ix, iy, -4.5f * s, 5.0f * s, -8.8f * s, 9.8f * s) - 2.2f * s;
+                    if (bd <= 1.0f || tail <= 0.0f) {
+                        m = (bd <= 1.0f) ? (1.0f - SmoothStepF(0.84f, 1.0f, bd)) : (1.0f - SmoothStepF(-1.0f * s, 0.5f * s, tail));
+                        if (fabsf(iy + 1.8f * s) < 1.5f * s && (fabsf(ix) < 1.5f * s || fabsf(fabsf(ix) - 5.4f * s) < 1.5f * s))
+                            m = 0.10f;
+                    }
+                } else if (iconType == MICON_EMOTE_SMILEY) {
+                    float s = outerR / 28.0f;
+                    float faceR = 13.2f * s;
+                    if (id <= faceR + 0.9f * s) {
+                        m = 1.0f - SmoothStepF(faceR - 0.8f * s, faceR + 0.9f * s, id);
+                        float eyeL = hypotf(ix + 4.5f * s, iy + 3.2f * s);
+                        float eyeR = hypotf(ix - 4.5f * s, iy + 3.2f * s);
+                        if (eyeL < 2.2f * s || eyeR < 2.2f * s)
+                            m *= 0.08f;
+                        float smileR = hypotf(ix, iy - 0.8f * s);
+                        if (iy > 1.0f * s && smileR <= 8.2f * s && smileR >= 3.0f * s)
+                            m *= 0.08f;
+                    }
+                } else if (iconType == MICON_AUTO_COMBAT) {
+                    float s = outerR / 28.0f;
+                    float d1 = DistToSegF(ix, iy, -9.8f * s, 9.8f * s, 9.8f * s, -9.8f * s);
+                    float d2 = DistToSegF(ix, iy, 9.8f * s, 9.8f * s, -9.8f * s, -9.8f * s);
+                    float g1 = DistToSegF(ix, iy, -8.5f * s, 2.5f * s, -2.5f * s, 8.5f * s);
+                    float g2 = DistToSegF(ix, iy, 2.5f * s, 8.5f * s, 8.5f * s, 2.5f * s);
+                    float ringA = (fabsf(id - 13.5f * s) < 1.4f * s && fabsf(ix) > 4.0f * s) ? 0.85f : 0.0f;
+                    float md = fminf(fminf(d1, d2), fminf(g1, g2));
+                    if (md < 2.0f * s)
+                        m = 1.0f - SmoothStepF(0.8f * s, 2.0f * s, md);
+                    m = fmaxf(m, ringA);
+                } else if (iconType == MICON_QUEST_SCROLL) {
+                    float s = outerR / 28.0f;
+                    float ax = fabsf(ix), ay = fabsf(iy);
+                    bool inBody = (ax <= 8.2f * s && ay <= 10.2f * s);
+                    bool inRod = (ax <= 10.2f * s && fabsf(ay - 9.6f * s) <= 1.6f * s);
+                    if (inBody || inRod) {
+                        m = 0.96f;
+                        float chk1 = DistToSegF(ix, iy, -3.6f * s, 0.5f * s, -0.8f * s, 3.6f * s);
+                        float chk2 = DistToSegF(ix, iy, -0.8f * s, 3.6f * s, 4.6f * s, -3.2f * s);
+                        if (fminf(chk1, chk2) < 1.8f * s)
+                            m = 0.08f;
+                    }
+                } else if (iconType == MICON_PLUS) {
+                    float s = outerR / 14.0f;
+                    if ((fabsf(ix) < 1.45f * s && fabsf(iy) < 6.2f * s) || (fabsf(iy) < 1.45f * s && fabsf(ix) < 6.2f * s))
+                        m = 0.96f;
+                } else if (iconType == MICON_MINUS) {
+                    float s = outerR / 14.0f;
+                    if (fabsf(iy) < 1.45f * s && fabsf(ix) < 6.2f * s)
+                        m = 0.96f;
+                } else if (iconType == MICON_MAP_PIN) {
+                    float s = outerR / 22.0f;
+                    float ringD = fabsf(hypotf(ix, iy + 3.0f * s) - 5.5f * s);
+                    if (ringD < 1.8f * s) m = 1.0f - SmoothStepF(0.6f * s, 1.8f * s, ringD);
+                    float tailD = DistToSegF(ix, iy, 0.0f, 3.0f * s, 0.0f, 9.5f * s);
+                    if (tailD < 2.2f * s) m = fmaxf(m, 1.0f - SmoothStepF(0.8f * s, 2.2f * s, tailD));
+                }
+                return m;
+            };
 
-                // Sword 1: bottom-left to top-right
-                float s1u = (px - py) * 0.70710678f;
-                float s1v = (px + py) * 0.70710678f;
-                // Sword 2: bottom-right to top-left
-                float s2u = (-px - py) * 0.70710678f;
-                float s2v = (px - py) * 0.70710678f;
+            if (iconType != MICON_NONE) {
+                float dummyTone = 1.0f;
+                float shadowMask = (iconType >= MICON_ATK_SWORDS) ? EvalIconDetail(px - 1.5f, py - 1.8f, dummyTone) : 0.0f;
+                if (shadowMask > 0.05f) {
+                    float sm = shadowMask * 0.75f;
+                    r *= (1.0f - sm); g *= (1.0f - sm); b *= (1.0f - sm);
+                }
 
-                float sw1 = EvalSword(s1u, s1v);
-                float sw2 = EvalSword(s2u, s2v);
-                // Slight shadow gap where Sword 1 crosses over Sword 2
-                if (sw1 > 0.1f) {
-                    iconMask = fmaxf(iconMask, sw1);
-                } else if (sw2 > 0.1f) {
-                    float underShadow = (fabsf(s1u) < 5.2f * s && fabsf(s1v) < 5.8f * s) ? 0.55f : 1.0f;
-                    iconMask = fmaxf(iconMask, sw2 * underShadow);
+                float iconTone = 1.0f;
+                float iconMask = EvalIconDetail(px, py, iconTone);
+                if (iconMask > 0.0f) {
+                    float vGrad = 0.5f - 0.5f * ny;
+                    // Crisp Silver-Ivory / Polished Steel Icon Palette (zero yellow-gold overload)
+                    float icR = fminf(255.0f, (isPressed ? 255.0f : (198.0f + vGrad * 52.0f)) * iconTone);
+                    float icG = fminf(255.0f, (isPressed ? 250.0f : (196.0f + vGrad * 52.0f)) * iconTone);
+                    float icB = fminf(255.0f, (isPressed ? 240.0f : (192.0f + vGrad * 52.0f)) * iconTone);
+                    r = r * (1.0f - iconMask) + icR * iconMask;
+                    g = g * (1.0f - iconMask) + icG * iconMask;
+                    b = b * (1.0f - iconMask) + icB * iconMask;
+                    a = fmaxf(a, iconMask * 254.0f);
                 }
-            } else if (iconType == MICON_TARGET) {
-                float s = outerR / 28.0f;
-                float rRing = fabsf(d - 11.0f * s);
-                if (rRing < 1.9f * s) iconMask = 1.0f - SmoothStepF(0.6f * s, 1.9f * s, rRing);
-                if ((fabsf(px) < 1.6f * s && fabsf(py) >= 6.5f * s && fabsf(py) <= 15.5f * s) ||
-                    (fabsf(py) < 1.6f * s && fabsf(px) >= 6.5f * s && fabsf(px) <= 15.5f * s))
-                    iconMask = fmaxf(iconMask, 0.92f);
-                if (d < 2.6f * s)
-                    iconMask = fmaxf(iconMask, 1.0f - SmoothStepF(1.0f * s, 2.6f * s, d));
-            } else if (iconType == MICON_LOOT) {
-                // Open Hand silhouette (palm + thumb + 4 fingers)
-                float ux = px / (outerR / 28.0f);
-                float uy = py / (outerR / 28.0f);
-                float palmD = hypotf(ux * 0.92f, (uy - 4.2f) * 1.05f) - 6.2f;
-                float wristBox = fmaxf(fabsf(ux) - 4.2f, fabsf(uy - 8.5f) - 2.8f);
-                float hDist = fminf(palmD, wristBox);
-                // Thumb (left) + 4 fingers (index, middle, ring, pinky)
-                hDist = fminf(hDist, DistToSegF(ux, uy, -4.5f,  4.5f, -10.5f, -1.5f) - 1.9f);
-                hDist = fminf(hDist, DistToSegF(ux, uy, -4.2f,  0.5f,  -5.4f, -9.5f) - 1.65f);
-                hDist = fminf(hDist, DistToSegF(ux, uy, -1.4f, -0.5f,  -1.6f,-11.8f) - 1.70f);
-                hDist = fminf(hDist, DistToSegF(ux, uy,  1.6f,  0.0f,   2.2f,-10.5f) - 1.65f);
-                hDist = fminf(hDist, DistToSegF(ux, uy,  4.3f,  1.5f,   5.6f, -7.2f) - 1.50f);
-                if (hDist < 0.8f) {
-                    iconMask = 1.0f - SmoothStepF(-0.5f, 0.8f, hDist);
-                    // Subtle crease line across palm for depth
-                    float crease = DistToSegF(ux, uy, -3.5f, 2.2f, 3.8f, 3.2f);
-                    if (crease < 0.7f) iconMask *= 0.45f;
-                }
-            } else if (iconType == MICON_PAGE) {
-                float s = outerR / 28.0f;
-                float orbD = fabsf(d - 12.5f * s);
-                if (orbD < 2.0f * s && fabsf(px) > 2.5f * s)
-                    iconMask = 1.0f - SmoothStepF(0.7f * s, 2.0f * s, orbD);
-            } else if (iconType == MICON_MOUNT) {
-                // Stylized Horse Head & Neck silhouette (facing right)
-                float ux = px / (outerR / 28.0f);
-                float uy = py / (outerR / 28.0f);
-                float hDist = 100.0f;
-                // Base pedestal + arched neck + cranium + tapered muzzle + ears + mane
-                hDist = fminf(hDist, DistToSegF(ux, uy, -6.5f, 11.2f,  4.5f, 11.2f) - 2.0f);
-                hDist = fminf(hDist, DistToSegF(ux, uy, -3.2f,  9.5f, -4.2f, -1.5f) - 4.4f);
-                hDist = fminf(hDist, DistToSegF(ux, uy, -4.2f, -1.5f, -1.5f, -7.5f) - 4.0f);
-                hDist = fminf(hDist, hypotf(ux + 1.2f, uy + 6.5f) - 4.5f);
-                hDist = fminf(hDist, DistToSegF(ux, uy,  0.0f, -6.8f,  9.2f, -2.5f) - 3.1f);
-                hDist = fminf(hDist, DistToSegF(ux, uy, -1.0f, -3.8f,  6.5f, -1.5f) - 2.8f);
-                // Pointed horse ears at crown
-                hDist = fminf(hDist, DistToSegF(ux, uy, -2.2f, -9.0f, -0.5f,-13.8f) - 1.35f);
-                hDist = fminf(hDist, DistToSegF(ux, uy, -4.2f, -8.2f, -3.5f,-12.8f) - 1.20f);
-                // Flowing mane ridges along back of neck
-                hDist = fminf(hDist, DistToSegF(ux, uy, -6.2f, -6.5f, -8.5f,  2.5f) - 2.2f);
-                hDist = fminf(hDist, DistToSegF(ux, uy, -8.2f,  1.5f, -7.2f,  8.5f) - 2.2f);
-                if (hDist < 0.8f) {
-                    iconMask = 1.0f - SmoothStepF(-0.5f, 0.8f, hDist);
-                    // Carve out eye and nostril for crisp horse detail
-                    if (hypotf(ux - 1.2f, uy + 6.8f) < 1.15f || hypotf(ux - 7.8f, uy + 2.6f) < 0.85f)
-                        iconMask *= 0.20f;
-                }
-            } else if (iconType == MICON_CHAT_BUBBLE) {
-                float s = outerR / 28.0f;
-                float bx = px / (12.0f * s);
-                float by = (py + 2.0f * s) / (9.5f * s);
-                float bd = hypotf(bx, by);
-                if (bd <= 1.0f) {
-                    iconMask = 1.0f - SmoothStepF(0.82f, 1.0f, bd);
-                    if (fabsf(py + 2.0f * s) < 1.3f * s && (fabsf(px) < 1.4f * s || fabsf(fabsf(px) - 5.2f * s) < 1.4f * s))
-                        iconMask = 0.15f;
-                }
-            } else if (iconType == MICON_PLUS) {
-                float s = outerR / 14.0f;
-                if ((fabsf(px) < 1.6f * s && fabsf(py) < 6.5f * s) || (fabsf(py) < 1.6f * s && fabsf(px) < 6.5f * s))
-                    iconMask = 0.95f;
-            } else if (iconType == MICON_MINUS) {
-                float s = outerR / 14.0f;
-                if (fabsf(py) < 1.6f * s && fabsf(px) < 6.5f * s)
-                    iconMask = 0.95f;
-            } else if (iconType == MICON_MAP_PIN) {
-                float s = outerR / 22.0f;
-                float ringD = fabsf(hypotf(px, py + 3.0f * s) - 5.5f * s);
-                if (ringD < 1.8f * s) iconMask = 1.0f - SmoothStepF(0.6f * s, 1.8f * s, ringD);
-                float tailD = DistToSegF(px, py, 0.0f, 3.0f * s, 0.0f, 9.5f * s);
-                if (tailD < 2.2f * s) iconMask = fmaxf(iconMask, 1.0f - SmoothStepF(0.8f * s, 2.2f * s, tailD));
-            }
-
-            if (iconMask > 0.0f) {
-                float icR = isPressed ? 255.0f : (ar * 0.55f + 255.0f * 0.45f);
-                float icG = isPressed ? 246.0f : (ag * 0.55f + 235.0f * 0.45f);
-                float icB = isPressed ? 215.0f : (ab * 0.55f + 190.0f * 0.45f);
-                r = r * (1.0f - iconMask) + icR * iconMask;
-                g = g * (1.0f - iconMask) + icG * iconMask;
-                b = b * (1.0f - iconMask) + icB * iconMask;
-                a = fmaxf(a, iconMask * 250.0f);
             }
 
             pix[idx + 0] = ClampU8(b);
@@ -2108,7 +2292,6 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
 }
 
 static void WriteSquaredMiniMapTextures() {
-    // 1. Squared Radar Filter Mask (128x128) for CPythonMiniMap
     if (access("mark/m_minimap_mask.tga", F_OK) != 0) {
         FILE* fp = fopen("mark/m_minimap_mask.tga", "wb");
         if (fp) {
@@ -2129,7 +2312,7 @@ static void WriteSquaredMiniMapTextures() {
         }
     }
 
-    // 2. Royal2 Squared Brushed-Gold & Obsidian Frame Overlay (136x136)
+    // Thin Chiseled Dark Stone-Slate Squared MiniMap Frame (136x136, NO gold!)
     if (access("mark/m_minimap_frame.tga", F_OK) != 0) {
         const int sz = 136;
         FILE* fp = fopen("mark/m_minimap_frame.tga", "wb");
@@ -2140,28 +2323,25 @@ static void WriteSquaredMiniMapTextures() {
             std::vector<uint8_t> pix((size_t)sz * (size_t)sz * 4, 0);
             for (int y = 0; y < sz; ++y) {
                 for (int x = 0; x < sz; ++x) {
-                    int d = std::min(std::min(x, sz - 1 - x), std::min(y, sz - 1 - y));
+                    int dx = std::min(x, sz - 1 - x);
+                    int dy = std::min(y, sz - 1 - y);
+                    int d = std::min(dx, dy);
                     size_t i = ((size_t)y * sz + (size_t)x) * 4;
-                    if (d < 6) {
-                        // Native worldonline Dark Iron & Pewter Bevel Frame (matching 67Untitled.png)
-                        if (d == 0) {
-                            pix[i+0] = 22; pix[i+1] = 24; pix[i+2] = 26; pix[i+3] = 245;
-                        } else if (d == 1) {
-                            float grad = 0.80f + 0.20f * (1.0f - (float)(x + y) / (2.0f * sz));
-                            pix[i+0] = ClampU8(152.0f * grad);
-                            pix[i+1] = ClampU8(162.0f * grad);
-                            pix[i+2] = ClampU8(170.0f * grad);
-                            pix[i+3] = 255;
-                        } else if (d == 2 || d == 3) {
-                            float grad = 0.75f + 0.25f * (1.0f - (float)(x + y) / (2.0f * sz));
-                            pix[i+0] = ClampU8(116.0f * grad);
-                            pix[i+1] = ClampU8(126.0f * grad);
-                            pix[i+2] = ClampU8(134.0f * grad);
-                            pix[i+3] = 250;
-                        } else if (d == 4) {
-                            pix[i+0] = 32; pix[i+1] = 35; pix[i+2] = 38; pix[i+3] = 235;
-                        } else if (d == 5) {
-                            pix[i+0] = 74; pix[i+1] = 82; pix[i+2] = 88; pix[i+3] = 190;
+                    float grad = 0.72f + 0.28f * (1.0f - (float)(x + y) / (2.0f * sz));
+                    float stoneNoise = StoneGrainNoise(x, y) * 24.0f;
+
+                    // Thin 4px chiseled dark stone border around the 128x128 radar
+                    if (d >= 1 && d <= 4) {
+                        if (d == 1 || d == 4) {
+                            // Outer & inner dark stone mortar line
+                            pix[i+0] = 20; pix[i+1] = 21; pix[i+2] = 22; pix[i+3] = 245;
+                        } else {
+                            // Thin 2px chiseled stone ridge with procedural stone grain
+                            float sVal = fminf(255.0f, fmaxf(30.0f, 118.0f * grad + stoneNoise));
+                            pix[i+0] = ClampU8(sVal * 0.96f);
+                            pix[i+1] = ClampU8(sVal * 0.98f);
+                            pix[i+2] = ClampU8(sVal);
+                            pix[i+3] = 252;
                         }
                     }
                 }
@@ -2200,115 +2380,244 @@ static void WriteTopBarButtonTGA(const char* path, int iconType, bool isPressed)
 
     std::vector<uint8_t> pix((size_t)size * (size_t)size * 4, 0);
     float half = size * 0.5f;
-    float s = size / 40.0f;
+    // Larger 1.55x projection scale (size / 26.0f instead of 40.0f) so top-right icons match Royale2 size & detail!
+    float s = size / 26.0f;
     size_t idx = 0;
+
+    auto EvalTopGlyph = [&](float gx, float gy, float& outTone) -> float {
+        outTone = 1.0f;
+        float ax = fabsf(gx), ay = fabsf(gy);
+        float gd = hypotf(gx, gy);
+        float m = 0.0f;
+
+        if (iconType == TICON_COLLAPSE) {
+            // Royale2 Winged Collapse Arrowhead ('>') with inner speed chevron
+            float d1 = DistToSegF(gx, gy, -5.2f, -6.8f,  5.8f, 0.0f);
+            float d2 = DistToSegF(gx, gy,  5.8f,  0.0f, -5.2f, 6.8f);
+            float d3 = DistToSegF(gx, gy, -6.8f, -3.2f, -0.5f, 0.0f);
+            float d4 = DistToSegF(gx, gy, -0.5f,  0.0f, -6.8f, 3.2f);
+            float mainV = fminf(d1, d2);
+            float subV  = fminf(d3, d4);
+            if (mainV < 2.1f) {
+                m = 1.0f - SmoothStepF(0.9f, 2.1f, mainV);
+                outTone = (gy < 0.0f) ? 1.15f : 0.88f;
+            }
+            if (subV < 1.5f) {
+                float sm = 1.0f - SmoothStepF(0.6f, 1.5f, subV);
+                if (sm > m) { m = sm; outTone = 0.78f; }
+            }
+        } else if (iconType == TICON_EXPAND) {
+            // Royale2 Winged Expand Arrowhead ('<')
+            float d1 = DistToSegF(gx, gy,  5.2f, -6.8f, -5.8f, 0.0f);
+            float d2 = DistToSegF(gx, gy, -5.8f,  0.0f,  5.2f, 6.8f);
+            float d3 = DistToSegF(gx, gy,  6.8f, -3.2f,  0.5f, 0.0f);
+            float d4 = DistToSegF(gx, gy,  0.5f,  0.0f,  6.8f, 3.2f);
+            float mainV = fminf(d1, d2);
+            float subV  = fminf(d3, d4);
+            if (mainV < 2.1f) {
+                m = 1.0f - SmoothStepF(0.9f, 2.1f, mainV);
+                outTone = (gy < 0.0f) ? 1.15f : 0.88f;
+            }
+            if (subV < 1.5f) {
+                float sm = 1.0f - SmoothStepF(0.6f, 1.5f, subV);
+                if (sm > m) { m = sm; outTone = 0.78f; }
+            }
+        } else if (iconType == TICON_SYS) {
+            // Sculpted 3D 8-Tooth Mechanical Settings Gear / Cogwheel
+            float ang = atan2f(gy, gx);
+            float teeth = 0.5f + 0.5f * cosf(ang * 8.0f);
+            float outerGearR = 6.5f + 1.85f * SmoothStepF(0.28f, 0.72f, teeth);
+            float holeR = 2.5f;
+            if (gd >= holeR - 0.6f && gd <= outerGearR + 0.6f) {
+                float inM = SmoothStepF(holeR - 0.6f, holeR + 0.45f, gd);
+                float outM = 1.0f - SmoothStepF(outerGearR - 0.55f, outerGearR + 0.6f, gd);
+                m = inM * outM;
+                if (fabsf(gd - 4.5f) < 0.75f)
+                    outTone = 0.52f;
+                else if (gd > 6.2f)
+                    outTone = 1.22f;
+                else
+                    outTone = (gy < 0.0f) ? 1.14f : 0.90f;
+            }
+        } else if (iconType == TICON_CHAR) {
+            // Detailed Knight / Spartan Helmet with Crest, Brow Ridge, Nasal Guard & Cheek Plates
+            float dome = hypotf(gx * 0.95f, gy + 0.8f);
+            if (dome < 8.4f && gy < 6.8f) {
+                // Carve T-shaped visor opening (eye slits + lower mouth gap)
+                bool inEyeSlit = (gy >= -2.2f && gy <= -0.2f && ax >= 1.3f && ax <= 5.8f);
+                bool inMouthGap = (gy > -0.2f && ax <= 2.3f + (gy + 0.2f) * 0.28f);
+                if (!inEyeSlit && !inMouthGap) {
+                    m = 1.0f - SmoothStepF(7.4f, 8.4f, dome);
+                    // Brow ridge & central crest highlight
+                    if (fabsf(gy + 2.6f) < 0.9f || (ax < 1.1f && gy < -2.2f))
+                        outTone = 1.22f;
+                    else
+                        outTone = 1.05f - 0.08f * ax;
+                }
+            }
+        } else if (iconType == TICON_INVEN) {
+            // Detailed RPG Treasure Chest with Domed Lid, Iron Straps & Lock Plate
+            bool inBox = (ax <= 8.2f && gy >= -5.8f && gy <= 7.2f);
+            if (inBox) {
+                float edgeBox = fmaxf(ax - 8.2f, fmaxf(-5.8f - gy, gy - 7.2f));
+                m = 1.0f - SmoothStepF(-0.8f, 0.2f, edgeBox);
+                // Horizontal lid seam & center lock clasp
+                if (fabsf(gy + 0.8f) < 0.85f && ax > 2.2f) {
+                    m *= 0.15f; // Dark seam between lid and base
+                } else if (ax <= 2.1f && fabsf(gy + 0.8f) <= 2.4f) {
+                    outTone = (ax < 0.8f && fabsf(gy + 0.8f) < 1.0f) ? 0.25f : 1.25f; // Lock plate & keyhole
+                } else if (fabsf(ax - 5.4f) < 1.0f) {
+                    outTone = 1.18f; // Vertical iron reinforcement bands
+                } else {
+                    outTone = (gy < -0.8f) ? 1.08f : 0.88f;
+                }
+            }
+        } else if (iconType == TICON_SPEC_BOXES) {
+            // Twin Detailed Storage Coffers (Front-Right & Back-Left)
+            float b1x = gx + 2.8f, b1y = gy + 2.2f;
+            float b2x = gx - 2.6f, b2y = gy - 2.2f;
+            bool inFront = (fabsf(b2x) <= 5.8f && fabsf(b2y) <= 5.0f);
+            bool inBack  = (fabsf(b1x) <= 5.6f && fabsf(b1y) <= 4.8f) && !(fabsf(b2x) <= 6.7f && fabsf(b2y) <= 5.9f);
+            if (inFront) {
+                m = 0.98f;
+                if (fabsf(b2y + 0.8f) < 0.7f && fabsf(b2x) > 1.5f) m = 0.15f;
+                else if (fabsf(b2x) <= 1.5f && fabsf(b2y + 0.8f) <= 1.8f) outTone = 1.25f;
+            } else if (inBack) {
+                m = 0.92f;
+                outTone = 0.78f;
+                if (fabsf(b1y + 0.8f) < 0.7f) m = 0.15f;
+            }
+        } else if (iconType == TICON_COMM) {
+            // Detailed Two-Person Community Icon (Foreground & Background Busts)
+            float fgHead = hypotf(gx + 2.2f, gy + 3.8f) - 3.0f;
+            float fgBody = (gy >= 0.8f && gy <= 7.8f) ? (hypotf((gx + 2.2f) * 0.72f, gy - 5.4f) - 4.8f) : 10.0f;
+            float fgD = fminf(fgHead, fgBody);
+
+            float bgHead = hypotf(gx - 3.8f, gy + 4.8f) - 2.5f;
+            float bgBody = (gy >= -0.2f && gy <= 6.4f) ? (hypotf((gx - 3.8f) * 0.78f, gy - 4.2f) - 4.0f) : 10.0f;
+            float bgD = fminf(bgHead, bgBody);
+
+            if (fgD < 0.6f) {
+                m = 1.0f - SmoothStepF(-0.5f, 0.6f, fgD);
+                outTone = 1.12f;
+            } else if (bgD < 0.6f && fgD > 1.4f) {
+                m = 1.0f - SmoothStepF(-0.5f, 0.6f, bgD);
+                outTone = 0.78f;
+            }
+        } else if (iconType == TICON_SHOP) {
+            // Sculpted Merchant Market Stall / Shop Booth (Striped Awning Roof + Pillars + Counter + Coin Emblem)
+            if (gy >= -7.4f && gy <= -1.2f) {
+                float t = (gy + 7.4f) / 6.2f; // 0 at roof top, 1 at awning valance
+                float halfW = 5.2f + t * 3.6f;
+                if (ax <= halfW) {
+                    // Scalloped bottom valance edge
+                    float scallop = (gy > -2.4f) ? (0.45f * cosf(gx * 1.45f)) : 0.0f;
+                    if (gy <= -1.6f + scallop) {
+                        m = 0.98f;
+                        // Carve striped market awning segments
+                        if (fabsf(gx) < 0.45f || fabsf(ax - 2.9f) < 0.45f || fabsf(ax - 5.8f) < 0.45f)
+                            outTone = 0.35f;
+                        else
+                            outTone = (gy < -2.6f) ? 1.18f : 0.95f;
+                    }
+                }
+            }
+            // Side Support Posts (y = -1.4 to +3.8)
+            if (gy >= -1.4f && gy <= 3.8f && ax >= 5.5f && ax <= 7.1f) {
+                m = 0.96f;
+                outTone = 0.88f;
+            }
+            // Central Market Coin / Balance Emblem inside booth window
+            float coinD = hypotf(gx, gy - 1.2f);
+            if (coinD <= 2.35f) {
+                m = 1.0f - SmoothStepF(1.7f, 2.35f, coinD);
+                outTone = (coinD < 1.1f) ? 0.55f : 1.25f;
+            }
+            // Market Counter Base & Overhanging Counter Lip (y = +3.6 to +7.4)
+            if (gy >= 3.6f && gy <= 5.0f && ax <= 8.6f) {
+                m = 0.98f;
+                outTone = 1.22f;
+            } else if (gy > 5.0f && gy <= 7.4f && ax <= 7.8f) {
+                m = 0.98f;
+                outTone = (fabsf(gy - 6.2f) < 0.45f && ax < 5.5f) ? 0.48f : 0.96f;
+            }
+        } else if (iconType == TICON_AUTOHUNT) {
+            // Crossed Sword & Pickaxe / Combat Tools
+            float d1 = DistToSegF(gx, gy, -7.6f, 7.6f, 7.6f, -7.6f);
+            float d2 = DistToSegF(gx, gy, 7.6f, 7.6f, -7.6f, -7.6f);
+            float pickHead = DistToSegF(gx, gy, -8.2f, -2.2f, -2.2f, -8.2f);
+            float g1 = DistToSegF(gx, gy, -7.2f, 2.0f, -2.0f, 7.2f);
+            float g2 = DistToSegF(gx, gy,  2.0f, 7.2f,  7.2f, 2.0f);
+            float md = fminf(fminf(d1, d2), fminf(pickHead, fminf(g1, g2)));
+            if (md < 1.85f) {
+                m = 1.0f - SmoothStepF(0.8f, 1.85f, md);
+                outTone = (d1 < d2) ? 1.15f : 0.92f;
+            }
+        } else if (iconType == TICON_DS) {
+            // Faceted 3D Dragon Soul Diamond Crystal
+            float dia = ax * 1.10f + ay * 0.84f;
+            if (dia <= 8.8f) {
+                m = 1.0f - SmoothStepF(7.8f, 8.8f, dia);
+                if (dia > 5.4f && dia < 6.5f)
+                    outTone = 0.45f;
+                else if (dia <= 5.4f)
+                    outTone = (gx + gy < 0.0f) ? 1.25f : 0.85f;
+                else
+                    outTone = (gy < 0.0f) ? 1.15f : 0.82f;
+            }
+        } else if (iconType == TICON_UTIL) {
+            // 4-Tile Bevelled Systems Hub Grid + Central 4-Point Diamond Star
+            float tx = fabsf(ax - 4.4f);
+            float ty = fabsf(ay - 4.4f);
+            float tileBox = fmaxf(tx, ty);
+            float centerStar = ax * 0.9f + ay * 0.9f;
+            if (centerStar <= 2.7f) {
+                m = 1.0f - SmoothStepF(1.9f, 2.7f, centerStar);
+                outTone = 1.28f;
+            } else if (ax >= 1.4f && ay >= 1.4f && tileBox <= 2.7f) {
+                m = 1.0f - SmoothStepF(2.1f, 2.7f, tileBox);
+                if (tileBox < 1.15f)
+                    outTone = 0.42f; // Recessed inner socket
+                else
+                    outTone = (tx + ty < 3.2f) ? 1.18f : 0.94f;
+            }
+        }
+        return m;
+    };
 
     for (int y = 0; y < size; ++y) {
         float py = ((y + 0.5f) - half) / s;
         for (int x = 0; x < size; ++x) {
             float px = ((x + 0.5f) - half) / s;
-            float ax = fabsf(px), ay = fabsf(py);
             float d = hypotf(px, py);
 
-            // Soft, transparent dark-glasstint aura (no heavy box border, matching Royal2 top-right icons)
-            float r = 12.0f, g = 10.0f, b = 8.0f, a = 0.0f;
-            if (d < 18.5f) {
-                float radial = 1.0f - SmoothStepF(6.0f, 18.5f, d);
-                a = radial * (isPressed ? 145.0f : 68.0f);
-                if (isPressed) {
-                    r = 45.0f; g = 38.0f; b = 28.0f;
-                }
+            float r = 8.0f, g = 9.0f, b = 11.0f, a = 0.0f;
+            // Subtle dark halo behind the white icon so it pops against bright skyboxes (matching 199Untitled_4.png)
+            if (d < 12.0f) {
+                float radial = 1.0f - SmoothStepF(4.2f, 12.0f, d);
+                a = radial * (isPressed ? 165.0f : 92.0f);
             }
 
-            // Crisp warm-ivory vector glyph (scaled up for high visibility)
-            float ic = 0.0f;
-            if (iconType == TICON_COLLAPSE) {
-                // Sleek '>' wing arrow
-                float d1 = DistToSegF(px, py, -5.0f, -6.5f, 5.5f, 0.0f);
-                float d2 = DistToSegF(px, py, 5.5f, 0.0f, -5.0f, 6.5f);
-                float d3 = DistToSegF(px, py, -1.5f, -3.5f, 5.5f, 0.0f);
-                float d4 = DistToSegF(px, py, 5.5f, 0.0f, -1.5f, 3.5f);
-                float md = fminf(fminf(d1, d2), fminf(d3, d4));
-                if (md < 2.2f) ic = 1.0f - SmoothStepF(0.9f, 2.2f, md);
-            } else if (iconType == TICON_EXPAND) {
-                // Sleek '<' wing arrow
-                float d1 = DistToSegF(px, py, 5.0f, -6.5f, -5.5f, 0.0f);
-                float d2 = DistToSegF(px, py, -5.5f, 0.0f, 5.0f, 6.5f);
-                float md = fminf(d1, d2);
-                if (md < 2.2f) ic = 1.0f - SmoothStepF(0.9f, 2.2f, md);
-            } else if (iconType == TICON_SYS) {
-                // Hamburger Menu (3 crisp horizontal bars)
-                if (ax < 8.5f && (fabsf(py + 6.0f) < 1.45f || fabsf(py) < 1.45f || fabsf(py - 6.0f) < 1.45f))
-                    ic = 0.98f;
-            } else if (iconType == TICON_CHAR) {
-                // Spartan / Warrior Helmet silhouette (matching reference image)
-                float dome = hypotf(px, py + 1.0f);
-                if (dome < 7.8f && py < 5.5f) {
-                    if (!(fabsf(px) < 2.2f && py > -1.0f) && !(py > -2.5f && py < -0.5f && fabsf(px) >= 1.5f && fabsf(px) <= 5.2f))
-                        ic = 1.0f - SmoothStepF(6.8f, 7.8f, dome);
-                }
-            } else if (iconType == TICON_INVEN) {
-                // Treasure Chest silhouette
-                if (ax < 7.8f && py >= -5.5f && py <= 6.8f) {
-                    if (fabsf(py + 1.0f) > 0.9f && !(ax < 1.6f && fabsf(py + 1.0f) < 2.4f))
-                        ic = 0.96f;
-                }
-            } else if (iconType == TICON_COMM) {
-                // Community / 2 People silhouette
-                float h1 = hypotf(px + 2.8f, py + 4.2f);
-                float h2 = hypotf(px - 4.2f, py + 3.0f);
-                if (h1 < 3.1f || h2 < 2.6f) ic = 0.98f;
-                if (py > 0.5f && py < 7.8f) {
-                    if (hypotf((px + 2.8f) * 0.78f, py - 4.8f) < 4.8f || hypotf((px - 4.2f) * 0.82f, py - 5.2f) < 4.0f)
-                        ic = 0.98f;
-                }
-            } else if (iconType == TICON_SHOP) {
-                // Scroll / Market List with checkmark
-                if (ax < 6.8f && py >= -7.2f && py <= 7.2f) {
-                    float border = fmaxf(ax - 5.2f, fabsf(py) - 5.6f);
-                    float chk1 = DistToSegF(px, py, -3.0f, 0.5f, -0.5f, 3.0f);
-                    float chk2 = DistToSegF(px, py, -0.5f, 3.0f, 3.8f, -2.5f);
-                    if (border > -1.6f || fminf(chk1, chk2) < 1.5f)
-                        ic = 0.96f;
-                }
-            } else if (iconType == TICON_AUTOHUNT) {
-                // Crossed Swords
-                float d1 = DistToSegF(px, py, -7.2f, 7.2f, 7.2f, -7.2f);
-                float d2 = DistToSegF(px, py, 7.2f, 7.2f, -7.2f, -7.2f);
-                float g1 = DistToSegF(px, py, -7.2f, 2.2f, -2.2f, 7.2f);
-                float g2 = DistToSegF(px, py, 2.2f, 7.2f, 7.2f, 2.2f);
-                float md = fminf(fminf(d1, d2), fminf(g1, g2) * 1.15f);
-                if (md < 1.9f) ic = 1.0f - SmoothStepF(0.8f, 1.9f, md);
-            } else if (iconType == TICON_DS) {
-                // Dragon Soul Faceted Diamond
-                float dia = ax * 1.12f + ay * 0.85f;
-                if (dia < 8.4f && (dia > 5.8f || dia < 3.4f))
-                    ic = 1.0f - SmoothStepF(7.6f, 8.4f, dia);
-            } else if (iconType == TICON_UTIL) {
-                // Bell / Utility Icon (matching reference top bar)
-                float bellW = (py >= -5.5f && py <= 4.2f) ? (3.2f + (py + 5.5f) * 0.45f) : 0.0f;
-                if (bellW > 0.0f && ax <= bellW) ic = 1.0f - SmoothStepF(bellW - 1.0f, bellW, ax);
-                if (fabsf(py - 4.5f) < 1.2f && ax < 8.2f) ic = 0.98f;
-                if (hypotf(px, py + 6.5f) < 1.8f || hypotf(px, py - 6.8f) < 2.2f) ic = fmaxf(ic, 0.96f);
-            } else if (iconType == TICON_SPEC_BOXES) {
-                // Two stacked/side-by-side storage boxes icon for Special Storage
-                float b1x = px + 3.2f, b1y = py + 2.6f; // Back-left box
-                float b2x = px - 2.8f, b2y = py - 2.4f; // Front-right box
-                bool inFront = (fabsf(b2x) < 5.6f && fabsf(b2y) < 4.8f);
-                bool inBack  = (fabsf(b1x) < 5.4f && fabsf(b1y) < 4.6f) && !(fabsf(b2x) < 6.4f && fabsf(b2y) < 5.6f);
-                if (inFront) {
-                    if (fabsf(b2y + 0.8f) > 0.75f && !(fabsf(b2x) < 1.3f && fabsf(b2y + 0.8f) < 1.8f))
-                        ic = 0.98f;
-                } else if (inBack) {
-                    if (fabsf(b1y + 0.8f) > 0.75f)
-                        ic = 0.88f;
-                }
+            // Crisp Dark Drop-Shadow / Contour Outline around the white glyph
+            float dummyT = 1.0f;
+            float sh = fmaxf(EvalTopGlyph(px - 0.65f, py - 0.85f, dummyT),
+                             EvalTopGlyph(px + 0.45f, py + 0.55f, dummyT));
+            if (sh > 0.05f) {
+                a = fmaxf(a, sh * 235.0f);
             }
 
+            float tone = 1.0f;
+            float ic = EvalTopGlyph(px, py, tone);
             if (ic > 0.0f) {
-                float icR = isPressed ? 255.0f : 244.0f;
-                float icG = isPressed ? 225.0f : 239.0f;
-                float icB = isPressed ? 155.0f : 228.0f;
+                float vGrad = 0.5f - 0.5f * (py / 8.5f);
+                // Royale2 Crisp Alabaster-White & Bright Silver-Ivory 3D Icon Palette (matching 199Untitled_4.png!)
+                float baseR = isPressed ? 255.0f : (226.0f + vGrad * 29.0f);
+                float baseG = isPressed ? 255.0f : (225.0f + vGrad * 30.0f);
+                float baseB = isPressed ? 255.0f : (222.0f + vGrad * 32.0f);
+                float shadeTone = (tone < 0.65f) ? tone : (0.86f + 0.14f * tone);
+                float icR = fminf(255.0f, baseR * shadeTone);
+                float icG = fminf(255.0f, baseG * shadeTone);
+                float icB = fminf(255.0f, baseB * shadeTone);
                 r = r * (1.0f - ic) + icR * ic;
                 g = g * (1.0f - ic) + icG * ic;
                 b = b * (1.0f - ic) + icB * ic;
@@ -2340,42 +2649,56 @@ static void WriteExpSphereTGA(const char* path, bool isFilled, float cr, float c
 
     std::vector<uint8_t> pix((size_t)size * (size_t)size * 4, 0);
     float half = size * 0.5f;
-    float outerR = 12.2f;
-    float innerR = 10.2f;
+    float outerR = 12.4f;
+    float innerR = 10.4f;
 
     for (int y = 0; y < size; ++y) {
         float py = (y + 0.5f) - half;
+        float ny = py / innerR;
         for (int x = 0; x < size; ++x) {
             float px = (x + 0.5f) - half;
+            float nx = px / innerR;
             float d = hypotf(px, py);
             size_t i = ((size_t)y * size + (size_t)x) * 4;
 
-            float r = 10.0f, g = 12.0f, b = 16.0f, a = 0.0f;
+            float r = 10.0f, g = 10.0f, b = 12.0f, a = 0.0f;
             if (d <= outerR + 1.2f) {
                 float mask = 1.0f - SmoothStepF(outerR - 0.6f, outerR + 1.2f, d);
+                float nr = fminf(1.0f, d / innerR);
+                float sphereZ = sqrtf(fmaxf(0.0f, 1.0f - nr * nr));
+
+                float crescentEnv = hypotf((nx + 0.18f) * 1.15f, (ny + 0.45f) * 1.75f);
+                float topCrescent = (1.0f - SmoothStepF(0.15f, 0.72f, crescentEnv)) * SmoothStepF(0.0f, -0.75f, ny);
+                float hotSpec = powf(fmaxf(0.0f, -0.45f * nx - 0.55f * ny + sphereZ * 0.62f), 3.6f);
+
                 if (!isFilled) {
-                    // Empty recessed dark socket + classic bronze/gold rim
-                    r = 16.0f; g = 18.0f; b = 22.0f;
-                    a = mask * 215.0f;
-                    float rimD = fabsf(d - (outerR - 1.0f));
-                    if (rimD < 1.5f) {
-                        float rm = 1.0f - rimD / 1.5f;
+                    // 3D Dark Obsidian-Slate Sphere with Top Glass Crescent Shade & Thin Stone Rim
+                    float botBounce = SmoothStepF(0.15f, 0.90f, ny) * nr * 22.0f;
+                    float glass = fminf(1.0f, topCrescent * 0.55f + hotSpec * 0.45f);
+                    r = 16.0f + botBounce + glass * 155.0f;
+                    g = 17.0f + botBounce + glass * 158.0f;
+                    b = 20.0f + botBounce + glass * 165.0f;
+                    a = mask * 238.0f;
+
+                    float rimD = fabsf(d - (outerR - 1.1f));
+                    if (rimD < 1.4f) {
+                        float rm = 1.0f - rimD / 1.4f;
                         float grad = 0.65f + 0.35f * (1.0f - (float)(x + y) / (2.0f * size));
-                        r = r * (1.0f - rm) + (185.0f * grad) * rm;
-                        g = g * (1.0f - rm) + (148.0f * grad) * rm;
-                        b = b * (1.0f - rm) + (82.0f * grad) * rm;
-                        a = fmaxf(a, rm * 245.0f);
+                        float stone = 132.0f * grad + StoneGrainNoise(x, y) * 18.0f;
+                        r = r * (1.0f - rm) + stone * rm;
+                        g = g * (1.0f - rm) + stone * rm;
+                        b = b * (1.0f - rm) + (stone + 4.0f) * rm;
+                        a = fmaxf(a, rm * 250.0f);
                     }
-                } else if (d <= innerR + 0.6f) {
-                    // Glowing 3D liquid sphere with top-left specular highlight
-                    float fillMask = 1.0f - SmoothStepF(innerR - 0.6f, innerR + 0.6f, d);
-                    float sphereZ = sqrtf(fmaxf(0.0f, 1.0f - (d * d) / (innerR * innerR)));
-                    float spec = powf(fmaxf(0.0f, (-0.45f * px - 0.55f * py) / innerR + sphereZ * 0.65f), 3.0f) * 95.0f;
-                    float core = 0.55f + 0.45f * sphereZ;
-                    r = fminf(255.0f, cr * core + spec);
-                    g = fminf(255.0f, cg * core + spec);
-                    b = fminf(255.0f, cb * core + spec * 0.7f);
-                    a = fillMask * 250.0f;
+                } else if (d <= innerR + 0.7f) {
+                    float fillMask = 1.0f - SmoothStepF(innerR - 0.6f, innerR + 0.7f, d);
+                    float core = 0.42f + 0.58f * sphereZ;
+                    float caustic = SmoothStepF(0.20f, 0.85f, ny) * (1.0f - nr * 0.5f) * 46.0f;
+                    float spec = hotSpec * 115.0f + topCrescent * 75.0f;
+                    r = fminf(255.0f, cr * core + caustic + spec);
+                    g = fminf(255.0f, cg * core + caustic * 0.85f + spec * 0.95f);
+                    b = fminf(255.0f, cb * core + caustic * 0.40f + spec * 0.82f);
+                    a = fillMask * 252.0f;
                 }
             }
 
@@ -2403,33 +2726,47 @@ static void WritePortraitRingTGA(const char* path) {
     std::vector<uint8_t> pix((size_t)size * (size_t)size * 4, 0);
     float half = size * 0.5f;
     float outerR = 29.5f;
-    float innerR = 23.0f;
+    float innerR = 23.2f;
 
     for (int y = 0; y < size; ++y) {
         float py = (y + 0.5f) - half;
+        float ny = py / outerR;
         for (int x = 0; x < size; ++x) {
             float px = (x + 0.5f) - half;
+            float nx = px / outerR;
             float d = hypotf(px, py);
             size_t i = ((size_t)y * size + (size_t)x) * 4;
 
-            float r = 18.0f, g = 18.0f, b = 20.0f, a = 0.0f;
+            float r = 14.0f, g = 14.0f, b = 16.0f, a = 0.0f;
 
-            if (d >= innerR && d < outerR + 2.5f) {
-                float sh = 1.0f - SmoothStepF(outerR - 0.5f, outerR + 2.5f, d);
+            if (d < innerR) {
+                float crescentEnv = hypotf(nx * 1.15f, (ny + 0.42f) * 1.85f);
+                float topGlass = (1.0f - SmoothStepF(0.15f, 0.68f, crescentEnv)) * SmoothStepF(-0.08f, -0.72f, ny);
+                float innerShadow = SmoothStepF(innerR - 2.4f, innerR, d);
+                r = 245.0f * (1.0f - innerShadow) + 10.0f * innerShadow;
+                g = 248.0f * (1.0f - innerShadow) + 10.0f * innerShadow;
+                b = 252.0f * (1.0f - innerShadow) + 12.0f * innerShadow;
+                a = fminf(215.0f, topGlass * 48.0f + innerShadow * 185.0f);
+            } else if (d < outerR + 2.2f) {
+                float sh = 1.0f - SmoothStepF(outerR - 0.5f, outerR + 2.2f, d);
                 a = sh * 135.0f;
             }
-            if (d >= innerR - 1.0f && d <= outerR) {
-                float inMask  = SmoothStepF(innerR - 1.0f, innerR + 0.8f, d);
-                float outMask = 1.0f - SmoothStepF(outerR - 1.0f, outerR + 0.4f, d);
+
+            if (d >= innerR - 0.8f && d <= outerR) {
+                float inMask  = SmoothStepF(innerR - 0.8f, innerR + 0.6f, d);
+                float outMask = 1.0f - SmoothStepF(outerR - 0.9f, outerR + 0.4f, d);
                 float ringMask = inMask * outMask;
 
-                float grad = 0.68f + 0.32f * (1.0f - (float)(x + y) / (2.0f * size));
-                if (d < innerR + 1.5f || d > outerR - 1.5f) {
-                    // Pewter / Iron outer & inner bevel ridge
-                    r = 162.0f * grad; g = 156.0f * grad; b = 145.0f * grad;
+                float grad = 0.65f + 0.35f * (-0.55f * nx - 0.82f * ny);
+                float stone = StoneGrainNoise(x, y) * 22.0f;
+                if (d < innerR + 1.3f || d > outerR - 1.4f) {
+                    // Thin Chiseled Stone-Slate Bevel Ridge
+                    float sv = fminf(255.0f, fmaxf(35.0f, 146.0f * grad + stone));
+                    r = sv * 0.97f; g = sv * 0.98f; b = sv;
                 } else {
-                    // Native worldonline dark copper-brown / iron core
-                    r = 108.0f * grad; g = 58.0f * grad; b = 32.0f * grad;
+                    // Dark Slate Core Channel
+                    float sv = fminf(255.0f, fmaxf(15.0f, 48.0f * grad + stone * 0.5f));
+                    r = sv * 0.96f; g = sv * 0.98f; b = sv;
                 }
                 a = fmaxf(a, ringMask * 252.0f);
             }
@@ -2444,6 +2781,7 @@ static void WritePortraitRingTGA(const char* path) {
     fclose(fp);
 }
 
+// Thin Chiseled Dark Stone Status Plate without Heart/Crystal/Lightning Icons (196x44)
 static void WriteStatusPlateTGA(const char* path) {
     if (access(path, F_OK) == 0) return;
     const int w = 196, h = 44;
@@ -2455,33 +2793,44 @@ static void WriteStatusPlateTGA(const char* path) {
 
     std::vector<uint8_t> pix((size_t)w * (size_t)h * 4, 0);
     for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            size_t i = ((size_t)y * w + (size_t)x) * 4;
-            if (x >= w - 2 && (y < 2 || y >= h - 2)) continue;
+        int rowMaxX = w - 2;
+        if (y < 18) {
+            rowMaxX = (w - 2) - std::max(0, 5 - y);
+        } else if (y < 31) {
+            rowMaxX = (w - 14) - std::max(0, y - 24);
+        } else {
+            rowMaxX = (w - 26) - std::max(0, y - 36);
+        }
 
-            bool isOuterDark = (y == 0 || y == h - 1 || x == 0 || x == w - 1);
-            bool isPewterBevel = (y == 1 || y == 2 || y == h - 2 || x == 1 || x == w - 2);
-            bool isInnerShadow = (y == 3 || y == h - 3 || x == w - 3);
-            bool isDivider = (y == 17 || y == 18 || y == 30 || y == 31) && (x >= 18 && x <= w - 4);
-            float r = 18.0f, g = 18.0f, b = 20.0f, a = 242.0f;
+        for (int x = 0; x < w; ++x) {
+            if (x > rowMaxX) continue;
+            size_t i = ((size_t)y * w + (size_t)x) * 4;
+
+            int distRight = rowMaxX - x;
+            bool isOuterDark = (y == 0 || y == h - 1 || x == 0 || distRight == 0);
+            bool isStoneBevel = (y == 1 || y == h - 2 || x == 1 || distRight == 1);
+            bool isDivider = (y == 17 || y == 18 || y == 30 || y == 31) && (x >= 18 && distRight >= 2);
+            float stoneNoise = StoneGrainNoise(x, y) * 22.0f;
+
+            float r = 14.0f, g = 15.0f, b = 18.0f, a = 244.0f;
 
             if (isOuterDark) {
-                r = 34.0f; g = 32.0f; b = 30.0f; a = 250.0f;
-            } else if (isPewterBevel) {
-                float grad = (y == 1) ? 1.12f : (0.78f + 0.22f * (1.0f - (float)y / (float)h));
-                r = 148.0f * grad; g = 142.0f * grad; b = 132.0f * grad; a = 255.0f;
-            } else if (isInnerShadow) {
-                r = 46.0f; g = 43.0f; b = 40.0f; a = 248.0f;
+                r = 12.0f; g = 13.0f; b = 15.0f; a = 248.0f;
+            } else if (isStoneBevel) {
+                float grad = (y == 1 || distRight == 1) ? 1.12f : (0.72f + 0.28f * (1.0f - (float)y / (float)h));
+                float sv = fminf(255.0f, fmaxf(35.0f, 128.0f * grad + stoneNoise));
+                r = sv * 0.96f; g = sv * 0.98f; b = sv; a = 254.0f;
             } else if (isDivider) {
-                float divGrad = (y == 17 || y == 30) ? 1.0f : 0.55f;
-                r = 128.0f * divGrad; g = 122.0f * divGrad; b = 114.0f * divGrad; a = 245.0f;
+                float divGrad = (y == 17 || y == 30) ? 0.88f : 0.42f;
+                float sv = fminf(255.0f, fmaxf(25.0f, 112.0f * divGrad + stoneNoise * 0.5f));
+                r = sv * 0.96f; g = sv * 0.98f; b = sv; a = 248.0f;
             } else {
-                // Recessed channels extend full length x: 22..192 (171px) right up to the right inner shadow (w - 3)
                 bool inSlot = (y >= 4 && y <= 16) || (y >= 19 && y <= 29) || (y >= 32 && y <= 39);
-                if (inSlot && x >= 22 && x <= w - 4) {
-                    r = 10.0f; g = 10.0f; b = 12.0f; a = 248.0f;
+                if (inSlot && x >= 22 && distRight >= 3) {
+                    r = 8.0f; g = 9.0f; b = 11.0f; a = 248.0f;
                 } else {
-                    r = 26.0f; g = 25.0f; b = 24.0f; a = 245.0f;
+                    float sv = 24.0f + stoneNoise * 0.35f;
+                    r = sv; g = sv; b = sv + 2.0f; a = 246.0f;
                 }
             }
             pix[i + 0] = ClampU8(b); pix[i + 1] = ClampU8(g); pix[i + 2] = ClampU8(r); pix[i + 3] = ClampU8(a);
@@ -2491,6 +2840,7 @@ static void WriteStatusPlateTGA(const char* path) {
     fclose(fp);
 }
 
+// Smooth, Slow-Drifting Silk-Liquid Bar Fill Shader (3D Glass Tube + Gentle Caustic Flow, No Noisy Boiling Bubbles)
 static void WriteGlossyBarFillTGA(const char* path, int w, int h, float cr, float cg, float cb, int frameIdx = 0) {
     if (access(path, F_OK) == 0) return;
     FILE* fp = fopen(path, "wb");
@@ -2501,21 +2851,174 @@ static void WriteGlossyBarFillTGA(const char* path, int w, int h, float cr, floa
 
     const float phase = ((float)frameIdx / 8.0f) * 6.2831853f;
     std::vector<uint8_t> pix((size_t)w * (size_t)h * 4, 0);
+
     for (int y = 0; y < h; ++y) {
-        float ny = (float)y / (float)(h > 1 ? h - 1 : 1); // 0 = top, 1 = bottom
-        float cyl = 0.56f + 0.44f * sinf(ny * 3.14159265f);
-        float topSpec = (ny >= 0.08f && ny <= 0.34f) ? 58.0f : 0.0f;
+        float ny = (float)y / (float)(h > 1 ? h - 1 : 1);
+        float cyl = 0.52f + 0.48f * sinf(ny * 3.14159265f);
+        float topSpec = (ny >= 0.10f && ny <= 0.32f) ? 46.0f : 0.0f;
+        int rowMaxW = w - std::max(0, y - (h / 2));
+
         for (int x = 0; x < w; ++x) {
+            if (x >= rowMaxW) continue;
             size_t i = ((size_t)y * w + (size_t)x) * 4;
-            // Flowing liquid wave + diagonal shimmer band that loops seamlessly across 8 frames
-            float waveAngle = ((float)x / 42.75f + ny * 0.35f) * 6.2831853f - phase;
-            float wave = 0.5f + 0.5f * sinf(waveAngle);
-            float shimmer = powf(wave, 3.0f) * 42.0f * sinf(ny * 3.14159265f);
-            float bodyBoost = 0.90f + 0.18f * wave;
-            float r = fminf(255.0f, cr * cyl * bodyBoost + topSpec + shimmer);
-            float g = fminf(255.0f, cg * cyl * bodyBoost + topSpec + shimmer);
-            float b = fminf(255.0f, cb * cyl * bodyBoost + topSpec * 0.85f + shimmer * 0.9f);
+
+            // Gentle, wide silk-liquid caustic wave
+            float wave1 = 0.5f + 0.5f * sinf(((float)x / 57.0f + ny * 0.28f) * 6.2831853f - phase);
+            float wave2 = 0.5f + 0.5f * cosf(((float)x / 85.5f - ny * 0.22f) * 6.2831853f + phase);
+            float caustic = powf(0.6f * wave1 + 0.4f * wave2, 2.6f) * 32.0f * sinf(ny * 3.14159265f);
+            float bodyBoost = 0.90f + 0.16f * wave1;
+
+            float r = fminf(255.0f, cr * cyl * bodyBoost + topSpec + caustic);
+            float g = fminf(255.0f, cg * cyl * bodyBoost + topSpec + caustic * 0.95f);
+            float b = fminf(255.0f, cb * cyl * bodyBoost + topSpec * 0.90f + caustic * 0.88f);
             pix[i + 0] = ClampU8(b); pix[i + 1] = ClampU8(g); pix[i + 2] = ClampU8(r); pix[i + 3] = 252;
+        }
+    }
+    fwrite(pix.data(), 1, pix.size(), fp);
+    fclose(fp);
+}
+
+// 3D Glass Sphere Dome + Chiseled Dark Stone-Slate Collar & Bezel ON TOP of QuickSlots (Zero Red/Crimson!)
+static void WriteCircularBezelOverlayTGA(const char* path, int size, float holeR, float outerR, float rimW, bool isJadeAffect = false) {
+    if (access(path, F_OK) == 0)
+        return;
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return;
+
+    uint8_t hdr[18] = {0};
+    hdr[2] = 2;
+    hdr[12] = (uint8_t)(size & 0xFF);
+    hdr[13] = (uint8_t)((size >> 8) & 0xFF);
+    hdr[14] = (uint8_t)(size & 0xFF);
+    hdr[15] = (uint8_t)((size >> 8) & 0xFF);
+    hdr[16] = 32;
+    hdr[17] = 0x28;
+    fwrite(hdr, 1, 18, fp);
+
+    std::vector<uint8_t> pix((size_t)size * (size_t)size * 4, 0);
+    float half = size * 0.5f;
+    size_t idx = 0;
+
+    for (int y = 0; y < size; ++y) {
+        float py = (y + 0.5f) - half;
+        float ny = py / outerR;
+        for (int x = 0; x < size; ++x) {
+            float px = (x + 0.5f) - half;
+            float nx = px / outerR;
+            float d = hypotf(px, py);
+            float grain = StoneGrainNoise(x, y);
+
+            float r = 12.0f, g = 13.0f, b = 15.0f, a = 0.0f;
+
+            if (d < holeR) {
+                float hnx = px / holeR;
+                float hny = py / holeR;
+                float nr = d / holeR;
+                float sphereZ = sqrtf(fmaxf(0.0f, 1.0f - nr * nr));
+
+                // 1. Top Crescent Glass Dome Shade over the skill/potion icon
+                float crescentEnv = hypotf(hnx * 1.12f, (hny + 0.48f) * 1.85f);
+                float topCrescent = (1.0f - SmoothStepF(0.16f, 0.76f, crescentEnv)) * SmoothStepF(-0.08f, -0.82f, hny);
+                float hotSpec = powf(fmaxf(0.0f, -0.45f * hnx - 0.65f * hny + sphereZ * 0.35f), 4.8f);
+                float glassAlphaVal = fminf(132.0f, topCrescent * 95.0f + hotSpec * 56.0f);
+
+                // 2. 3D Spherical Stone Rim Vignette around the icon perimeter
+                float innerVig = SmoothStepF(holeR - 5.0f, holeR, d);
+                float vigR = 10.0f, vigG = 12.0f, vigB = 14.0f;
+                float vigA = innerVig * 222.0f;
+
+                float totalA = fminf(246.0f, glassAlphaVal + vigA);
+                if (totalA > 0.5f) {
+                    float wGlass = glassAlphaVal / totalA;
+                    r = 248.0f * wGlass + vigR * (1.0f - wGlass);
+                    g = 250.0f * wGlass + vigG * (1.0f - wGlass);
+                    b = 255.0f * wGlass + vigB * (1.0f - wGlass);
+                    a = totalA;
+                }
+            } else if (d <= outerR) {
+                // Opaque Chiseled Dark Stone-Slate Collar + Thin Stone Bezel Rim
+                float outFade = 1.0f - SmoothStepF(outerR - 1.0f, outerR + 0.4f, d);
+                float lGrad = 0.56f + 0.44f * (-0.58f * nx - 0.82f * ny);
+                float stoneTex = grain * 24.0f;
+
+                r = (20.0f + grain * 8.0f) * lGrad;
+                g = (22.0f + grain * 8.0f) * lGrad;
+                b = (25.0f + grain * 8.0f) * lGrad;
+                a = 255.0f * outFade;
+
+                float rimR = isJadeAffect ? 120.0f : 138.0f;
+                float rimG = isJadeAffect ? 158.0f : 142.0f;
+                float rimB = isJadeAffect ? 156.0f : 148.0f;
+
+                float inLipD = fabsf(d - (holeR + 1.1f));
+                if (inLipD < 1.5f) {
+                    float im = (1.0f - inLipD / 1.5f) * 0.78f;
+                    r = r * (1.0f - im) + fmaxf(25.0f, rimR * lGrad + stoneTex) * im;
+                    g = g * (1.0f - im) + fmaxf(25.0f, rimG * lGrad + stoneTex) * im;
+                    b = b * (1.0f - im) + fmaxf(28.0f, rimB * lGrad + stoneTex) * im;
+                }
+
+                float outRimD = fabsf(d - (outerR - rimW * 0.42f));
+                if (outRimD < rimW * 0.68f) {
+                    float rm = 1.0f - SmoothStepF(rimW * 0.18f, rimW * 0.68f, outRimD);
+                    float spec = powf(fmaxf(0.0f, -0.60f * nx - 0.80f * ny), 3.5f) * 38.0f;
+                    r = r * (1.0f - rm) + fminf(255.0f, fmaxf(30.0f, rimR * lGrad + stoneTex + spec)) * rm;
+                    g = g * (1.0f - rm) + fminf(255.0f, fmaxf(30.0f, rimG * lGrad + stoneTex + spec)) * rm;
+                    b = b * (1.0f - rm) + fminf(255.0f, fmaxf(32.0f, rimB * lGrad + stoneTex + spec)) * rm;
+                }
+            } else if (d < outerR + 2.8f) {
+                float sh = 1.0f - SmoothStepF(outerR, outerR + 2.8f, d);
+                a = sh * 120.0f;
+            }
+
+            pix[idx + 0] = ClampU8(b);
+            pix[idx + 1] = ClampU8(g);
+            pix[idx + 2] = ClampU8(r);
+            pix[idx + 3] = ClampU8(a);
+            idx += 4;
+        }
+    }
+    fwrite(pix.data(), 1, pix.size(), fp);
+    fclose(fp);
+}
+
+static void WriteWhiteTouchOrbTGA(const char* path) {
+    if (access(path, F_OK) == 0)
+        return;
+    const int size = 96;
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return;
+
+    uint8_t hdr[18] = {0};
+    hdr[2] = 2; hdr[12] = size; hdr[14] = size; hdr[16] = 32; hdr[17] = 0x28;
+    fwrite(hdr, 1, 18, fp);
+
+    std::vector<uint8_t> pix((size_t)size * (size_t)size * 4, 0);
+    float half = size * 0.5f;
+    size_t idx = 0;
+
+    for (int y = 0; y < size; ++y) {
+        float py = (y + 0.5f) - half;
+        for (int x = 0; x < size; ++x) {
+            float px = (x + 0.5f) - half;
+            float d = hypotf(px, py);
+
+            float a = 0.0f;
+            if (d < 26.0f) {
+                float core = 1.0f - SmoothStepF(4.0f, 26.0f, d);
+                a = fmaxf(a, core * core * 195.0f);
+            }
+            float ringD = fabsf(d - 36.0f);
+            if (ringD < 5.5f) {
+                float rm = 1.0f - SmoothStepF(1.0f, 5.5f, ringD);
+                a = fmaxf(a, rm * 135.0f);
+            }
+
+            pix[idx + 0] = 255;
+            pix[idx + 1] = 255;
+            pix[idx + 2] = 255;
+            pix[idx + 3] = ClampU8(a);
+            idx += 4;
         }
     }
     fwrite(pix.data(), 1, pix.size(), fp);
@@ -2565,12 +3068,10 @@ static void WriteTooltipActionIconTGA(const char* path, int iconType, bool isPre
 
             float ic = 0.0f;
             if (iconType == TTICON_USE) {
-                // Upward Equip/Use Sword & Arrow emblem
                 float dBlade = DistToSegF(px, py, -7.0f, 7.0f, 7.5f, -7.5f);
                 float dGuard = DistToSegF(px, py, -6.5f, 0.5f, -0.5f, 6.5f);
                 if (fminf(dBlade, dGuard) < 1.8f) ic = 1.0f - SmoothStepF(0.8f, 1.8f, fminf(dBlade, dGuard));
             } else if (iconType == TTICON_SPLIT) {
-                // Split stacks icon: two separated boxes + outward arrows
                 bool boxL = (px >= -10.5f && px <= -3.5f && ay <= 4.5f);
                 bool boxR = (px >= 3.5f && px <= 10.5f && ay <= 4.5f);
                 float sepLine = (ax < 1.1f && ay < 8.5f) ? 0.95f : 0.0f;
@@ -2580,24 +3081,20 @@ static void WriteTooltipActionIconTGA(const char* path, int iconType, bool isPre
                 }
                 ic = fmaxf(ic, sepLine);
             } else if (iconType == TTICON_LINK) {
-                // Chat Speech Bubble + Link node
                 float bd = hypotf(px / 9.5f, (py + 1.5f) / 7.2f);
                 if (bd <= 1.0f && bd >= 0.72f) ic = 0.96f;
                 if (fabsf(py + 1.5f) < 1.4f && (fabsf(px) < 1.4f || fabsf(ax - 4.2f) < 1.4f)) ic = 0.96f;
                 if (DistToSegF(px, py, -3.0f, 5.0f, -6.5f, 8.5f) < 1.6f) ic = 0.96f;
             } else if (iconType == TTICON_CHEST) {
-                // Open Chest / Bundle icon
                 if (ax < 8.5f && py >= -6.0f && py <= 6.5f) {
                     if (fabsf(py + 0.8f) > 0.9f && !(ax < 1.8f && fabsf(py + 0.8f) < 2.2f))
                         ic = 0.95f;
                 }
             } else if (iconType == TTICON_PREVIEW) {
-                // Eye / Preview icon
                 float eyeY = 4.8f * (1.0f - (px * px) / 81.0f);
                 if (ax <= 9.0f && fabsf(ay - eyeY) < 1.5f) ic = 0.96f;
                 if (hypotf(px, py) < 2.8f) ic = 0.98f;
             } else if (iconType == TTICON_CLOSE) {
-                // Crisp X icon
                 float d1 = DistToSegF(px, py, -6.5f, -6.5f, 6.5f, 6.5f);
                 float d2 = DistToSegF(px, py, 6.5f, -6.5f, -6.5f, 6.5f);
                 if (fminf(d1, d2) < 1.8f) ic = 1.0f - SmoothStepF(0.8f, 1.8f, fminf(d1, d2));
@@ -2618,22 +3115,343 @@ static void WriteTooltipActionIconTGA(const char* path, int iconType, bool isPre
     fclose(fp);
 }
 
+// High-Detail 88x88 Full-Color Illustrated Visual Medallions for the Quick Access Drawer (No Text Needed!)
+static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, float ag, float ab) {
+    if (access(path, F_OK) == 0)
+        return;
+    const int size = 88;
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return;
+
+    uint8_t hdr[18] = {0};
+    hdr[2] = 2; hdr[12] = size; hdr[14] = size; hdr[16] = 32; hdr[17] = 0x28;
+    fwrite(hdr, 1, 18, fp);
+
+    std::vector<uint8_t> pix((size_t)size * (size_t)size * 4, 0);
+    float half = size * 0.5f;
+    float outerR = 41.0f;
+    float rimW = 3.0f;
+    float s = outerR / 28.0f;
+
+    auto EvalSysGlyph = [&](float ix, float iy, float& outR, float& outG, float& outB) -> float {
+        outR = 235.0f; outG = 205.0f; outB = 145.0f;
+        float ux = ix / s, uy = iy / s;
+        float ax = fabsf(ux), ay = fabsf(uy);
+        float ud = hypotf(ux, uy);
+        float m = 0.0f;
+
+        if (sysType == 0) {
+            // 0: Auto-Hunt (Glowing Crimson Target Reticle + Crossed Golden-Steel Broadswords + Lightning Bolt)
+            float ringD = fabsf(ud - 14.2f);
+            if (ringD < 1.6f && ax > 2.8f && ay > 2.8f) {
+                m = 1.0f - SmoothStepF(0.6f, 1.6f, ringD);
+                outR = 255.0f; outG = 85.0f; outB = 75.0f;
+            }
+            float d1 = DistToSegF(ux, uy, -12.0f, 12.0f, 12.0f, -12.0f);
+            float d2 = DistToSegF(ux, uy, 12.0f, 12.0f, -12.0f, -12.0f);
+            float g1 = DistToSegF(ux, uy, -9.5f, 2.5f, -2.5f, 9.5f);
+            float g2 = DistToSegF(ux, uy,  2.5f, 9.5f,  9.5f, 2.5f);
+            float md = fminf(fminf(d1, d2), fminf(g1, g2));
+            if (md < 2.3f) {
+                float sm = 1.0f - SmoothStepF(0.9f, 2.3f, md);
+                if (sm >= m) {
+                    m = sm;
+                    bool isGuard = (fminf(g1, g2) < fminf(d1, d2));
+                    outR = isGuard ? 245.0f : 235.0f;
+                    outG = isGuard ? 195.0f : 230.0f;
+                    outB = isGuard ?  95.0f : 225.0f;
+                }
+            }
+        } else if (sysType == 1) {
+            // 1: Switchbot (Glowing Violet-Gold Enchantment Cycle Arrows + Central 4-Point Magic Star)
+            float orbD = fabsf(ud - 13.5f);
+            if (orbD < 2.1f && ax > 2.4f) {
+                m = 1.0f - SmoothStepF(0.8f, 2.1f, orbD);
+                outR = 195.0f; outG = 135.0f; outB = 255.0f;
+            }
+            float a1 = DistToSegF(ux, uy,  2.0f, -13.5f,  6.8f, -9.4f);
+            float a2 = DistToSegF(ux, uy, -2.0f,  13.5f, -6.8f,  9.4f);
+            if (fminf(a1, a2) < 2.1f) {
+                m = fmaxf(m, 1.0f - SmoothStepF(0.8f, 2.1f, fminf(a1, a2)));
+                outR = 215.0f; outG = 155.0f; outB = 255.0f;
+            }
+            float starD = fminf(ax * 0.52f + ay, ax + ay * 0.52f);
+            if (starD <= 6.8f) {
+                float sm = 1.0f - SmoothStepF(5.0f, 6.8f, starD);
+                if (sm >= m) {
+                    m = sm;
+                    outR = 255.0f; outG = 225.0f; outB = 115.0f;
+                }
+            }
+        } else if (sysType == 2) {
+            // 2: Dragon Soul Alchemy (Golden Wheel + 6 Colored Elemental Cor Gems + Central Diamond)
+            float wheelD = fabsf(ud - 13.8f);
+            if (wheelD < 1.4f) {
+                m = 0.88f;
+                outR = 215.0f; outG = 175.0f; outB = 95.0f;
+            }
+            const float eCols[6][3] = {
+                {255, 75, 75}, {75, 185, 255}, {75, 235, 135},
+                {255, 215, 75}, {195, 115, 255}, {245, 240, 230}
+            };
+            for (int k = 0; k < 6; ++k) {
+                float ang = k * 1.0471975f;
+                float nd = hypotf(ux - cosf(ang) * 13.8f, uy - sinf(ang) * 13.8f);
+                if (nd < 3.0f) {
+                    float nm = 1.0f - SmoothStepF(1.8f, 3.0f, nd);
+                    if (nm >= m) {
+                        m = nm;
+                        outR = eCols[k][0]; outG = eCols[k][1]; outB = eCols[k][2];
+                    }
+                }
+            }
+            float gemD = ax * 1.10f + ay * 0.85f;
+            if (gemD <= 8.6f) {
+                float gm = 1.0f - SmoothStepF(7.2f, 8.6f, gemD);
+                if (gm >= m) {
+                    m = gm;
+                    float facet = (gemD > 4.8f && gemD < 5.8f) ? 0.55f : 1.0f;
+                    outR = 255.0f * facet; outG = 205.0f * facet; outB = 95.0f * facet;
+                }
+            }
+        } else if (sysType == 3) {
+            // 3: Ikarus Shop Search (Golden Magnifying Glass over Turquoise Market Booth / Coin)
+            float lx = ux + 2.5f, ly = uy + 2.5f;
+            float ld = hypotf(lx, ly);
+            float rimD = fabsf(ld - 9.6f);
+            if (rimD < 2.4f) {
+                m = 1.0f - SmoothStepF(1.1f, 2.4f, rimD);
+                outR = 242.0f; outG = 198.0f; outB = 108.0f;
+            } else if (ld < 7.4f) {
+                float star = fminf(fabsf(lx) * 0.55f + fabsf(ly), fabsf(lx) + fabsf(ly) * 0.55f);
+                if (star < 4.8f) {
+                    m = 1.0f - SmoothStepF(3.2f, 4.8f, star);
+                    outR = 95.0f; outG = 245.0f; outB = 220.0f;
+                }
+            }
+            float hdl = DistToSegF(ux, uy, 4.4f, 4.4f, 13.2f, 13.2f);
+            if (hdl < 2.6f) {
+                float hm = 1.0f - SmoothStepF(1.3f, 2.6f, hdl);
+                if (hm > m) {
+                    m = hm;
+                    outR = 195.0f; outG = 142.0f; outB = 78.0f;
+                }
+            }
+        } else if (sysType == 4) {
+            // 4: Won & Yang Exchange (Sapphire-Silver Won Coin + Golden Yang Coin + Exchange Arrows)
+            float c1 = hypotf(ux + 4.4f, uy + 3.4f);
+            float c2 = hypotf(ux - 4.4f, uy - 3.4f);
+            if (c2 <= 8.2f) {
+                m = 1.0f - SmoothStepF(7.0f, 8.2f, c2);
+                float ring = (fabsf(c2 - 5.4f) < 0.85f || c2 < 2.0f) ? 0.55f : 1.0f;
+                outR = 255.0f * ring; outG = 208.0f * ring; outB = 82.0f * ring; // Gold Yang Coin
+            } else if (c1 <= 8.0f && c2 > 8.8f) {
+                m = 1.0f - SmoothStepF(6.8f, 8.0f, c1);
+                float ring = (fabsf(c1 - 5.2f) < 0.85f) ? 0.55f : 1.0f;
+                outR = 125.0f * ring; outG = 215.0f * ring; outB = 255.0f * ring; // Blue-Silver Won Coin
+            }
+            float arr1 = DistToSegF(ux, uy,  3.5f, -11.0f, 11.0f, -3.5f);
+            float arr2 = DistToSegF(ux, uy, -11.0f,  3.5f, -3.5f, 11.0f);
+            if (fminf(arr1, arr2) < 1.8f) {
+                m = fmaxf(m, 0.96f);
+                outR = 255.0f; outG = 245.0f; outB = 215.0f;
+            }
+        } else if (sysType == 5) {
+            // 5: Special Storage (Twin Layered Treasure Chests — Bronze Back Chest & Golden-Trimmed Front Chest)
+            float b1x = ux + 3.6f, b1y = uy + 3.0f;
+            float b2x = ux - 3.4f, b2y = uy - 3.0f;
+            bool inFront = (fabsf(b2x) <= 8.2f && fabsf(b2y) <= 6.8f);
+            bool inBack  = (fabsf(b1x) <= 7.8f && fabsf(b1y) <= 6.5f) && !(fabsf(b2x) <= 9.2f && fabsf(b2y) <= 7.8f);
+            if (inFront) {
+                m = 0.98f;
+                if (fabsf(b2y + 1.0f) < 0.85f && fabsf(b2x) > 2.1f) {
+                    m = 0.15f;
+                } else if (fabsf(b2x) <= 2.1f && fabsf(b2y + 1.0f) <= 2.3f) {
+                    outR = 255.0f; outG = 225.0f; outB = 115.0f;
+                } else {
+                    outR = 225.0f; outG = 172.0f; outB = 98.0f;
+                }
+            } else if (inBack) {
+                m = 0.94f;
+                outR = 165.0f; outG = 128.0f; outB = 82.0f;
+                if (fabsf(b1y + 1.0f) < 0.85f) m = 0.15f;
+            }
+        } else if (sysType == 6) {
+            // 6: Safebox / Warehouse (Heavy Steel-Reinforced Vault Door with Golden Lock Wheel)
+            if (ax <= 11.6f && ay <= 10.6f) {
+                m = 0.98f;
+                float border = fmaxf(ax - 9.2f, ay - 8.2f);
+                if (border > 0.0f) {
+                    outR = 195.0f; outG = 205.0f; outB = 218.0f;
+                } else if (fabsf(border + 0.8f) < 0.65f) {
+                    outR = 55.0f; outG = 60.0f; outB = 68.0f;
+                } else {
+                    if (ud < 2.2f || (ax < 1.15f && uy >= 1.5f && uy <= 6.0f)) {
+                        m = 0.12f;
+                    } else if (fabsf(ud - 5.0f) < 1.35f) {
+                        outR = 255.0f; outG = 212.0f; outB = 98.0f;
+                    } else {
+                        outR = 148.0f; outG = 162.0f; outB = 178.0f;
+                    }
+                }
+            }
+        } else if (sysType == 7) {
+            // 7: Companion Pet (Glowing Golden-Amber Beast Paw Emblem)
+            float padD = hypotf(ux * 0.84f, (uy - 4.4f) * 1.08f) - 5.8f;
+            float t1 = hypotf((ux + 8.0f) * 1.12f, (uy + 2.2f) * 0.88f) - 3.0f;
+            float t2 = hypotf((ux + 2.9f) * 1.12f, (uy + 7.0f) * 0.88f) - 3.2f;
+            float t3 = hypotf((ux - 2.9f) * 1.12f, (uy + 7.0f) * 0.88f) - 3.2f;
+            float t4 = hypotf((ux - 8.0f) * 1.12f, (uy + 2.2f) * 0.88f) - 3.0f;
+            float minD = fminf(padD, fminf(fminf(t1, t2), fminf(t3, t4)));
+            if (minD < 0.8f) {
+                m = 1.0f - SmoothStepF(-0.5f, 0.8f, minD);
+                float bev = 1.15f - 0.15f * SmoothStepF(-3.0f, 0.5f, minD);
+                outR = fminf(255.0f, 238.0f * bev);
+                outG = fminf(255.0f, 178.0f * bev);
+                outB = fminf(255.0f,  88.0f * bev);
+            }
+        } else if (sysType == 8) {
+            // 8: PickUp Filter (Crimson & Silver Horseshoe Magnet + Golden Loot Sparkles)
+            float archR = hypotf(ax, fminf(0.0f, uy + 1.5f));
+            float armD = (uy > -1.5f) ? fabsf(ax - 8.0f) : fabsf(archR - 8.0f);
+            if (uy <= 9.8f && armD <= 3.0f) {
+                m = 1.0f - SmoothStepF(2.0f, 3.0f, armD);
+                if (uy > 4.5f) {
+                    outR = 230.0f; outG = 235.0f; outB = 242.0f; // Silver magnet tips
+                } else if (fabsf(uy - 4.2f) < 0.7f) {
+                    outR = 45.0f; outG = 25.0f; outB = 25.0f;
+                } else {
+                    outR = 235.0f; outG = 68.0f; outB = 62.0f; // Crimson magnet body
+                }
+            }
+            float spk = fminf(ax * 0.5f + fabsf(uy - 10.8f), ax + fabsf(uy - 10.8f) * 0.5f);
+            if (spk < 3.6f) {
+                float sm = 1.0f - SmoothStepF(2.0f, 3.6f, spk);
+                if (sm >= m) {
+                    m = sm;
+                    outR = 255.0f; outG = 225.0f; outB = 95.0f;
+                }
+            }
+        } else if (sysType == 10) {
+            // 10: Render Target Preview (Golden Mirror Frame + Glowing Cyan-Sapphire 3D Eye)
+            float eyeY = 6.8f * (1.0f - (ux * ux) / 152.0f);
+            if (ax <= 12.4f && fabsf(ay - eyeY) <= 2.0f) {
+                m = 1.0f - SmoothStepF(1.0f, 2.0f, fabsf(ay - eyeY));
+                outR = 240.0f; outG = 198.0f; outB = 112.0f;
+            }
+            if (ud <= 5.0f) {
+                float em = 1.0f - SmoothStepF(3.8f, 5.0f, ud);
+                if (em >= m) {
+                    m = em;
+                    if (ud < 1.9f) {
+                        outR = 25.0f; outG = 35.0f; outB = 48.0f;
+                    } else {
+                        outR = 95.0f; outG = 215.0f; outB = 255.0f;
+                    }
+                }
+            }
+        }
+        return m;
+    };
+
+    size_t idx = 0;
+    for (int y = 0; y < size; ++y) {
+        float py = (y + 0.5f) - half;
+        float ny = py / outerR;
+        for (int x = 0; x < size; ++x) {
+            float px = (x + 0.5f) - half;
+            float nx = px / outerR;
+            float d = hypotf(px, py);
+            float grain = StoneGrainNoise(x, y);
+
+            float r = 12.0f, g = 8.0f, b = 6.0f, a = 0.0f;
+            if (d < outerR + 2.6f) {
+                float sh = 1.0f - SmoothStepF(outerR - 0.4f, outerR + 2.6f, d);
+                a = sh * 145.0f;
+            }
+
+            float innerEdge = outerR - rimW;
+            if (d <= outerR) {
+                float bodyMask = 1.0f - SmoothStepF(outerR - 0.9f, outerR + 0.4f, d);
+                float radRatio = fminf(1.0f, d / innerEdge);
+                float sphereZ = sqrtf(fmaxf(0.0f, 1.0f - radRatio * radRatio));
+
+                // Warm uicharacter-style Dark Espresso-Brown & System-Tinted Lower Bowl
+                float botGlow = SmoothStepF(-0.20f, 0.88f, ny) * (0.30f + 0.70f * radRatio);
+                r = 18.0f + botGlow * ar * 0.42f + grain * 4.0f;
+                g = 13.0f + botGlow * ag * 0.36f + grain * 3.0f;
+                b = 10.0f + botGlow * ab * 0.32f + grain * 3.0f;
+
+                // Top 3D Glass Crescent Shade
+                float crescentEnv = hypotf(nx * 1.12f, (ny + 0.46f) * 1.78f);
+                float topCrescent = (1.0f - SmoothStepF(0.16f, 0.76f, crescentEnv)) * SmoothStepF(-0.05f, -0.78f, ny);
+                float hotSpot = powf(fmaxf(0.0f, -0.45f * nx - 0.65f * ny + sphereZ * 0.35f), 4.5f);
+                float glass = fminf(1.0f, topCrescent * 0.50f + hotSpot * 0.44f);
+                r = r * (1.0f - glass * 0.48f) + 248.0f * (glass * 0.48f);
+                g = g * (1.0f - glass * 0.48f) + 232.0f * (glass * 0.48f);
+                b = b * (1.0f - glass * 0.48f) + 208.0f * (glass * 0.48f);
+                a = fmaxf(a, bodyMask * 250.0f);
+
+                // Warm Antique Bronze-Gold Outer Bezel matching uicharacter
+                float rimDist = fabsf(d - (outerR - rimW * 0.5f));
+                if (rimDist < rimW * 0.88f) {
+                    float rm = 1.0f - SmoothStepF(rimW * 0.25f, rimW * 0.88f, rimDist);
+                    float lGrad = 0.58f + 0.42f * (-0.55f * nx - 0.82f * ny);
+                    r = r * (1.0f - rm) + fminf(255.0f, 198.0f * lGrad + ar * 0.12f) * rm;
+                    g = g * (1.0f - rm) + fminf(255.0f, 158.0f * lGrad + ag * 0.12f) * rm;
+                    b = b * (1.0f - rm) + fminf(255.0f, 102.0f * lGrad + ab * 0.12f) * rm;
+                    a = fmaxf(a, rm * 254.0f);
+                }
+            }
+
+            float dr = 0, dg = 0, db = 0;
+            float shMask = EvalSysGlyph(px - 1.5f, py - 1.8f, dr, dg, db);
+            if (shMask > 0.05f) {
+                float sm = shMask * 0.80f;
+                r *= (1.0f - sm); g *= (1.0f - sm); b *= (1.0f - sm);
+            }
+
+            float icR = 235.0f, icG = 205.0f, icB = 145.0f;
+            float ic = EvalSysGlyph(px, py, icR, icG, icB);
+            if (ic > 0.0f) {
+                float vGrad = 0.85f + 0.30f * (0.5f - 0.5f * ny);
+                r = r * (1.0f - ic) + fminf(255.0f, icR * vGrad) * ic;
+                g = g * (1.0f - ic) + fminf(255.0f, icG * vGrad) * ic;
+                b = b * (1.0f - ic) + fminf(255.0f, icB * vGrad) * ic;
+                a = fmaxf(a, ic * 255.0f);
+            }
+
+            pix[idx + 0] = ClampU8(b);
+            pix[idx + 1] = ClampU8(g);
+            pix[idx + 2] = ClampU8(r);
+            pix[idx + 3] = ClampU8(a);
+            idx += 4;
+        }
+    }
+    fwrite(pix.data(), 1, pix.size(), fp);
+    fclose(fp);
+}
+
 static void WriteMobileStatusHUDTextures() {
-    WriteMobileRingTGA("mark/m_portrait_bg.tga", 64, 28.5f, 2.2f, 215.0f, 146,140,130, 175,168,156, MICON_NONE, false);
+    WriteMobileRingTGA("mark/m_portrait_bg.tga", 64, 28.5f, 2.2f, 238.0f, 136,140,148, 182,188,196, MICON_NONE, false);
     WritePortraitRingTGA("mark/m_portrait_ring.tga");
     WriteExpSphereTGA("mark/m_exp_orb_empty_v3.tga", false, 0.0f, 0.0f, 0.0f);
-    WriteExpSphereTGA("mark/m_exp_orb_full_v3.tga",  true, 225.0f, 175.0f, 35.0f);
-    WriteExpSphereTGA("mark/m_exp_orb_conq_v3.tga",  true,  65.0f, 195.0f, 245.0f);
+    WriteExpSphereTGA("mark/m_exp_orb_full_v3.tga",  true, 232.0f, 184.0f, 42.0f);
+    WriteExpSphereTGA("mark/m_exp_orb_conq_v3.tga",  true,  65.0f, 198.0f, 248.0f);
     WriteStatusPlateTGA("mark/m_hud_plate_v4.tga");
     for (int f = 0; f < 8; ++f) {
         char hpPath[64], spPath[64], enPath[64];
         snprintf(hpPath, sizeof(hpPath), "mark/m_hud_hp_v4_%d.tga", f);
         snprintf(spPath, sizeof(spPath), "mark/m_hud_sp_v4_%d.tga", f);
         snprintf(enPath, sizeof(enPath), "mark/m_hud_en_v4_%d.tga", f);
-        WriteGlossyBarFillTGA(hpPath, 171, 13, 220.0f, 34.0f, 34.0f, f);
-        WriteGlossyBarFillTGA(spPath, 171, 11,  34.0f, 115.0f, 225.0f, f);
-        WriteGlossyBarFillTGA(enPath, 171,  8,  95.0f, 180.0f, 220.0f, f);
+        WriteGlossyBarFillTGA(hpPath, 171, 13, 218.0f,  32.0f,  32.0f, f);
+        WriteGlossyBarFillTGA(spPath, 159, 11,  32.0f, 122.0f, 235.0f, f);
+        WriteGlossyBarFillTGA(enPath, 147,  8, 224.0f, 174.0f,  38.0f, f);
     }
+
+    WriteCircularBezelOverlayTGA("mark/m_slot_bezel_v6.tga",   144, 46.0f, 67.5f, 4.0f, false);
+    WriteCircularBezelOverlayTGA("mark/m_affect_bezel_v6.tga",  52, 18.2f, 25.4f, 2.6f, true);
+    WriteWhiteTouchOrbTGA("mark/m_touch_orb_v7.tga");
 
     WriteTooltipActionIconTGA("mark/m_tt_use_norm.tga",     TTICON_USE,     false);
     WriteTooltipActionIconTGA("mark/m_tt_use_down.tga",     TTICON_USE,     true);
@@ -2647,80 +3465,119 @@ static void WriteMobileStatusHUDTextures() {
     WriteTooltipActionIconTGA("mark/m_tt_preview_down.tga", TTICON_PREVIEW, true);
     WriteTooltipActionIconTGA("mark/m_tt_close_norm.tga",   TTICON_CLOSE,   false);
     WriteTooltipActionIconTGA("mark/m_tt_close_down.tga",   TTICON_CLOSE,   true);
+
+    WriteUtilitySystemIconTGA("mark/m_util_icon_0.tga",  0,  220.0f,  55.0f,  50.0f);
+    WriteUtilitySystemIconTGA("mark/m_util_icon_1.tga",  1,  165.0f,  85.0f, 235.0f);
+    WriteUtilitySystemIconTGA("mark/m_util_icon_2.tga",  2,  225.0f, 165.0f,  55.0f);
+    WriteUtilitySystemIconTGA("mark/m_util_icon_3.tga",  3,   55.0f, 195.0f, 175.0f);
+    WriteUtilitySystemIconTGA("mark/m_util_icon_4.tga",  4,  215.0f, 175.0f,  65.0f);
+    WriteUtilitySystemIconTGA("mark/m_util_icon_5.tga",  5,  195.0f, 145.0f,  85.0f);
+    WriteUtilitySystemIconTGA("mark/m_util_icon_6.tga",  6,  135.0f, 155.0f, 185.0f);
+    WriteUtilitySystemIconTGA("mark/m_util_icon_7.tga",  7,  225.0f, 135.0f,  60.0f);
+    WriteUtilitySystemIconTGA("mark/m_util_icon_8.tga",  8,  215.0f,  75.0f,  75.0f);
+    WriteUtilitySystemIconTGA("mark/m_util_icon_10.tga", 10,  75.0f, 175.0f, 235.0f);
 }
 
 void GenerateMobileHUDTextures() {
-    // One-time migration: remove old cached TGAs so native worldonline textures regenerate cleanly
-    if (access("mark/theme_wo_native_v4.flag", F_OK) != 0) {
+    if (access("mark/theme_wo_stone_v13.flag", F_OK) != 0) {
         static const char* s_oldTgas[] = {
             "mark/m_minimap_frame.tga", "mark/m_portrait_bg.tga", "mark/m_portrait_ring.tga",
-            "mark/m_hud_plate_v2.tga", "mark/m_hud_plate_v3.tga",
+            "mark/m_hud_plate_v2.tga", "mark/m_hud_plate_v3.tga", "mark/m_hud_plate_v4.tga",
             "mark/m_exp_orb_empty_v3.tga", "mark/m_exp_orb_full_v3.tga", "mark/m_exp_orb_conq_v3.tga",
-            "mark/m_tt_use_norm.tga", "mark/m_tt_use_down.tga", "mark/m_tt_split_norm.tga", "mark/m_tt_split_down.tga",
-            "mark/m_tt_link_norm.tga", "mark/m_tt_link_down.tga", "mark/m_tt_chest_norm.tga", "mark/m_tt_chest_down.tga",
-            "mark/m_tt_preview_norm.tga", "mark/m_tt_preview_down.tga", "mark/m_tt_close_norm.tga", "mark/m_tt_close_down.tga",
             "mark/m_joy_bg_v2.tga", "mark/m_joy_knob_norm_v2.tga", "mark/m_joy_knob_down_v2.tga",
             "mark/m_atk_norm_v3.tga", "mark/m_atk_down_v3.tga", "mark/m_atk_norm_v5.tga", "mark/m_atk_down_v5.tga",
             "mark/m_slot_norm_v3.tga", "mark/m_slot_over_v3.tga",
+            "mark/m_slot_bezel_v6.tga", "mark/m_affect_bezel_v6.tga", "mark/m_touch_orb_v7.tga",
             "mark/m_btn_lock_norm_v3.tga", "mark/m_btn_lock_down_v3.tga",
             "mark/m_btn_loot_norm_v3.tga", "mark/m_btn_loot_down_v3.tga",
             "mark/m_btn_page_norm_v3.tga", "mark/m_btn_page_down_v3.tga",
             "mark/m_btn_mount_norm_v3.tga", "mark/m_btn_mount_down_v3.tga",
-            "mark/m_btn_chat_norm_v3.tga", "mark/m_btn_chat_down_v3.tga"
+            "mark/m_btn_chat_norm_v3.tga", "mark/m_btn_chat_down_v3.tga",
+            "mark/m_btn_emote_norm_v6.tga", "mark/m_btn_emote_down_v6.tga",
+            "mark/m_btn_auto_norm_v6.tga", "mark/m_btn_auto_down_v6.tga",
+            "mark/m_btn_quest_norm_v6.tga", "mark/m_btn_quest_down_v6.tga",
+            "mark/m_mm_plus_norm.tga", "mark/m_mm_plus_down.tga",
+            "mark/m_mm_minus_norm.tga", "mark/m_mm_minus_down.tga",
+            "mark/m_top_collapse_norm_v4.tga", "mark/m_top_collapse_down_v4.tga",
+            "mark/m_top_expand_norm_v4.tga", "mark/m_top_expand_down_v4.tga",
+            "mark/m_top_char_norm_v4.tga", "mark/m_top_char_down_v4.tga",
+            "mark/m_top_inven_norm_v4.tga", "mark/m_top_inven_down_v4.tga",
+            "mark/m_top_comm_norm_v4.tga", "mark/m_top_comm_down_v4.tga",
+            "mark/m_top_shop_norm_v4.tga", "mark/m_top_shop_down_v4.tga",
+            "mark/m_top_auto_norm_v4.tga", "mark/m_top_auto_down_v4.tga",
+            "mark/m_top_ds_norm_v4.tga", "mark/m_top_ds_down_v4.tga",
+            "mark/m_top_util_norm_v4.tga", "mark/m_top_util_down_v4.tga",
+            "mark/m_top_sys_norm_v4.tga", "mark/m_top_sys_down_v4.tga",
+            "mark/m_top_spec_norm_v4.tga", "mark/m_top_spec_down_v4.tga"
         };
         for (const char* p : s_oldTgas) unlink(p);
-        if (FILE* f = fopen("mark/theme_wo_native_v4.flag", "wb")) fclose(f);
+        for (int u = 0; u <= 10; ++u) {
+            char upath[64];
+            snprintf(upath, sizeof(upath), "mark/m_util_icon_%d.tga", u);
+            unlink(upath);
+        }
+        for (int f = 0; f < 8; ++f) {
+            char p1[64], p2[64], p3[64];
+            snprintf(p1, sizeof(p1), "mark/m_hud_hp_v4_%d.tga", f);
+            snprintf(p2, sizeof(p2), "mark/m_hud_sp_v4_%d.tga", f);
+            snprintf(p3, sizeof(p3), "mark/m_hud_en_v4_%d.tga", f);
+            unlink(p1); unlink(p2); unlink(p3);
+        }
+        if (FILE* f = fopen("mark/theme_wo_stone_v13.flag", "wb")) fclose(f);
     }
 
-    // Native worldonline Pewter/Iron Rim (148,142,132) + Warm Copper-Brown Accent (145,78,42)
-    WriteMobileRingTGA("mark/m_joy_bg_v2.tga",        160, 74.0f, 3.8f, 115.0f, 148,142,132, 185,178,166, MICON_JOY_BG,      false);
-    WriteMobileRingTGA("mark/m_joy_knob_norm_v2.tga",  76, 33.0f, 3.2f, 185.0f, 148,142,132, 175,105, 62, MICON_JOY_KNOB,    false);
-    WriteMobileRingTGA("mark/m_joy_knob_down_v2.tga",  76, 35.0f, 3.8f, 220.0f, 185,178,166, 205,120, 68, MICON_JOY_KNOB,    true);
+    WriteMobileRingTGA("mark/m_joy_bg_v2.tga",        160, 72.0f, 3.6f, 160.0f, 136,140,148, 182,188,196, MICON_JOY_BG,      false);
+    WriteMobileRingTGA("mark/m_joy_knob_norm_v2.tga",  76, 31.0f, 2.8f, 225.0f, 245,248,255, 255,255,255, MICON_JOY_KNOB,    false);
+    WriteMobileRingTGA("mark/m_joy_knob_down_v2.tga",  76, 33.0f, 3.2f, 250.0f, 255,255,255, 255,255,255, MICON_JOY_KNOB,    true);
 
     WriteSquaredMiniMapTextures();
     WriteMobileStatusHUDTextures();
 
-    WriteTopBarButtonTGA("mark/m_top_collapse_norm_v4.tga", TICON_COLLAPSE, false);
-    WriteTopBarButtonTGA("mark/m_top_collapse_down_v4.tga", TICON_COLLAPSE, true);
-    WriteTopBarButtonTGA("mark/m_top_expand_norm_v4.tga",   TICON_EXPAND,   false);
-    WriteTopBarButtonTGA("mark/m_top_expand_down_v4.tga",   TICON_EXPAND,   true);
-    WriteTopBarButtonTGA("mark/m_top_char_norm_v4.tga",     TICON_CHAR,     false);
-    WriteTopBarButtonTGA("mark/m_top_char_down_v4.tga",     TICON_CHAR,     true);
-    WriteTopBarButtonTGA("mark/m_top_inven_norm_v4.tga",    TICON_INVEN,    false);
-    WriteTopBarButtonTGA("mark/m_top_inven_down_v4.tga",    TICON_INVEN,    true);
-    WriteTopBarButtonTGA("mark/m_top_comm_norm_v4.tga",     TICON_COMM,     false);
-    WriteTopBarButtonTGA("mark/m_top_comm_down_v4.tga",     TICON_COMM,     true);
-    WriteTopBarButtonTGA("mark/m_top_shop_norm_v4.tga",     TICON_SHOP,     false);
-    WriteTopBarButtonTGA("mark/m_top_shop_down_v4.tga",     TICON_SHOP,     true);
-    WriteTopBarButtonTGA("mark/m_top_auto_norm_v4.tga",     TICON_AUTOHUNT, false);
-    WriteTopBarButtonTGA("mark/m_top_auto_down_v4.tga",     TICON_AUTOHUNT, true);
-    WriteTopBarButtonTGA("mark/m_top_ds_norm_v4.tga",       TICON_DS,       false);
-    WriteTopBarButtonTGA("mark/m_top_ds_down_v4.tga",       TICON_DS,       true);
-    WriteTopBarButtonTGA("mark/m_top_util_norm_v4.tga",     TICON_UTIL,     false);
-    WriteTopBarButtonTGA("mark/m_top_util_down_v4.tga",     TICON_UTIL,     true);
-    WriteTopBarButtonTGA("mark/m_top_sys_norm_v4.tga",      TICON_SYS,      false);
-    WriteTopBarButtonTGA("mark/m_top_sys_down_v4.tga",      TICON_SYS,      true);
-    WriteTopBarButtonTGA("mark/m_top_spec_norm_v4.tga",     TICON_SPEC_BOXES, false);
-    WriteTopBarButtonTGA("mark/m_top_spec_down_v4.tga",     TICON_SPEC_BOXES, true);
+    WriteMobileRingTGA("mark/m_mm_plus_norm.tga",  24, 10.5f, 1.4f, 225.0f, 136,140,148, 182,188,196, MICON_PLUS,  false);
+    WriteMobileRingTGA("mark/m_mm_plus_down.tga",  24, 11.0f, 1.8f, 248.0f, 185,190,198, 225,230,238, MICON_PLUS,  true);
+    WriteMobileRingTGA("mark/m_mm_minus_norm.tga", 24, 10.5f, 1.4f, 225.0f, 136,140,148, 182,188,196, MICON_MINUS, false);
+    WriteMobileRingTGA("mark/m_mm_minus_down.tga", 24, 11.0f, 1.8f, 248.0f, 185,190,198, 225,230,238, MICON_MINUS, true);
 
-    // Native worldonline Dark Charcoal Glass + Pewter-Iron Bevel & Copper-Rust Active Glow
-    // 2x HiDPI Native worldonline Dark Charcoal & Pewter-Iron Rings (stay razor-sharp when resized up to 180%)
-    WriteMobileRingTGA("mark/m_atk_norm_v3.tga",       280, 128.0f, 10.4f, 200.0f, 152,146,136, 188,112, 68, MICON_ATK_SWORDS,  false);
-    WriteMobileRingTGA("mark/m_atk_down_v3.tga",       280, 132.0f, 12.0f, 235.0f, 192,185,174, 215,125, 72, MICON_ATK_SWORDS,  true);
-    WriteMobileRingTGA("mark/m_slot_norm_v3.tga",      144,  67.0f,  7.2f, 190.0f, 146,140,130, 175,168,156, MICON_NONE,        false);
-    WriteMobileRingTGA("mark/m_slot_over_v3.tga",      144,  69.0f,  8.4f, 225.0f, 188,182,170, 195,115, 68, MICON_NONE,        true);
-    WriteMobileRingTGA("mark/m_btn_lock_norm_v3.tga",  128,  54.0f,  6.8f, 195.0f, 146,140,130, 185,178,166, MICON_TARGET,      false);
-    WriteMobileRingTGA("mark/m_btn_lock_down_v3.tga",  128,  56.0f,  8.0f, 230.0f, 188,182,170, 205,120, 68, MICON_TARGET,      true);
-    WriteMobileRingTGA("mark/m_btn_loot_norm_v3.tga",  128,  54.0f,  6.8f, 195.0f, 146,140,130, 185,178,166, MICON_LOOT,        false);
-    WriteMobileRingTGA("mark/m_btn_loot_down_v3.tga",  128,  56.0f,  8.0f, 230.0f, 188,182,170, 205,120, 68, MICON_LOOT,        true);
-    WriteMobileRingTGA("mark/m_btn_page_norm_v3.tga",  128,  54.0f,  6.8f, 195.0f, 146,140,130, 185,178,166, MICON_PAGE,        false);
-    WriteMobileRingTGA("mark/m_btn_page_down_v3.tga",  128,  56.0f,  8.0f, 230.0f, 188,182,170, 205,120, 68, MICON_PAGE,        true);
-    WriteMobileRingTGA("mark/m_btn_mount_norm_v3.tga", 128,  57.0f,  7.2f, 195.0f, 146,140,130, 185,178,166, MICON_MOUNT,       false);
-    WriteMobileRingTGA("mark/m_btn_mount_down_v3.tga", 128,  59.0f,  8.4f, 230.0f, 188,182,170, 205,120, 68, MICON_MOUNT,       true);
-    WriteMobileRingTGA("mark/m_btn_chat_norm_v3.tga",  112,  49.0f,  6.4f, 195.0f, 146,140,130, 185,178,166, MICON_CHAT_BUBBLE, false);
-    WriteMobileRingTGA("mark/m_btn_chat_down_v3.tga",  112,  51.0f,  7.6f, 230.0f, 188,182,170, 205,120, 68, MICON_CHAT_BUBBLE, true);
-    WriteMobileRingTGA("mark/m_atk_norm_v5.tga",       288, 132.0f, 10.8f, 205.0f, 152,146,136, 192,115, 68, MICON_ATK_SWORDS,  false);
-    WriteMobileRingTGA("mark/m_atk_down_v5.tga",       288, 136.0f, 12.4f, 238.0f, 195,188,176, 220,128, 72, MICON_ATK_SWORDS,  true);
+    WriteTopBarButtonTGA("mark/m_top_char_norm_v4.tga",  TICON_CHAR,       false);
+    WriteTopBarButtonTGA("mark/m_top_char_down_v4.tga",  TICON_CHAR,       true);
+    WriteTopBarButtonTGA("mark/m_top_inven_norm_v4.tga", TICON_INVEN,      false);
+    WriteTopBarButtonTGA("mark/m_top_inven_down_v4.tga", TICON_INVEN,      true);
+    WriteTopBarButtonTGA("mark/m_top_comm_norm_v4.tga",  TICON_COMM,       false);
+    WriteTopBarButtonTGA("mark/m_top_comm_down_v4.tga",  TICON_COMM,       true);
+    WriteTopBarButtonTGA("mark/m_top_shop_norm_v4.tga",  TICON_SHOP,       false);
+    WriteTopBarButtonTGA("mark/m_top_shop_down_v4.tga",  TICON_SHOP,       true);
+    WriteTopBarButtonTGA("mark/m_top_ds_norm_v4.tga",    TICON_DS,         false);
+    WriteTopBarButtonTGA("mark/m_top_ds_down_v4.tga",    TICON_DS,         true);
+    WriteTopBarButtonTGA("mark/m_top_util_norm_v4.tga",  TICON_UTIL,       false);
+    WriteTopBarButtonTGA("mark/m_top_util_down_v4.tga",  TICON_UTIL,       true);
+    WriteTopBarButtonTGA("mark/m_top_sys_norm_v4.tga",   TICON_SYS,        false);
+    WriteTopBarButtonTGA("mark/m_top_sys_down_v4.tga",   TICON_SYS,        true);
+    WriteTopBarButtonTGA("mark/m_top_spec_norm_v4.tga",  TICON_SPEC_BOXES, false);
+    WriteTopBarButtonTGA("mark/m_top_spec_down_v4.tga",  TICON_SPEC_BOXES, true);
+
+    // Chiseled Dark Stone-Slate Spheres + Thin Stone Rims (136, 140, 148)
+    WriteMobileRingTGA("mark/m_atk_norm_v3.tga",        280, 128.0f,  9.2f, 238.0f, 136,140,148, 185,190,198, MICON_ATK_SWORDS,   false);
+    WriteMobileRingTGA("mark/m_atk_down_v3.tga",        280, 132.0f, 10.6f, 250.0f, 185,190,198, 225,230,238, MICON_ATK_SWORDS,   true);
+    WriteMobileRingTGA("mark/m_atk_norm_v5.tga",        288, 132.0f,  9.2f, 238.0f, 136,140,148, 185,190,198, MICON_ATK_SWORDS,   false);
+    WriteMobileRingTGA("mark/m_atk_down_v5.tga",        288, 136.0f, 10.6f, 252.0f, 185,190,198, 225,230,238, MICON_ATK_SWORDS,   true);
+    WriteMobileRingTGA("mark/m_slot_norm_v3.tga",       144,  67.5f,  6.2f, 236.0f, 136,140,148, 182,188,196, MICON_NONE,         false);
+    WriteMobileRingTGA("mark/m_slot_over_v3.tga",       144,  69.0f,  7.2f, 248.0f, 185,190,198, 225,230,238, MICON_NONE,         true);
+    WriteMobileRingTGA("mark/m_btn_lock_norm_v3.tga",   128,  55.0f,  6.0f, 236.0f, 136,140,148, 182,188,196, MICON_TARGET,       false);
+    WriteMobileRingTGA("mark/m_btn_lock_down_v3.tga",   128,  57.0f,  7.0f, 250.0f, 185,190,198, 225,230,238, MICON_TARGET,       true);
+    WriteMobileRingTGA("mark/m_btn_loot_norm_v3.tga",   128,  55.0f,  6.0f, 236.0f, 136,140,148, 182,188,196, MICON_LOOT,         false);
+    WriteMobileRingTGA("mark/m_btn_loot_down_v3.tga",   128,  57.0f,  7.0f, 250.0f, 185,190,198, 225,230,238, MICON_LOOT,         true);
+    WriteMobileRingTGA("mark/m_btn_page_norm_v3.tga",   128,  55.0f,  6.0f, 236.0f, 136,140,148, 182,188,196, MICON_PAGE,         false);
+    WriteMobileRingTGA("mark/m_btn_page_down_v3.tga",   128,  57.0f,  7.0f, 250.0f, 185,190,198, 225,230,238, MICON_PAGE,         true);
+    WriteMobileRingTGA("mark/m_btn_mount_norm_v3.tga",  128,  57.0f,  6.2f, 236.0f, 136,140,148, 182,188,196, MICON_MOUNT,        false);
+    WriteMobileRingTGA("mark/m_btn_mount_down_v3.tga",  128,  59.0f,  7.2f, 250.0f, 185,190,198, 225,230,238, MICON_MOUNT,        true);
+    WriteMobileRingTGA("mark/m_btn_chat_norm_v3.tga",   112,  49.0f,  5.6f, 236.0f, 136,140,148, 182,188,196, MICON_CHAT_BUBBLE,  false);
+    WriteMobileRingTGA("mark/m_btn_chat_down_v3.tga",   112,  51.0f,  6.8f, 250.0f, 185,190,198, 225,230,238, MICON_CHAT_BUBBLE,  true);
+    WriteMobileRingTGA("mark/m_btn_emote_norm_v6.tga",  112,  49.0f,  5.6f, 236.0f, 136,140,148, 182,188,196, MICON_EMOTE_SMILEY, false);
+    WriteMobileRingTGA("mark/m_btn_emote_down_v6.tga",  112,  51.0f,  6.8f, 250.0f, 185,190,198, 225,230,238, MICON_EMOTE_SMILEY, true);
+    WriteMobileRingTGA("mark/m_btn_auto_norm_v6.tga",   112,  49.0f,  5.6f, 236.0f, 136,140,148, 182,188,196, MICON_AUTO_COMBAT,  false);
+    WriteMobileRingTGA("mark/m_btn_auto_down_v6.tga",   112,  51.0f,  6.8f, 250.0f, 185,190,198, 225,230,238, MICON_AUTO_COMBAT,  true);
+    WriteMobileRingTGA("mark/m_btn_quest_norm_v6.tga",  112,  49.0f,  5.6f, 236.0f, 136,140,148, 182,188,196, MICON_QUEST_SCROLL, false);
+    WriteMobileRingTGA("mark/m_btn_quest_down_v6.tga",  112,  51.0f,  6.8f, 250.0f, 185,190,198, 225,230,238, MICON_QUEST_SCROLL, true);
 }
 
 // ============================================================================
@@ -2749,11 +3606,13 @@ struct SMobilePointerSlot {
 };
 
 struct SScaledWindowRect {
+    UI::CWindow* pWnd = nullptr;
     float scale = 1.0f;
     int x = 0, y = 0, w = 0, h = 0;
     uint32_t lastSeenFrame = 0;
 };
 static std::unordered_map<uintptr_t, SScaledWindowRect> s_scaledWindows;
+static UI::CWindow* s_pCachedUiRootWindow = nullptr;
 static uint32_t s_uMobileRenderFrame = 1;
 static D3DXMATRIX s_savedUiViewMat;
 static bool s_bUiScaleActive = false;
@@ -2762,9 +3621,91 @@ static int s_iLastTouchDownY = -1000;
 static bool s_bLastTouchSnappedToButton = false;
 static bool s_bExplicitKeyboardRequest = false;
 
+struct CAndroidWindowHierarchyAccessor : public UI::CWindow {
+    static UI::CWindow* EnsureRootWindow(UI::CWindow* pAny = nullptr) {
+        if (s_pCachedUiRootWindow)
+            return s_pCachedUiRootWindow;
+        if (!pAny && UI::CWindowManager::InstancePtr())
+            pAny = UI::CWindowManager::Instance().GetPointWindow();
+        if (!pAny && !s_scaledWindows.empty())
+            pAny = s_scaledWindows.begin()->second.pWnd;
+        if (!pAny)
+            return nullptr;
+        while (pAny->GetParent())
+            pAny = pAny->GetParent();
+        s_pCachedUiRootWindow = pAny;
+        return s_pCachedUiRootWindow;
+    }
+
+    // Side-effect-free point pick: NEVER calls RunMouseMove and NEVER fires OnMouseOverOut on pressed CButtons!
+    static UI::CWindow* PickWindowAtReadOnly(UI::CWindow* pWnd, int x, int y, int depth = 0) {
+        if (!pWnd) return nullptr;
+        if (depth >= 2 && !pWnd->IsShow())
+            return nullptr;
+
+        CAndroidWindowHierarchyAccessor* pAcc = static_cast<CAndroidWindowHierarchyAccessor*>(pWnd);
+        for (auto it = pAcc->m_pChildList.rbegin(); it != pAcc->m_pChildList.rend(); ++it) {
+            UI::CWindow* pChild = *it;
+            // Note: at depth == 0, pChild is a CLayer whose m_bShow is false; only check IsShow() for depth >= 1!
+            if (!pChild || (depth >= 1 && !pChild->IsShow()))
+                continue;
+            UI::CWindow* pHit = PickWindowAtReadOnly(pChild, x, y, depth + 1);
+            if (pHit)
+                return pHit;
+        }
+
+        if (depth >= 2 && !pWnd->IsFlag(UI::CWindow::FLAG_NOT_PICK)) {
+            const RECT& rc = pWnd->GetRect();
+            if (x >= rc.left && x <= rc.right && y >= rc.top && y <= rc.bottom)
+                return pWnd;
+        }
+        return nullptr;
+    }
+};
+
+extern bool s_bUiTouchDown;
+
 static void MapTouchThroughScaledWindows(int inX, int inY, int* outX, int* outY) {
     *outX = inX;
     *outY = inY;
+
+    // Only probe with RunMouseMove when no UI touch is currently held down (ACTION_DOWN),
+    // so we NEVER trigger OnMouseOverOut on a pressed CButton during ACTION_MOVE or ACTION_UP!
+    UI::CWindow* pDirectTop = nullptr;
+    if (!s_bUiTouchDown) {
+        UI::CWindowManager::Instance().RunMouseMove(inX, inY);
+        pDirectTop = UI::CWindowManager::Instance().GetPointWindow();
+        CAndroidWindowHierarchyAccessor::EnsureRootWindow(pDirectTop);
+    } else {
+        UI::CWindow* pRoot = CAndroidWindowHierarchyAccessor::EnsureRootWindow();
+        pDirectTop = pRoot ? CAndroidWindowHierarchyAccessor::PickWindowAtReadOnly(pRoot, inX, inY) : nullptr;
+    }
+
+    bool bInTopMostPopup = false;
+    for (UI::CWindow* pWalk = pDirectTop; pWalk != nullptr; pWalk = pWalk->GetParent()) {
+        if (s_scaledWindows.find((uintptr_t)pWalk) != s_scaledWindows.end()) {
+            bInTopMostPopup = false;
+            break;
+        }
+        const char* wName = pWalk->GetName();
+        if (wName && (strcmp(wName, "MobileHUDFixed") == 0 || strcmp(wName, "TaskBar") == 0 ||
+                      strcmp(wName, "EventCurtain") == 0 || strcmp(wName, "EnergyBar") == 0)) {
+            bInTopMostPopup = false;
+            break;
+        }
+        if (wName && strcmp(wName, "TOP_MOST") == 0) {
+            bInTopMostPopup = true;
+        }
+    }
+    if (bInTopMostPopup) {
+        return;
+    }
+
+    uint32_t bestFrame = 0;
+    int bestArea = 0x7FFFFFFF;
+    int bestOutX = inX, bestOutY = inY;
+    bool bFoundScaled = false;
+
     for (auto it = s_scaledWindows.begin(); it != s_scaledWindows.end(); ) {
         if (s_uMobileRenderFrame > it->second.lastSeenFrame + 60) {
             it = s_scaledWindows.erase(it);
@@ -2775,12 +3716,22 @@ static void MapTouchThroughScaledWindows(int inX, int inY, int* outX, int* outY)
             int scaledW = (int)(r.w * r.scale);
             int scaledH = (int)(r.h * r.scale);
             if (inX >= r.x && inX <= r.x + scaledW && inY >= r.y && inY <= r.y + scaledH) {
-                *outX = r.x + (int)((inX - r.x) / r.scale + 0.5f);
-                *outY = r.y + (int)((inY - r.y) / r.scale + 0.5f);
-                return;
+                int area = scaledW * scaledH;
+                if (!bFoundScaled || r.lastSeenFrame > bestFrame || (r.lastSeenFrame == bestFrame && area < bestArea)) {
+                    bFoundScaled = true;
+                    bestFrame = r.lastSeenFrame;
+                    bestArea = area;
+                    bestOutX = r.x + (int)((inX - r.x) / r.scale + 0.5f);
+                    bestOutY = r.y + (int)((inY - r.y) / r.scale + 0.5f);
+                }
             }
         }
         ++it;
+    }
+
+    if (bFoundScaled) {
+        *outX = bestOutX;
+        *outY = bestOutY;
     }
 }
 
@@ -2865,13 +3816,23 @@ static void ApplySmartTouchMagnetism(int inX, int inY, int* ioX, int* ioY, bool*
         UI::CWindowManager::Instance().RunMouseMove(*ioX, *ioY);
         return;
     }
-    // Never snap away from a TitleBar or draggable window header onto nearby tab buttons
+    // Check if the direct touch landed on an open UI / TOP_MOST window (not a MobileHUDFixed background button)
+    bool bDirectIsNonHudWindow = false;
+    bool bDirectIsHudWidget = false;
     for (UI::CWindow* pWalk = pDirect; pWalk != nullptr; pWalk = pWalk->GetParent()) {
         const char* wName = pWalk->GetName();
-        if (wName && (strstr(wName, "Title") != nullptr || strstr(wName, "title") != nullptr)) {
+        // Only prevent magnetism from pulling a tap off an item/equipment SlotWindow; allow TitleBar touches to magnetize to its Close (X) button!
+        if (wName && (strstr(wName, "Slot") != nullptr || strstr(wName, "slot") != nullptr)) {
             return;
         }
+        if (wName && strcmp(wName, "MobileHUDFixed") == 0) {
+            bDirectIsHudWidget = true;
+        }
+        if (wName && (strcmp(wName, "UI") == 0 || strcmp(wName, "TOP_MOST") == 0)) {
+            bDirectIsNonHudWindow = true;
+        }
     }
+    if (bDirectIsHudWidget) bDirectIsNonHudWindow = false;
 
     UI::CWindow* pBestTarget = nullptr;
     int bestDistSq = 999999;
@@ -2891,6 +3852,19 @@ static void ApplySmartTouchMagnetism(int inX, int inY, int* ioX, int* ioY, bool*
             UI::CWindowManager::Instance().RunMouseMove(px, py);
             UI::CWindow* pCand = SanitizeButtonChildPickFlags(UI::CWindowManager::Instance().GetPointWindow());
             if (!pCand) continue;
+
+            // Never snap a touch that landed on an open UI window onto a MobileHUDFixed action button behind it!
+            if (bDirectIsNonHudWindow) {
+                bool bCandIsHud = false;
+                for (UI::CWindow* pW = pCand; pW != nullptr; pW = pW->GetParent()) {
+                    const char* wn = pW->GetName();
+                    if (wn && strcmp(wn, "MobileHUDFixed") == 0) {
+                        bCandIsHud = true;
+                        break;
+                    }
+                }
+                if (bCandIsHud) continue;
+            }
 
             UI::CWindow* pControl = nullptr;
             bool candThumb = false, candBtn = false;
@@ -3077,9 +4051,13 @@ static UI::CWindow* FindHoldDraggableWindow(int x, int y) {
     }
 
     UI::CWindow* pBestMovable = nullptr;
+    bool bTouchedTitleBar = false;
     for (UI::CWindow* pCur = pPointWnd; pCur != nullptr; pCur = pCur->GetParent()) {
         const char* szName = pCur->GetName();
         if (szName) {
+            if (strstr(szName, "Title") != nullptr || strstr(szName, "title") != nullptr) {
+                bTouchedTitleBar = true;
+            }
             if (strcmp(szName, "SliderBar") == 0 ||
                 strcmp(szName, "ChatInputSet") == 0 ||
                 strcmp(szName, "ChatWindow:ChatButton") == 0 ||
@@ -3097,6 +4075,17 @@ static UI::CWindow* FindHoldDraggableWindow(int x, int y) {
     }
 
     if (!pBestMovable) return nullptr;
+
+    const char* cBestName = pBestMovable->GetName();
+    if (cBestName && strcmp(cBestName, "MobileEquipWindow") == 0) {
+        return pBestMovable;
+    }
+
+    // For InventoryWindow (and SpecialStorageWindow / other windows), only allow dragging via the TitleBar!
+    const RECT& rcBest = pBestMovable->GetRect();
+    if (!bTouchedTitleBar && y > rcBest.top + 30) {
+        return nullptr;
+    }
 
     if (pBestMovable->GetWidth() >= g_AndroidScreenWidth - 32 &&
         pBestMovable->GetHeight() >= g_AndroidScreenHeight - 32) {
@@ -3632,21 +4621,23 @@ static void ReleasePointerSlot(int idx, int x, int y, int maskedAction) {
             return;
         }
         int mx = rx, my = ry;
-        MapTouchThroughScaledWindows(rx, ry, &mx, &my);
         // If ACTION_DOWN snapped onto a button and the finger didn't drag far, release squarely on the snapped button!
         int totalMoveSq = (rx - slot.startX) * (rx - slot.startX) + (ry - slot.startY) * (ry - slot.startY);
-        if (s_bLastTouchSnappedToButton && totalMoveSq <= 324) {
+        if (s_bLastTouchSnappedToButton && totalMoveSq <= 576) {
             mx = s_iLastTouchDownX;
             my = s_iLastTouchDownY;
+        } else {
+            MapTouchThroughScaledWindows(rx, ry, &mx, &my);
         }
         g_AndroidMouseX = mx;
         g_AndroidMouseY = my;
         UI::CWindowManager::Instance().RunMouseMove(mx, my);
         UI::CWindowManager::Instance().RunMouseLeftButtonUp(mx, my);
 
-        // If an item was detached via press-and-hold and dragged to a destination slot (or 3D ground), complete the drop on release!
+        // Only auto-drop on release if the finger dragged across to a different slot (> 35px) or onto the 3D ground.
+        // If the user pressed-and-held in place (<= 35px) and lifted their finger, keep the ghost attached!
         int dragDistSq = (rx - slot.startX) * (rx - slot.startX) + (ry - slot.startY) * (ry - slot.startY);
-        if (dragDistSq > 100) {
+        if (dragDistSq > 1225) {
             PyObject* pMm = PyImport_AddModule("mouseModule");
             PyObject* pMc = pMm ? PyObject_GetAttrString(pMm, "mouseController") : nullptr;
             PyObject* pIsAtt = pMc ? PyObject_CallMethod(pMc, "isAttached", NULL) : nullptr;
@@ -3800,6 +4791,19 @@ static PyObject* mobileInput_IsUiTouchDown(PyObject* self, PyObject* args) {
     return Py_BuildValue("i", s_bUiTouchDown ? 1 : 0);
 }
 
+static PyObject* mobileInput_GetCameraTouchState(PyObject* /*self*/, PyObject* /*args*/) {
+    int wIdx0 = -1, wIdx1 = -1;
+    int worldCount = CountActiveWorldPointers(&wIdx0, &wIdx1);
+    int draggingCam = IsAnyPointerDraggingCamera() ? 1 : 0;
+    int x0 = (wIdx0 >= 0) ? s_pointers[wIdx0].curX : -1;
+    int y0 = (wIdx0 >= 0) ? s_pointers[wIdx0].curY : -1;
+    int x1 = (wIdx1 >= 0) ? s_pointers[wIdx1].curX : -1;
+    int y1 = (wIdx1 >= 0) ? s_pointers[wIdx1].curY : -1;
+    int sx0 = (wIdx0 >= 0) ? s_pointers[wIdx0].startX : -1;
+    int sy0 = (wIdx0 >= 0) ? s_pointers[wIdx0].startY : -1;
+    return Py_BuildValue("(iiiiiiiifii)", worldCount, draggingCam, x0, y0, x1, y1, sx0, sy0, s_fLastPinchSpan, g_AndroidRawTouchX, g_AndroidRawTouchY);
+}
+
 extern "C" bool AndroidGetJoystickMoveDir(float* outDeg) {
     if (s_bJoyActive) {
         float mag = hypotf(s_fJoyNormX, s_fJoyNormY);
@@ -3823,18 +4827,45 @@ extern "C" bool AndroidGetJoystickMoveDir(float* outDeg) {
     return false;
 }
 
+static bool IsScreenPointCoveredByOpenWindow(int rawX, int rawY) {
+    int mx = rawX, my = rawY;
+    MapTouchThroughScaledWindows(rawX, rawY, &mx, &my);
+    UI::CWindow* pRoot = CAndroidWindowHierarchyAccessor::EnsureRootWindow();
+    UI::CWindow* pWnd = pRoot ? CAndroidWindowHierarchyAccessor::PickWindowAtReadOnly(pRoot, mx, my) : nullptr;
+    if (!pWnd) return false;
+    bool isHud = false;
+    bool isUiOrTop = false;
+    for (UI::CWindow* pCur = pWnd; pCur != nullptr; pCur = pCur->GetParent()) {
+        const char* szName = pCur->GetName();
+        if (!szName) continue;
+        if (strcmp(szName, "MobileHUDFixed") == 0) {
+            isHud = true;
+            break;
+        }
+        if (strcmp(szName, "UI") == 0 || strcmp(szName, "TOP_MOST") == 0) {
+            isUiOrTop = true;
+        }
+    }
+    return (!isHud && isUiOrTop);
+}
+
 static PyObject* mobileInput_IsRectTouchHeld(PyObject* self, PyObject* args) {
     int rx = 0, ry = 0, rw = 0, rh = 0;
     if (!PyArg_ParseTuple(args, "iiii", &rx, &ry, &rw, &rh))
         return Py_BuildValue("i", 0);
     for (int i = 0; i < 4; ++i) {
-        if (!s_pointers[i].active || s_pointers[i].role == TOUCH_ROLE_JOYSTICK)
+        if (!s_pointers[i].active || s_pointers[i].role == TOUCH_ROLE_JOYSTICK || s_pointers[i].isDraggingWindow)
             continue;
         int sx = s_pointers[i].startX, sy = s_pointers[i].startY;
         int cx = s_pointers[i].curX,   cy = s_pointers[i].curY;
-        if ((sx >= rx && sx < (rx + rw) && sy >= ry && sy < (ry + rh)) ||
-            (cx >= rx && cx < (rx + rw) && cy >= ry && cy < (ry + rh)))
+        bool inStart = (sx >= rx && sx < (rx + rw) && sy >= ry && sy < (ry + rh));
+        bool inCur   = (cx >= rx && cx < (rx + rw) && cy >= ry && cy < (ry + rh));
+        if (inStart || inCur) {
+            // Never trigger HUD action buttons when an open window (Inventory, Equipment, SpecialStorage, Tooltip, Quest) covers the touch!
+            if (IsScreenPointCoveredByOpenWindow(sx, sy) || IsScreenPointCoveredByOpenWindow(cx, cy))
+                continue;
             return Py_BuildValue("i", 1);
+        }
     }
     return Py_BuildValue("i", 0);
 }
@@ -3856,7 +4887,9 @@ static PyObject* mobileInput_OpenURL(PyObject* self, PyObject* args) {
     const char* url = nullptr;
     if (!PyArg_ParseTuple(args, "s", &url) || !url || !*url)
         return Py_BuildValue("i", 0);
-#if !defined(__APPLE__)
+#if defined(__APPLE__)
+    IOSOpenURL(url);
+#else
     if (g_pJavaVM) {
         JNIEnv* env = nullptr;
         if (g_pJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_OK && env) {
@@ -3906,7 +4939,9 @@ static PyObject* mobileInput_OpenURL(PyObject* self, PyObject* args) {
 }
 
 static PyObject* mobileInput_CloseApp(PyObject* /*self*/, PyObject* /*args*/) {
-#if !defined(__APPLE__)
+#if defined(__APPLE__)
+    IOSCloseApp();
+#else
     if (g_pJavaVM) {
         JNIEnv* env = nullptr;
         if (g_pJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_OK && env) {
@@ -4086,26 +5121,89 @@ static PyObject* mobileInput_ReadPackFile(PyObject* /*self*/, PyObject* args) {
     return Py_BuildValue("s", "");
 }
 
+static uintptr_t ExtractMobileWindowKey(PyObject* pyHandle) {
+    if (!pyHandle || pyHandle == Py_None) return 0;
+    uintptr_t raw = (uintptr_t)PyLong_AsUnsignedLongLongMask(pyHandle);
+    if (PyErr_Occurred()) {
+        PyErr_Clear();
+        return (uintptr_t)pyHandle;
+    }
+    return raw;
+}
+
 static PyObject* mobileInput_SetWindowScale(PyObject* /*self*/, PyObject* args) {
     PyObject* pyHandle = nullptr;
+    int gx = 0, gy = 0, w = 0, h = 0;
     float scale = 1.0f;
-    if (!PyArg_ParseTuple(args, "Of", &pyHandle, &scale))
-        return Py_BuildValue("i", 0);
-    UI::CWindow* pWnd = (UI::CWindow*)PyLong_AsVoidPtr(pyHandle);
-    if (PyErr_Occurred()) { PyErr_Clear(); pWnd = nullptr; }
-    if (pWnd) {
-        uintptr_t key = (uintptr_t)pWnd;
-        if (fabsf(scale - 1.0f) <= 0.01f || !pWnd->IsShow()) {
+
+    if (PyTuple_Size(args) >= 6) {
+        if (!PyArg_ParseTuple(args, "Oiiiif", &pyHandle, &gx, &gy, &w, &h, &scale)) {
+            PyErr_Clear();
+            return Py_BuildValue("i", 0);
+        }
+        uintptr_t key = ExtractMobileWindowKey(pyHandle);
+        if (key == 0)
+            return Py_BuildValue("i", 0);
+        if (fabsf(scale - 1.0f) <= 0.01f || w <= 0 || h <= 0) {
             s_scaledWindows.erase(key);
-        } else {
-            long wx = 0, wy = 0;
-            pWnd->GetPosition(&wx, &wy);
+            return Py_BuildValue("i", 1);
+        }
+        SScaledWindowRect& entry = s_scaledWindows[key];
+        entry.pWnd = nullptr;
+        entry.scale = scale;
+        entry.x = gx;
+        entry.y = gy;
+        entry.w = w;
+        entry.h = h;
+        entry.lastSeenFrame = s_uMobileRenderFrame;
+        return Py_BuildValue("i", 1);
+    }
+
+    if (!PyArg_ParseTuple(args, "Of", &pyHandle, &scale)) {
+        PyErr_Clear();
+        return Py_BuildValue("i", 0);
+    }
+    uintptr_t key = ExtractMobileWindowKey(pyHandle);
+    if (key == 0)
+        return Py_BuildValue("i", 0);
+
+    if (fabsf(scale - 1.0f) <= 0.01f) {
+        s_scaledWindows.erase(key);
+        return Py_BuildValue("i", 1);
+    }
+
+    PyObject* pWndMgr = PyImport_AddModule("wndMgr");
+    if (pWndMgr) {
+        PyObject* pShow = PyObject_CallMethod(pWndMgr, "IsShow", "(O)", pyHandle);
+        bool bShow = (pShow && PyInt_Check(pShow) && PyInt_AsLong(pShow) != 0);
+        Py_XDECREF(pShow);
+        if (!bShow) {
+            if (PyErr_Occurred()) PyErr_Clear();
+            s_scaledWindows.erase(key);
+            return Py_BuildValue("i", 1);
+        }
+        PyObject* pPos = PyObject_CallMethod(pWndMgr, "GetGlobalPosition", "(O)", pyHandle);
+        PyObject* pW   = PyObject_CallMethod(pWndMgr, "GetWindowWidth", "(O)", pyHandle);
+        PyObject* pH   = PyObject_CallMethod(pWndMgr, "GetWindowHeight", "(O)", pyHandle);
+        if (pPos && PyTuple_Check(pPos) && PyTuple_Size(pPos) >= 2) {
+            gx = (int)PyInt_AsLong(PyTuple_GetItem(pPos, 0));
+            gy = (int)PyInt_AsLong(PyTuple_GetItem(pPos, 1));
+        }
+        if (pW && PyInt_Check(pW)) w = (int)PyInt_AsLong(pW);
+        if (pH && PyInt_Check(pH)) h = (int)PyInt_AsLong(pH);
+        Py_XDECREF(pPos);
+        Py_XDECREF(pW);
+        Py_XDECREF(pH);
+        if (PyErr_Occurred()) PyErr_Clear();
+
+        if (w > 0 && h > 0) {
             SScaledWindowRect& entry = s_scaledWindows[key];
+            entry.pWnd = nullptr;
             entry.scale = scale;
-            entry.x = (int)wx;
-            entry.y = (int)wy;
-            entry.w = pWnd->GetWidth();
-            entry.h = pWnd->GetHeight();
+            entry.x = gx;
+            entry.y = gy;
+            entry.w = w;
+            entry.h = h;
             entry.lastSeenFrame = s_uMobileRenderFrame;
         }
     }
@@ -4151,6 +5249,7 @@ static PyMethodDef s_mobileInputMethods[] = {
     { "SetJoystickZone",     mobileInput_SetJoystickZone,     METH_VARARGS, "Set virtual joystick zone" },
     { "GetJoystickState",    mobileInput_GetJoystickState,    METH_VARARGS, "Get joystick state tuple" },
     { "IsUiTouchDown",       mobileInput_IsUiTouchDown,       METH_VARARGS, "Check if UI touch is held" },
+    { "GetCameraTouchState", mobileInput_GetCameraTouchState, METH_VARARGS, "Get 3D camera drag and pinch zoom touch state" },
     { "IsRectTouchHeld",     mobileInput_IsRectTouchHeld,     METH_VARARGS, "Check if any touch started in rect" },
     { "GetScreenSize",       mobileInput_GetScreenSize,       METH_VARARGS, "Get native Android screen size" },
     { "ShowKeyboard",        mobileInput_ShowKeyboard,        METH_VARARGS, "Show or hide Android soft keyboard" },
@@ -4196,6 +5295,10 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_render(JNIEnv* env,
 #ifdef ENABLE_OPENGL
             int pid = (ev.pointerId >= 0 && ev.pointerId < 4) ? ev.pointerId : 0;
             int maskedAction = ev.action & 0xFF;
+            if (ev.x >= 0 && ev.y >= 0) {
+                g_AndroidRawTouchX = ev.x;
+                g_AndroidRawTouchY = ev.y;
+            }
 
             if (maskedAction == 3) { // ACTION_CANCEL: release all slots and joystick immediately
                 for (int i = 0; i < 4; ++i) {
@@ -4251,8 +5354,20 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_render(JNIEnv* env,
                 int joyCatchRadius = s_iJoyRadius + 24;
                 bool bInGameWorld = (CPythonCharacterManager::InstancePtr() && CPythonCharacterManager::Instance().GetMainInstancePtr() != nullptr);
 
-                // 1. Virtual Joystick (Bottom-Left)
-                if (bInGameWorld && !s_bJoyActive && (jdx * jdx + jdy * jdy <= joyCatchRadius * joyCatchRadius)) {
+                // 1. Virtual Joystick (Bottom-Left) — only if not covered by an open window or TOP_MOST popup (such as Emote bar)
+                bool bCoveredByPopup = false;
+                {
+                    UI::CWindow* pRoot = CAndroidWindowHierarchyAccessor::EnsureRootWindow();
+                    UI::CWindow* pHit = pRoot ? CAndroidWindowHierarchyAccessor::PickWindowAtReadOnly(pRoot, ev.x, ev.y) : nullptr;
+                    for (UI::CWindow* pW = pHit; pW != nullptr; pW = pW->GetParent()) {
+                        const char* wn = pW->GetName();
+                        if (wn && (strcmp(wn, "TOP_MOST") == 0 || strcmp(wn, "UI") == 0)) {
+                            bCoveredByPopup = true;
+                            break;
+                        }
+                    }
+                }
+                if (bInGameWorld && !s_bJoyActive && !bCoveredByPopup && (jdx * jdx + jdy * jdy <= joyCatchRadius * joyCatchRadius)) {
                     slot.role = TOUCH_ROLE_JOYSTICK;
                     s_bJoyActive = true;
                     UpdateJoystickFromPoint(ev.x, ev.y);
@@ -4325,7 +5440,7 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_render(JNIEnv* env,
                     UI::CWindowManager::Instance().RunMouseLeftButtonDown(mx, my);
 
                     // 2. Now check if this touch is inside a scrollable window body OR on a draggable empty slot / window edge
-                    if (!isScrollDragThumb && !IsMobileItemHoldOrAttachedActive() && CheckMobileTouchScrollableAt(mx, my)) {
+                    if (!s_bLastTouchSnappedToButton && !isScrollDragThumb && !IsMobileItemHoldOrAttachedActive() && CheckMobileTouchScrollableAt(mx, my)) {
                         slot.canTouchScroll = true;
                         slot.pHoldDragWnd = nullptr;
                     } else if (!s_bLastTouchSnappedToButton && !IsMobileItemHoldOrAttachedActive()) {
@@ -4441,10 +5556,11 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_render(JNIEnv* env,
                         slot.pHoldDragWnd->OnMoveWindow(newX, newY);
                     } else {
                         int mx = ev.x, my = ev.y;
-                        MapTouchThroughScaledWindows(ev.x, ev.y, &mx, &my);
-                        if (s_bLastTouchSnappedToButton && distSq <= 324) {
+                        if (s_bLastTouchSnappedToButton && distSq <= 576) {
                             mx = s_iLastTouchDownX;
                             my = s_iLastTouchDownY;
+                        } else {
+                            MapTouchThroughScaledWindows(ev.x, ev.y, &mx, &my);
                         }
                         g_AndroidMouseX = mx;
                         g_AndroidMouseY = my;
