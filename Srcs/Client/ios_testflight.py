@@ -195,15 +195,15 @@ def prepare_bundle():
     pl['LSSupportsOpeningDocumentsInPlace'] = False
     pl['NSMicrophoneUsageDescription'] = 'Microphone access is required for in-game voice chat.'
     pl['UIDeviceFamily'] = [1, 2]
-    if not str(pl.get('DTSDKName', '')).startswith('iphoneos26'):
-        pl['DTSDKName'] = 'iphoneos26.0'
-        pl['DTPlatformVersion'] = '26.0'
-        pl['DTSDKBuild'] = '23A339'
-        pl['DTPlatformBuild'] = '23A339'
-        pl['DTXcode'] = '2600'
-        pl['DTXcodeBuild'] = '17A324'
+    if not str(pl.get('DTSDKName', '')).startswith('iphoneos27'):
+        pl['DTSDKName'] = 'iphoneos27.0'
+        pl['DTPlatformVersion'] = '27.0'
+        pl['DTSDKBuild'] = '24A335'
+        pl['DTPlatformBuild'] = '24A335'
+        pl['DTXcode'] = '2700'
+        pl['DTXcodeBuild'] = '18A335'
         bp = f'{APP_PATH}/{EXEC_NAME}'
-        subprocess.check_call(['xcrun', 'vtool', '-set-build-version', 'ios', '15.0', '26.0', '-tool', 'ld', '1221.4', '-replace', '-output', bp, bp])
+        subprocess.check_call(['xcrun', 'vtool', '-set-build-version', 'ios', '15.0', '27.0', '-tool', 'ld', '1221.4', '-replace', '-output', bp, bp])
     orient = ['UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight']
     pl['UISupportedInterfaceOrientations'] = orient
     pl['UISupportedInterfaceOrientations' + chr(126) + 'ipad'] = orient

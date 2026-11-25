@@ -348,13 +348,22 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
             physW = (int)(view.bounds.size.width * scale + 0.5);
             physH = (int)(view.bounds.size.height * scale + 0.5);
         }
-        if (physW > 0 && physH > 0) {
+        // Wait until the view has rotated to landscape dimensions before initializing the engine
+        if (physW > physH && physH > 0) {
             _engineInitialized = true;
             Java_com_worldonline_client_NativeLib_init(nullptr, nullptr, nullptr, physW, physH);
         }
         return;
     }
     Java_com_worldonline_client_NativeLib_render(nullptr, nullptr);
+    static int s_renderedFrames = 0;
+    if (s_renderedFrames < 5) {
+        ++s_renderedFrames;
+        if (s_renderedFrames == 5) {
+            NSString* docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+            [[NSFileManager defaultManager] removeItemAtPath:[docs stringByAppendingPathComponent:@"launch_guard.txt"] error:nil];
+        }
+    }
 }
 
 - (int)slotForTouch:(UITouch*)touch allocate:(bool)alloc {
@@ -440,7 +449,7 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
 @end
 
 // ============================================================================
-// Self-Contained iOS App Bundle Asset Linker (Guideline 2.5.19 Compliant)
+// Self-Contained iOS Bundle Asset Sync + Safe-Mode Crash & Syserr Inspector
 // ============================================================================
 static void WorldOnlineExcludeFromBackup(NSString* path) {
     if (!path) return;
@@ -450,28 +459,61 @@ static void WorldOnlineExcludeFromBackup(NSString* path) {
     }
 }
 
+static void WorldOnlineCopyDirectoryRecursive(NSFileManager* fm, NSString* srcDir, NSString* dstDir) {
+    NSDictionary* dstAttrs = [fm attributesOfItemAtPath:dstDir error:nil];
+    if (dstAttrs && [dstAttrs[NSFileType] isEqualToString:NSFileTypeSymbolicLink]) {
+        [fm removeItemAtPath:dstDir error:nil];
+    }
+    [fm createDirectoryAtPath:dstDir withIntermediateDirectories:YES attributes:nil error:nil];
+    WorldOnlineExcludeFromBackup(dstDir);
+
+    NSArray<NSString*>* children = [fm contentsOfDirectoryAtPath:srcDir error:nil];
+    for (NSString* child in children) {
+        if ([child hasPrefix:@"."]) continue;
+        NSString* cSrc = [srcDir stringByAppendingPathComponent:child];
+        NSString* cDst = [dstDir stringByAppendingPathComponent:child];
+        BOOL isDir = NO;
+        [fm fileExistsAtPath:cSrc isDirectory:&isDir];
+        if (isDir) {
+            WorldOnlineCopyDirectoryRecursive(fm, cSrc, cDst);
+        } else {
+            NSDictionary* cDstAttrs = [fm attributesOfItemAtPath:cDst error:nil];
+            if (cDstAttrs && [cDstAttrs[NSFileType] isEqualToString:NSFileTypeSymbolicLink]) {
+                [fm removeItemAtPath:cDst error:nil];
+                cDstAttrs = nil;
+            }
+            NSDictionary* cSrcAttrs = [fm attributesOfItemAtPath:cSrc error:nil];
+            if (!cDstAttrs || [cDstAttrs fileSize] != [cSrcAttrs fileSize]) {
+                [fm removeItemAtPath:cDst error:nil];
+                [fm copyItemAtPath:cSrc toPath:cDst error:nil];
+                WorldOnlineExcludeFromBackup(cDst);
+            }
+        }
+    }
+}
+
 static void WorldOnlineSyncBundledAssetsToDocuments() {
     NSFileManager* fm = [NSFileManager defaultManager];
     NSString* docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
     if (!docs) return;
     WorldOnlineExcludeFromBackup(docs);
 
-    // 1. Ensure writable runtime directories exist in Documents
-    NSArray<NSString*>* writableDirs = @[@"UserData", @"UserData/environment", @"shop", @"temp", @"upload", @"mark"];
+    // 1. Ensure writable runtime directories are real directories (never symlinks)
+    NSArray<NSString*>* writableDirs = @[@"UserData", @"UserData/environment", @"shop", @"temp", @"upload", @"mark", @"lib", @"pack", @"bgm"];
     for (NSString* dir in writableDirs) {
         NSString* subPath = [docs stringByAppendingPathComponent:dir];
-        BOOL isDir = NO;
         NSDictionary* attrs = [fm attributesOfItemAtPath:subPath error:nil];
         if (attrs && [attrs[NSFileType] isEqualToString:NSFileTypeSymbolicLink]) {
             [fm removeItemAtPath:subPath error:nil];
         }
+        BOOL isDir = NO;
         if (![fm fileExistsAtPath:subPath isDirectory:&isDir] || !isDir) {
+            [fm removeItemAtPath:subPath error:nil];
             [fm createDirectoryAtPath:subPath withIntermediateDirectories:YES attributes:nil error:nil];
         }
         WorldOnlineExcludeFromBackup(subPath);
     }
 
-    // 2. Link or copy bundled GameAssets from WorldOnline.app/GameAssets into Documents
     NSString* bundleAssetsDir = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"GameAssets"];
     BOOL hasBundleAssets = NO;
     if (![fm fileExistsAtPath:bundleAssetsDir isDirectory:&hasBundleAssets] || !hasBundleAssets) {
@@ -483,43 +525,160 @@ static void WorldOnlineSyncBundledAssetsToDocuments() {
         if ([item hasPrefix:@"."]) continue;
         NSString* srcPath = [bundleAssetsDir stringByAppendingPathComponent:item];
         NSString* dstPath = [docs stringByAppendingPathComponent:item];
+        NSString* lowerItem = [item lowercaseString];
 
-        // "mark" must stay writable in Documents; copy initial bundled mark files if missing
-        if ([[item lowercaseString] isEqualToString:@"mark"]) {
-            NSArray<NSString*>* markFiles = [fm contentsOfDirectoryAtPath:srcPath error:nil];
-            for (NSString* mf in markFiles) {
-                NSString* mSrc = [srcPath stringByAppendingPathComponent:mf];
-                NSString* mDst = [dstPath stringByAppendingPathComponent:mf];
-                if (![fm fileExistsAtPath:mDst]) {
-                    [fm copyItemAtPath:mSrc toPath:mDst error:nil];
-                }
+        // "pack": keep Documents/pack as a REAL directory and symlink each individual .MT009/.MT010 file inside it
+        if ([lowerItem isEqualToString:@"pack"]) {
+            NSArray<NSString*>* packFiles = [fm contentsOfDirectoryAtPath:srcPath error:nil];
+            for (NSString* pf in packFiles) {
+                if ([pf hasPrefix:@"."]) continue;
+                NSString* pSrc = [srcPath stringByAppendingPathComponent:pf];
+                NSString* pDst = [dstPath stringByAppendingPathComponent:pf];
+                [fm removeItemAtPath:pDst error:nil];
+                [fm createSymbolicLinkAtPath:pDst withDestinationPath:pSrc error:nil];
             }
             continue;
         }
 
+        // "lib", "mark", "bgm": copy as real writable directories/files into Documents (~3 MB total)
         BOOL isDir = NO;
         [fm fileExistsAtPath:srcPath isDirectory:&isDir];
-
-        // Small mutable config files (.cfg) are copied once so the engine can modify them
-        if (!isDir && [[[item pathExtension] lowercaseString] isEqualToString:@"cfg"]) {
-            NSDictionary* dstAttrs = [fm attributesOfItemAtPath:dstPath error:nil];
-            if (dstAttrs && [dstAttrs[NSFileType] isEqualToString:NSFileTypeSymbolicLink]) {
-                [fm removeItemAtPath:dstPath error:nil];
-            }
-            if (![fm fileExistsAtPath:dstPath]) {
-                [fm copyItemAtPath:srcPath toPath:dstPath error:nil];
-                WorldOnlineExcludeFromBackup(dstPath);
-            }
+        if (isDir) {
+            WorldOnlineCopyDirectoryRecursive(fm, srcPath, dstPath);
             continue;
         }
 
-        // Read-only directories (pack, lib, bgm) and data tables are symlinked to the signed .app bundle
-        // Always refresh the symlink on launch because iOS changes the .app bundle UUID across updates
-        [fm removeItemAtPath:dstPath error:nil];
-        [fm createSymbolicLinkAtPath:dstPath withDestinationPath:srcPath error:nil];
-        WorldOnlineExcludeFromBackup(dstPath);
+        // Root files (locale.cfg, mouse.cfg, speedtree_cache.bin, .txt tables): copy as real writable files
+        NSDictionary* dstAttrs = [fm attributesOfItemAtPath:dstPath error:nil];
+        if (dstAttrs && [dstAttrs[NSFileType] isEqualToString:NSFileTypeSymbolicLink]) {
+            [fm removeItemAtPath:dstPath error:nil];
+            dstAttrs = nil;
+        }
+        NSDictionary* srcAttrs = [fm attributesOfItemAtPath:srcPath error:nil];
+        if (!dstAttrs || [dstAttrs fileSize] != [srcAttrs fileSize]) {
+            [fm removeItemAtPath:dstPath error:nil];
+            [fm copyItemAtPath:srcPath toPath:dstPath error:nil];
+            WorldOnlineExcludeFromBackup(dstPath);
+        }
     }
 }
+
+@interface WorldOnlineBootViewController : UIViewController
+@property (nonatomic, strong) UILabel* statusLabel;
+@end
+
+@implementation WorldOnlineBootViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor colorWithRed:0.043f green:0.059f blue:0.090f alpha:1.0f];
+
+    self.statusLabel = [[UILabel alloc] init];
+    self.statusLabel.text = @"جاري تشغيل World Online...";
+    self.statusLabel.textColor = [UIColor colorWithRed:1.0f green:0.835f blue:0.31f alpha:1.0f];
+    self.statusLabel.font = [UIFont boldSystemFontOfSize:16.0f];
+    self.statusLabel.textAlignment = NSTextAlignmentCenter;
+    self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.statusLabel];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.statusLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [self.statusLabel.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor]
+    ]];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    static BOOL s_bootStarted = NO;
+    if (s_bootStarted) return;
+    s_bootStarted = YES;
+
+    NSString* docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    NSFileManager* fm = [NSFileManager defaultManager];
+    NSString* crashPath = [docs stringByAppendingPathComponent:@"crash_report.txt"];
+    NSString* guardPath = [docs stringByAppendingPathComponent:@"launch_guard.txt"];
+
+    if ([fm fileExistsAtPath:crashPath] || [fm fileExistsAtPath:guardPath]) {
+        [self showDiagnosticAlertWithDocs:docs];
+        return;
+    }
+
+    [self startAsyncAssetPrepareAndLaunch];
+}
+
+- (NSString*)readTailOfFile:(NSString*)p maxBytes:(NSUInteger)m {
+    NSFileManager* fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:p]) return @"[File does not exist]";
+    NSData* d = [NSData dataWithContentsOfFile:p];
+    if (!d || d.length == 0) return @"[File is empty]";
+    if (d.length > m) d = [d subdataWithRange:NSMakeRange(d.length - m, m)];
+    NSString* s = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+    if (!s) s = [[NSString alloc] initWithData:d encoding:NSISOLatin1StringEncoding];
+    return s ?: @"[Unable to decode]";
+}
+
+- (void)showDiagnosticAlertWithDocs:(NSString*)docs {
+    NSString* bundleAssetsDir = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"GameAssets"];
+    NSArray* bundledItems = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:bundleAssetsDir error:nil];
+    NSArray* packItems = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[docs stringByAppendingPathComponent:@"pack"] error:nil];
+    NSArray* libItems = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[docs stringByAppendingPathComponent:@"lib"] error:nil];
+
+    NSString* cr = [self readTailOfFile:[docs stringByAppendingPathComponent:@"crash_report.txt"] maxBytes:6000];
+    NSString* se = [self readTailOfFile:[docs stringByAppendingPathComponent:@"syserr.txt"] maxBytes:4000];
+    NSString* lg = [self readTailOfFile:[docs stringByAppendingPathComponent:@"log.txt"] maxBytes:3000];
+
+    NSString* fullReport = [NSString stringWithFormat:
+        @"GameAssets: %lu | pack: %lu | lib: %lu\n\n=== CRASH_REPORT.TXT ===\n%@\n\n=== SYSERR.TXT ===\n%@\n\n=== LOG.TXT ===\n%@",
+        (unsigned long)(bundledItems ? bundledItems.count : 0),
+        (unsigned long)(packItems ? packItems.count : 0),
+        (unsigned long)(libItems ? libItems.count : 0),
+        cr, se, lg];
+
+    UIAlertController* al = [UIAlertController alertControllerWithTitle:@"Startup Diagnostic Logs"
+                                                                message:fullReport
+                                                         preferredStyle:UIAlertControllerStyleAlert];
+    [al addAction:[UIAlertAction actionWithTitle:@"COPY LOGS" style:UIAlertActionStyleDefault handler:^(UIAlertAction* a) {
+        [UIPasteboard generalPasteboard].string = fullReport;
+        [[NSFileManager defaultManager] removeItemAtPath:[docs stringByAppendingPathComponent:@"crash_report.txt"] error:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:[docs stringByAppendingPathComponent:@"launch_guard.txt"] error:nil];
+        [self startAsyncAssetPrepareAndLaunch];
+    }]];
+    [al addAction:[UIAlertAction actionWithTitle:@"CLEAR & LAUNCH GAME" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* a) {
+        [[NSFileManager defaultManager] removeItemAtPath:[docs stringByAppendingPathComponent:@"crash_report.txt"] error:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:[docs stringByAppendingPathComponent:@"launch_guard.txt"] error:nil];
+        [self startAsyncAssetPrepareAndLaunch];
+    }]];
+    [self presentViewController:al animated:YES completion:nil];
+}
+
+- (void)startAsyncAssetPrepareAndLaunch {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        WorldOnlineSyncBundledAssetsToDocuments();
+        NSString* docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+        chdir([docs UTF8String]);
+        setenv("WORLDONLINE_IOS_DOCS_DIR", [docs UTF8String], 1);
+        setenv("PYTHONDONTWRITEBYTECODE", "1", 1);
+
+        NSArray* packItems = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[docs stringByAppendingPathComponent:@"pack"] error:nil];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!packItems || packItems.count == 0) {
+                [self showDiagnosticAlertWithDocs:docs];
+                return;
+            }
+            [@"launching" writeToFile:[docs stringByAppendingPathComponent:@"launch_guard.txt"]
+                           atomically:YES
+                             encoding:NSUTF8StringEncoding
+                                error:nil];
+            UIWindow* w = [UIApplication sharedApplication].delegate.window ?: [UIApplication sharedApplication].windows.firstObject;
+            w.rootViewController = [[WorldOnlineIOSViewController alloc] init];
+            [w makeKeyAndVisible];
+        });
+    });
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskLandscape; }
+- (BOOL)prefersStatusBarHidden { return YES; }
+@end
 
 @interface WorldOnlineAppDelegate : UIResponder <UIApplicationDelegate>
 @property (nonatomic, strong) UIWindow* window;
@@ -528,7 +687,9 @@ static void WorldOnlineSyncBundledAssetsToDocuments() {
 @implementation WorldOnlineAppDelegate
 - (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
     [UIApplication sharedApplication].idleTimerDisabled = YES;
-    WorldOnlineSyncBundledAssetsToDocuments();
+    AVAudioSession* session = [AVAudioSession sharedInstance];
+    [session setCategory:AVAudioSessionCategoryAmbient error:nil];
+    [session setActive:YES error:nil];
 
     NSString* docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
     chdir([docs UTF8String]);
@@ -536,7 +697,7 @@ static void WorldOnlineSyncBundledAssetsToDocuments() {
     setenv("PYTHONDONTWRITEBYTECODE", "1", 1);
 
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    self.window.rootViewController = [[WorldOnlineIOSViewController alloc] init];
+    self.window.rootViewController = [[WorldOnlineBootViewController alloc] init];
     [self.window makeKeyAndVisible];
     return YES;
 }
