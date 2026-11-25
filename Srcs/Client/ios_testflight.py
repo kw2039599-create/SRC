@@ -1,5 +1,62 @@
-import base64, json, os, plistlib, shutil, subprocess, sys, time, zlib, struct
+import base64, hashlib, json, os, plistlib, shutil, subprocess, sys, time, zlib, struct
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import jwt, requests
+
+PATCH_BASE_URL = 'https://pub-9d9b6f14e1f345c98cb2d231a3471077.r2.dev/'
+BANNED_EXTENSIONS = ('.apk', '.exe', '.dll', '.so', '.pyd', '.bat', '.sh', '.msi')
+
+def bundle_game_assets_from_r2(app_path):
+    assets_root = os.path.join(app_path, 'GameAssets')
+    os.makedirs(assets_root, exist_ok=True)
+    print('=== Fetching manifest.json from R2 to bundle assets into .ipa ===')
+    r = requests.get(f'{PATCH_BASE_URL}manifest.json?t={int(time.time())}', timeout=30)
+    r.raise_for_status()
+    files = r.json().get('files', [])
+
+    todo = []
+    for entry in files:
+        rel = entry.get('path', '').replace('\\', '/').lstrip('/')
+        if not rel or rel.lower() == 'trailer.mp4' or rel.lower().endswith(BANNED_EXTENSIONS):
+            continue
+        todo.append((rel, int(entry.get('size', 0)), entry.get('md5', '').lower()))
+
+    print(f'=== Downloading {len(todo)} game asset files into {assets_root} ===')
+
+    def fetch_one(item):
+        rel, exp_size, exp_md5 = item
+        dst = os.path.join(assets_root, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if os.path.exists(dst) and os.path.getsize(dst) == exp_size:
+            h = hashlib.md5(open(dst, 'rb').read()).hexdigest().lower()
+            if h == exp_md5:
+                return rel
+        for attempt in range(1, 5):
+            try:
+                url = PATCH_BASE_URL + requests.utils.quote(rel, safe='/')
+                with requests.get(url, stream=True, timeout=60) as resp:
+                    resp.raise_for_status()
+                    md5 = hashlib.md5()
+                    with open(dst, 'wb') as f:
+                        for chunk in resp.iter_content(chunk_size=262144):
+                            if chunk:
+                                f.write(chunk)
+                                md5.update(chunk)
+                if exp_md5 and md5.hexdigest().lower() != exp_md5:
+                    raise RuntimeError(f'MD5 mismatch on {rel}')
+                return rel
+            except Exception as err:
+                if attempt == 4:
+                    raise RuntimeError(f'Failed to bundle {rel}: {err}')
+                time.sleep(1.0)
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futures = [pool.submit(fetch_one, it) for it in todo]
+        done_cnt = 0
+        for fut in as_completed(futures):
+            fut.result()
+            done_cnt += 1
+            if done_cnt % 25 == 0 or done_cnt == len(todo):
+                print(f'Bundled {done_cnt}/{len(todo)} files...')
 
 KEY_ID = '22DQZB7VR9'
 ISSUER_ID = '9409b0ba-08b8-4acb-b6e1-55409b555de4'
@@ -74,6 +131,8 @@ def prepare_bundle():
         shutil.move('build_ios/Release-iphoneos/M2WorldOnline.app', APP_PATH)
     if os.path.exists(f'{APP_PATH}/M2WorldOnline') and not os.path.exists(f'{APP_PATH}/{EXEC_NAME}'):
         shutil.move(f'{APP_PATH}/M2WorldOnline', f'{APP_PATH}/{EXEC_NAME}')
+
+    bundle_game_assets_from_r2(APP_PATH)
 
     os.makedirs('Assets.xcassets/AppIcon.appiconset', exist_ok=True)
     icons = [('icon40.png',40,'iphone','20x20','2x'),('icon60.png',60,'iphone','20x20','3x'),('icon58.png',58,'iphone','29x29','2x'),('icon87.png',87,'iphone','29x29','3x'),('icon80.png',80,'iphone','40x40','2x'),('icon120a.png',120,'iphone','40x40','3x'),('icon120.png',120,'iphone','60x60','2x'),('icon180.png',180,'iphone','60x60','3x'),('icon76.png',76,'ipad','76x76','1x'),('icon152.png',152,'ipad','76x76','2x'),('icon167.png',167,'ipad','83.5x83.5','2x'),('icon1024.png',1024,'ios-marketing','1024x1024','1x')]
@@ -198,7 +257,7 @@ def sign_and_upload(p8):
     subprocess.check_call(['/usr/bin/codesign', '--force', '--sign', sha1, '--entitlements', 'entitlements.plist', '--timestamp=none', APP_PATH])
     shutil.rmtree('Payload', ignore_errors=True)
     os.makedirs('Payload', exist_ok=True)
-    shutil.copytree(APP_PATH, 'Payload/WorldOnline.app')
+    shutil.move(APP_PATH, 'Payload/WorldOnline.app')
     subprocess.check_call(['/usr/bin/ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', 'Payload', IPA_NAME])
     apps = requests.get(f'{base}/apps?filter[bundleId]={BUNDLE_ID}', headers=hdr).json().get('data', [])
     if not apps:

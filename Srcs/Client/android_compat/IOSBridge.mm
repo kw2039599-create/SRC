@@ -174,19 +174,8 @@ extern "C" void IOSOpenURL(const char* urlStr) {
 }
 
 extern "C" void IOSCloseApp() {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIApplication* app = [UIApplication sharedApplication];
-        SEL suspendSel = NSSelectorFromString(@"suspend");
-        if ([app respondsToSelector:suspendSel]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-            [app performSelector:suspendSel];
-#pragma clang diagnostic pop
-        }
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            _exit(0);
-        });
-    });
+    // Guideline 2.5.1 / 2.5.19 compliance: Do not invoke private UIApplication selectors or force-terminate on iOS
+    IOSStopMusic();
 }
 
 extern "C" void IOSSetMusicVolume(float volume) {
@@ -449,392 +438,9 @@ extern "C" void IOSPlayAudioFile(const char* diskPath, bool isLoopMusic, float v
 @end
 
 // ============================================================================
-// World Online iOS Patcher (Fullscreen Looping trailer.mp4 + Arabic UI)
+// Self-Contained iOS App Bundle Asset Linker (Guideline 2.5.19 Compliant)
 // ============================================================================
-static UIColor* WorldOnlineColorHex(unsigned int rgb) {
-    return [UIColor colorWithRed:((rgb >> 16) & 0xFF) / 255.0f
-                           green:((rgb >> 8) & 0xFF) / 255.0f
-                            blue:(rgb & 0xFF) / 255.0f
-                           alpha:1.0f];
-}
-#define Metin2ColorHex WorldOnlineColorHex
-
-static NSString* const kPatchBaseUrl = @"https://pub-9d9b6f14e1f345c98cb2d231a3471077.r2.dev/";
-static NSString* const kPatchCachePrefKey = @"worldonline_patch_cache_v1";
-static NSString* const kTrailerFileName = @"trailer.mp4";
-
-@interface WorldOnlinePatcherViewController : UIViewController
-@property (nonatomic, strong) AVPlayer* videoPlayer;
-@property (nonatomic, strong) AVPlayerLayer* videoLayer;
-@property (nonatomic, strong) CAGradientLayer* vignetteLayer;
-@property (nonatomic, strong) UILabel* statusLabel;
-@property (nonatomic, strong) UILabel* percentLabel;
-@property (nonatomic, strong) UILabel* detailLabel;
-@property (nonatomic, strong) UIProgressView* progressView;
-@property (nonatomic, strong) UIButton* retryButton;
-@property (nonatomic, assign) BOOL isWorkerRunning;
-@end
-
-@implementation WorldOnlinePatcherViewController
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    [UIApplication sharedApplication].idleTimerDisabled = YES;
-    self.view.backgroundColor = [UIColor blackColor];
-
-    // 1. Setup Fullscreen Video Layer (ResizeAspectFill = Zero Black Bars)
-    [self setupBackgroundVideo];
-
-    // 2. Subtle Top & Bottom Cinematic Vignette Overlay
-    self.vignetteLayer = [CAGradientLayer layer];
-    self.vignetteLayer.frame = self.view.bounds;
-    self.vignetteLayer.colors = @[
-        (id)[UIColor colorWithRed:0.015f green:0.023f blue:0.039f alpha:0.55f].CGColor,
-        (id)[UIColor clearColor].CGColor,
-        (id)[UIColor colorWithRed:0.015f green:0.023f blue:0.039f alpha:0.15f].CGColor,
-        (id)[UIColor colorWithRed:0.020f green:0.031f blue:0.055f alpha:0.85f].CGColor
-    ];
-    self.vignetteLayer.locations = @[@0.0, @0.25, @0.65, @1.0];
-    [self.view.layer addSublayer:self.vignetteLayer];
-
-    // 3. Top Header Branding ("WORLD ONLINE")
-    UILabel* title = [[UILabel alloc] init];
-    title.text = @"WORLD ONLINE";
-    title.textColor = Metin2ColorHex(0xFFF0B8);
-    UIFontDescriptor* serifDesc = [[UIFont systemFontOfSize:28.0f weight:UIFontWeightBold].fontDescriptor fontDescriptorWithDesign:UIFontDescriptorSystemDesignSerif];
-    title.font = serifDesc ? [UIFont fontWithDescriptor:serifDesc size:28.0f] : [UIFont boldSystemFontOfSize:28.0f];
-    title.textAlignment = NSTextAlignmentCenter;
-    title.layer.shadowColor = [UIColor blackColor].CGColor;
-    title.layer.shadowRadius = 8.0f;
-    title.layer.shadowOpacity = 0.9f;
-    title.layer.shadowOffset = CGSizeMake(0.0f, 3.0f);
-    title.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:title];
-
-    UIView* goldLine = [[UIView alloc] init];
-    goldLine.backgroundColor = Metin2ColorHex(0xD4AF37);
-    goldLine.layer.cornerRadius = 1.0f;
-    goldLine.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:goldLine];
-
-    // 4. Sleek Glassmorphic Bottom Patcher Dock
-    UIView* dock = [[UIView alloc] init];
-    dock.backgroundColor = [UIColor colorWithRed:0.047f green:0.071f blue:0.110f alpha:0.84f];
-    dock.layer.borderColor = [UIColor colorWithRed:0.831f green:0.686f blue:0.216f alpha:0.65f].CGColor;
-    dock.layer.borderWidth = 1.0f;
-    dock.layer.cornerRadius = 12.0f;
-    dock.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:dock];
-
-    self.statusLabel = [[UILabel alloc] init];
-    self.statusLabel.text = @"جاري الاتصال بخادم التحديث...";
-    self.statusLabel.textColor = Metin2ColorHex(0xF5F7FA);
-    self.statusLabel.font = [UIFont boldSystemFontOfSize:13.0f];
-    self.statusLabel.textAlignment = NSTextAlignmentRight;
-    self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    [dock addSubview:self.statusLabel];
-
-    self.percentLabel = [[UILabel alloc] init];
-    self.percentLabel.text = @"0.0%";
-    self.percentLabel.textColor = Metin2ColorHex(0xFFD54F);
-    self.percentLabel.font = [UIFont boldSystemFontOfSize:14.0f];
-    self.percentLabel.textAlignment = NSTextAlignmentLeft;
-    self.percentLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    [dock addSubview:self.percentLabel];
-
-    self.progressView = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
-    self.progressView.progressTintColor = Metin2ColorHex(0xFFD54F);
-    self.progressView.trackTintColor = Metin2ColorHex(0x05070B);
-    self.progressView.layer.cornerRadius = 5.0f;
-    self.progressView.clipsToBounds = YES;
-    self.progressView.progress = 0.0f;
-    self.progressView.translatesAutoresizingMaskIntoConstraints = NO;
-    [dock addSubview:self.progressView];
-
-    self.detailLabel = [[UILabel alloc] init];
-    self.detailLabel.text = @"جاري تجهيز World Online...";
-    self.detailLabel.textColor = Metin2ColorHex(0xB0BEC5);
-    self.detailLabel.font = [UIFont systemFontOfSize:11.0f];
-    self.detailLabel.textAlignment = NSTextAlignmentRight;
-    self.detailLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    [dock addSubview:self.detailLabel];
-
-    self.retryButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.retryButton setTitle:@"إعادة المحاولة" forState:UIControlStateNormal];
-    [self.retryButton setTitleColor:Metin2ColorHex(0x0B0F17) forState:UIControlStateNormal];
-    self.retryButton.titleLabel.font = [UIFont boldSystemFontOfSize:12.0f];
-    self.retryButton.backgroundColor = Metin2ColorHex(0xDAA520);
-    self.retryButton.layer.cornerRadius = 6.0f;
-    self.retryButton.hidden = YES;
-    self.retryButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.retryButton addTarget:self action:@selector(onRetryTap) forControlEvents:UIControlEventTouchUpInside];
-    [dock addSubview:self.retryButton];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [title.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:16.0f],
-        [title.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-        [goldLine.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:4.0f],
-        [goldLine.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-        [goldLine.widthAnchor constraintEqualToConstant:220.0f],
-        [goldLine.heightAnchor constraintEqualToConstant:2.0f],
-
-        [dock.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:32.0f],
-        [dock.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-32.0f],
-        [dock.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-16.0f],
-
-        [self.percentLabel.topAnchor constraintEqualToAnchor:dock.topAnchor constant:14.0f],
-        [self.percentLabel.leadingAnchor constraintEqualToAnchor:dock.leadingAnchor constant:20.0f],
-
-        [self.statusLabel.centerYAnchor constraintEqualToAnchor:self.percentLabel.centerYAnchor],
-        [self.statusLabel.leadingAnchor constraintEqualToAnchor:self.percentLabel.trailingAnchor constant:12.0f],
-        [self.statusLabel.trailingAnchor constraintEqualToAnchor:dock.trailingAnchor constant:-20.0f],
-
-        [self.progressView.topAnchor constraintEqualToAnchor:self.percentLabel.bottomAnchor constant:8.0f],
-        [self.progressView.leadingAnchor constraintEqualToAnchor:dock.leadingAnchor constant:20.0f],
-        [self.progressView.trailingAnchor constraintEqualToAnchor:dock.trailingAnchor constant:-20.0f],
-        [self.progressView.heightAnchor constraintEqualToConstant:10.0f],
-
-        [self.detailLabel.topAnchor constraintEqualToAnchor:self.progressView.bottomAnchor constant:8.0f],
-        [self.detailLabel.trailingAnchor constraintEqualToAnchor:dock.trailingAnchor constant:-20.0f],
-        [self.detailLabel.leadingAnchor constraintEqualToAnchor:self.retryButton.trailingAnchor constant:12.0f],
-        [self.detailLabel.bottomAnchor constraintEqualToAnchor:dock.bottomAnchor constant:-14.0f],
-
-        [self.retryButton.centerYAnchor constraintEqualToAnchor:self.detailLabel.centerYAnchor],
-        [self.retryButton.leadingAnchor constraintEqualToAnchor:dock.leadingAnchor constant:20.0f],
-        [self.retryButton.widthAnchor constraintEqualToConstant:115.0f],
-        [self.retryButton.heightAnchor constraintEqualToConstant:30.0f]
-    ]];
-
-    [self startPatchCheck];
-}
-
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    if (self.videoLayer) self.videoLayer.frame = self.view.bounds;
-    if (self.vignetteLayer) self.vignetteLayer.frame = self.view.bounds;
-    [CATransaction commit];
-}
-
-- (void)setupBackgroundVideo {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (self.videoPlayer) return;
-
-        NSURL* videoURL = nil;
-        // 1. Instant First-Boot: Load bundled trailer.mp4 from inside M2WorldOnline.app
-        NSString* bundlePath = [[NSBundle mainBundle] pathForResource:@"trailer" ofType:@"mp4"];
-        if (bundlePath && [[NSFileManager defaultManager] fileExistsAtPath:bundlePath]) {
-            videoURL = [NSURL fileURLWithPath:bundlePath];
-        }
-
-        // 2. Fallback: Check Documents/trailer.mp4
-        if (!videoURL) {
-            NSString* docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-            NSString* localTrailer = [docs stringByAppendingPathComponent:kTrailerFileName];
-            if ([[NSFileManager defaultManager] fileExistsAtPath:localTrailer]) {
-                videoURL = [NSURL fileURLWithPath:localTrailer];
-            }
-        }
-
-        // 3. Fallback: Stream from Patch Server
-        if (!videoURL) {
-            videoURL = [NSURL URLWithString:[kPatchBaseUrl stringByAppendingString:kTrailerFileName]];
-        }
-        if (!videoURL) return;
-
-        AVAudioSession* session = [AVAudioSession sharedInstance];
-        [session setCategory:AVAudioSessionCategoryAmbient error:nil];
-        [session setActive:YES error:nil];
-
-        AVPlayerItem* item = [AVPlayerItem playerItemWithURL:videoURL];
-        self.videoPlayer = [AVPlayer playerWithPlayerItem:item];
-        self.videoPlayer.actionAtItemEnd = AVPlayerActionAtItemEndNone;
-
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(onVideoDidReachEnd:)
-                                                     name:AVPlayerItemDidPlayToEndTimeNotification
-                                                   object:item];
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(onAppWillEnterForeground:)
-                                                     name:UIApplicationWillEnterForegroundNotification
-                                                   object:nil];
-
-        self.videoLayer = [AVPlayerLayer playerLayerWithPlayer:self.videoPlayer];
-        self.videoLayer.frame = self.view.bounds;
-        self.videoLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
-        [self.view.layer insertSublayer:self.videoLayer atIndex:0];
-
-        [self.videoPlayer play];
-    });
-}
-
-- (void)onVideoDidReachEnd:(NSNotification*)notification {
-    AVPlayerItem* item = notification.object;
-    [item seekToTime:kCMTimeZero completionHandler:nil];
-    [self.videoPlayer play];
-}
-
-- (void)onAppWillEnterForeground:(NSNotification*)notification {
-    if (self.videoPlayer) {
-        [self.videoPlayer play];
-    }
-}
-
-- (void)stopAndReleaseVideo {
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
-    if (self.videoPlayer) {
-        [self.videoPlayer pause];
-        self.videoPlayer = nil;
-    }
-    if (self.videoLayer) {
-        [self.videoLayer removeFromSuperlayer];
-        self.videoLayer = nil;
-    }
-}
-
-- (void)dealloc {
-    [self stopAndReleaseVideo];
-}
-
-- (void)onRetryTap {
-    self.retryButton.hidden = YES;
-    [self startPatchCheck];
-}
-
-- (void)updateUIStatus:(NSString*)s detail:(NSString*)d progress:(float)p showRetry:(BOOL)r {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.statusLabel.text = s;
-        self.detailLabel.text = d;
-        if (p >= 0.0f) {
-            float clamped = fmaxf(0.0f, fminf(1.0f, p));
-            self.progressView.progress = clamped;
-            self.percentLabel.text = [NSString stringWithFormat:@"%.1f%%", clamped * 100.0f];
-        }
-        self.retryButton.hidden = !r;
-    });
-}
-
-- (void)startPatchCheck {
-    if (self.isWorkerRunning) return;
-    self.isWorkerRunning = YES;
-    [self updateUIStatus:@"جاري الاتصال بخادم التحديث..." detail:@"جاري تجهيز World Online..." progress:0.0f showRetry:NO];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        [self runPatchWorker];
-        self.isWorkerRunning = NO;
-    });
-}
-
-- (NSString*)computeMd5:(NSString*)path {
-    NSInputStream* st = [NSInputStream inputStreamWithFileAtPath:path];
-    if (!st) return @"";
-    [st open];
-    CC_MD5_CTX c;
-    CC_MD5_Init(&c);
-    uint8_t b[131072];
-    while ([st hasBytesAvailable]) {
-        NSInteger n = [st read:b maxLength:sizeof(b)];
-        if (n <= 0) break;
-        CC_MD5_Update(&c, b, (CC_LONG)n);
-    }
-    [st close];
-    unsigned char dg[CC_MD5_DIGEST_LENGTH];
-    CC_MD5_Final(dg, &c);
-    NSMutableString* h = [NSMutableString stringWithCapacity:32];
-    for (int i = 0; i < CC_MD5_DIGEST_LENGTH; ++i) [h appendFormat:@"%02x", dg[i]];
-    return h;
-}
-
-- (NSData*)fetchManifest:(NSString*)u {
-    for (int a = 1; a <= 4; ++a) {
-        if (a > 1) {
-            [self updateUIStatus:[NSString stringWithFormat:@"جاري الاتصال بخادم التحديث... (محاولة %d/4)", a]
-                          detail:@"إعادة محاولة الاتصال..."
-                        progress:0.0f
-                       showRetry:NO];
-        }
-        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        __block NSData* outData = nil;
-        NSMutableURLRequest* req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:u]
-                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-                                                       timeoutInterval:10.0];
-        [req setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
-        [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData* d, NSURLResponse* r, NSError* e){
-            if (!e && [r isKindOfClass:[NSHTTPURLResponse class]] && ((NSHTTPURLResponse*)r).statusCode == 200 && d && d.length > 0)
-                outData = [[NSData alloc] initWithData:d];
-            dispatch_semaphore_signal(sem);
-        }] resume];
-        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
-        if (outData) return outData;
-        [NSThread sleepForTimeInterval:0.6];
-    }
-    return nil;
-}
-
-- (BOOL)downloadEntry:(NSDictionary*)entry toPath:(NSString*)target base:(long long)base total:(long long)total idx:(int)idx count:(int)count err:(NSString**)err {
-    NSString* rel = entry[@"path"];
-    NSString* expMd5 = [entry[@"md5"] lowercaseString];
-    NSString* tmp = [target stringByAppendingString:@".tmp"];
-    NSFileManager* fm = [NSFileManager defaultManager];
-    NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
-
-    for (int a = 1; a <= 4; ++a) {
-        [fm removeItemAtPath:tmp error:nil];
-        NSURLSessionConfiguration* cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-        cfg.timeoutIntervalForRequest = 25.0;
-        cfg.timeoutIntervalForResource = 7200.0;
-        NSURLSession* sess = [NSURLSession sessionWithConfiguration:cfg];
-        NSMutableURLRequest* req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[kPatchBaseUrl stringByAppendingString:[rel stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]]]]
-                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-                                                       timeoutInterval:25.0];
-        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        __block BOOL ok = NO;
-        NSURLSessionDownloadTask* task = [sess downloadTaskWithRequest:req completionHandler:^(NSURL* loc, NSURLResponse* r, NSError* e){
-            if (!e && loc && ((NSHTTPURLResponse*)r).statusCode == 200) {
-                [fm removeItemAtPath:tmp error:nil];
-                ok = [fm moveItemAtURL:loc toURL:[NSURL fileURLWithPath:tmp] error:nil];
-            }
-            dispatch_semaphore_signal(sem);
-        }];
-        [task resume];
-        while (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 80000000LL)) != 0) {
-            long long cur = base + task.countOfBytesReceived;
-            double dt = MAX(0.1, [NSDate timeIntervalSinceReferenceDate] - t0);
-            double spd = (cur / 1048576.0) / dt;
-            float prg = total > 0 ? (float)((double)cur / (double)total) : 1.0f;
-            [self updateUIStatus:[NSString stringWithFormat:@"جاري تحميل التحديثات (%d/%d)", idx, count]
-                          detail:[NSString stringWithFormat:@"%@ • %.1f / %.1f MB (%.2f MB/s)", rel, cur / 1048576.0, total / 1048576.0, spd]
-                        progress:prg
-                       showRetry:NO];
-        }
-        [sess finishTasksAndInvalidate];
-        if (!ok) {
-            if (a < 4) {
-                [self updateUIStatus:[NSString stringWithFormat:@"جاري إعادة الاتصال (%d/4): %@", a, rel]
-                              detail:@"استئناف التحميل..."
-                            progress:-1.0f
-                           showRetry:NO];
-                [NSThread sleepForTimeInterval:0.8];
-            }
-            continue;
-        }
-        if (![[[self computeMd5:tmp] lowercaseString] isEqualToString:expMd5]) {
-            [fm removeItemAtPath:tmp error:nil];
-            if (a == 4 && err) *err = [NSString stringWithFormat:@"خطأ في التحقق من الملف: %@", rel];
-            continue;
-        }
-        [fm removeItemAtPath:target error:nil];
-        if (![fm moveItemAtPath:tmp toPath:target error:nil]) {
-            if (err) *err = [NSString stringWithFormat:@"فشل حفظ الملف: %@", rel];
-            return NO;
-        }
-        return YES;
-    }
-    if (err && !*err) *err = [NSString stringWithFormat:@"فشل تحميل الملف: %@", rel];
-    return NO;
-}
-
-- (void)excludePathFromiCloudBackup:(NSString*)path {
+static void WorldOnlineExcludeFromBackup(NSString* path) {
     if (!path) return;
     NSURL* url = [NSURL fileURLWithPath:path];
     if (url) {
@@ -842,182 +448,76 @@ static NSString* const kTrailerFileName = @"trailer.mp4";
     }
 }
 
-- (BOOL)requestUserDownloadConsentWithBytes:(long long)totalBytes fileCount:(int)fileCount {
-    if (totalBytes <= 0 || fileCount <= 0) return YES;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    __block BOOL approved = NO;
-    double sizeMb = (double)totalBytes / (1024.0 * 1024.0);
-
-    [self updateUIStatus:@"بانتظار الموافقة على تحميل التحديث..."
-                  detail:[NSString stringWithFormat:@"حجم التحميل المطلوب: %.1f MB", sizeMb]
-                progress:0.0f
-               showRetry:NO];
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSString* msg = [NSString stringWithFormat:
-            @"تحتاج اللعبة إلى تحميل ملفات إضافية (%d ملف) بحجم إجمالي %.1f MB لتشغيل اللعبة.\n\nيُنصح بالاتصال بشبكة Wi-Fi. هل تريد بدء التحميل الآن؟",
-            fileCount, sizeMb];
-
-        UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"تحديث ملفات اللعبة - World Online"
-                                                                       message:msg
-                                                                preferredStyle:UIAlertControllerStyleAlert];
-
-        [alert addAction:[UIAlertAction actionWithTitle:@"تحميل الآن"
-                                                  style:UIAlertActionStyleDefault
-                                                handler:^(UIAlertAction* action) {
-            approved = YES;
-            dispatch_semaphore_signal(sem);
-        }]];
-
-        [alert addAction:[UIAlertAction actionWithTitle:@"لاحقاً"
-                                                  style:UIAlertActionStyleCancel
-                                                handler:^(UIAlertAction* action) {
-            approved = NO;
-            dispatch_semaphore_signal(sem);
-        }]];
-
-        [self presentViewController:alert animated:YES completion:nil];
-    });
-
-    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
-    return approved;
-}
-
-- (void)runPatchWorker {
-    NSString* base = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-    [self excludePathFromiCloudBackup:base];
+static void WorldOnlineSyncBundledAssetsToDocuments() {
     NSFileManager* fm = [NSFileManager defaultManager];
-    for (NSString* d in @[@"UserData", @"UserData/environment", @"shop", @"temp", @"upload", @"mark"]) {
-        NSString* subPath = [base stringByAppendingPathComponent:d];
-        [fm createDirectoryAtPath:subPath withIntermediateDirectories:YES attributes:nil error:nil];
-        [self excludePathFromiCloudBackup:subPath];
-    }
+    NSString* docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    if (!docs) return;
+    WorldOnlineExcludeFromBackup(docs);
 
-    NSData* mData = [self fetchManifest:[NSString stringWithFormat:@"%@manifest.json?t=%lld", kPatchBaseUrl, (long long)([[NSDate date] timeIntervalSince1970] * 1000)]];
-    if (!mData) {
-        [self updateUIStatus:@"خطأ في التحديث: انتهت مهلة الاتصال بالخادم" detail:@"اضغط على إعادة المحاولة للمتابعة." progress:0.0f showRetry:YES];
-        return;
-    }
-
-    NSDictionary* root = [NSJSONSerialization JSONObjectWithData:mData options:0 error:nil];
-    NSArray* files = root[@"files"];
-    if (![files isKindOfClass:[NSArray class]]) {
-        [self updateUIStatus:@"خطأ في التحديث: بيانات التحديث غير صالحة" detail:@"اضغط على إعادة المحاولة للمتابعة." progress:0.0f showRetry:YES];
-        return;
-    }
-
-    NSUserDefaults* def = [NSUserDefaults standardUserDefaults];
-    NSMutableDictionary* cache = [[def dictionaryForKey:kPatchCachePrefKey] mutableCopy] ?: [NSMutableDictionary dictionary];
-    NSMutableArray* todo = [NSMutableArray array];
-    long long totalBytes = 0;
-    int cnt = (int)files.count;
-
-    for (int i = 0; i < cnt; ++i) {
-        NSDictionary* it = files[i];
-        NSString* rel = it[@"path"];
-        NSString* lowerRel = [rel lowercaseString];
-        if ([lowerRel hasSuffix:@".apk"] || [lowerRel hasSuffix:@".exe"] || [lowerRel hasSuffix:@".dll"] || [lowerRel hasSuffix:@".so"] || [lowerRel hasSuffix:@".pyd"])
-            continue;
-        long long sz = [it[@"size"] longLongValue];
-        NSString* md5 = [it[@"md5"] lowercaseString];
-        if (i % 8 == 0 || i == cnt - 1) {
-            [self updateUIStatus:[NSString stringWithFormat:@"جاري فحص الملفات (%d/%d)...", i + 1, cnt]
-                          detail:rel
-                        progress:(float)(i + 1) / (float)cnt
-                       showRetry:NO];
+    // 1. Ensure writable runtime directories exist in Documents
+    NSArray<NSString*>* writableDirs = @[@"UserData", @"UserData/environment", @"shop", @"temp", @"upload", @"mark"];
+    for (NSString* dir in writableDirs) {
+        NSString* subPath = [docs stringByAppendingPathComponent:dir];
+        BOOL isDir = NO;
+        NSDictionary* attrs = [fm attributesOfItemAtPath:subPath error:nil];
+        if (attrs && [attrs[NSFileType] isEqualToString:NSFileTypeSymbolicLink]) {
+            [fm removeItemAtPath:subPath error:nil];
         }
-        NSString* loc = [base stringByAppendingPathComponent:rel];
-        BOOL ok = NO;
-        if ([fm fileExistsAtPath:loc]) {
-            NSDictionary* at = [fm attributesOfItemAtPath:loc error:nil];
-            if ([at fileSize] == sz) {
-                long long mod = (long long)[[at fileModificationDate] timeIntervalSince1970];
-                NSString* cVal = [NSString stringWithFormat:@"%lld:%lld:%@", sz, mod, md5];
-                if ([cache[rel] isEqualToString:cVal]) {
-                    ok = YES;
-                } else if ([[[self computeMd5:loc] lowercaseString] isEqualToString:md5]) {
-                    cache[rel] = cVal;
-                    ok = YES;
+        if (![fm fileExistsAtPath:subPath isDirectory:&isDir] || !isDir) {
+            [fm createDirectoryAtPath:subPath withIntermediateDirectories:YES attributes:nil error:nil];
+        }
+        WorldOnlineExcludeFromBackup(subPath);
+    }
+
+    // 2. Link or copy bundled GameAssets from WorldOnline.app/GameAssets into Documents
+    NSString* bundleAssetsDir = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"GameAssets"];
+    BOOL hasBundleAssets = NO;
+    if (![fm fileExistsAtPath:bundleAssetsDir isDirectory:&hasBundleAssets] || !hasBundleAssets) {
+        return;
+    }
+
+    NSArray<NSString*>* items = [fm contentsOfDirectoryAtPath:bundleAssetsDir error:nil];
+    for (NSString* item in items) {
+        if ([item hasPrefix:@"."]) continue;
+        NSString* srcPath = [bundleAssetsDir stringByAppendingPathComponent:item];
+        NSString* dstPath = [docs stringByAppendingPathComponent:item];
+
+        // "mark" must stay writable in Documents; copy initial bundled mark files if missing
+        if ([[item lowercaseString] isEqualToString:@"mark"]) {
+            NSArray<NSString*>* markFiles = [fm contentsOfDirectoryAtPath:srcPath error:nil];
+            for (NSString* mf in markFiles) {
+                NSString* mSrc = [srcPath stringByAppendingPathComponent:mf];
+                NSString* mDst = [dstPath stringByAppendingPathComponent:mf];
+                if (![fm fileExistsAtPath:mDst]) {
+                    [fm copyItemAtPath:mSrc toPath:mDst error:nil];
                 }
             }
+            continue;
         }
-        if (!ok) {
-            [todo addObject:it];
-            totalBytes += sz;
+
+        BOOL isDir = NO;
+        [fm fileExistsAtPath:srcPath isDirectory:&isDir];
+
+        // Small mutable config files (.cfg) are copied once so the engine can modify them
+        if (!isDir && [[[item pathExtension] lowercaseString] isEqualToString:@"cfg"]) {
+            NSDictionary* dstAttrs = [fm attributesOfItemAtPath:dstPath error:nil];
+            if (dstAttrs && [dstAttrs[NSFileType] isEqualToString:NSFileTypeSymbolicLink]) {
+                [fm removeItemAtPath:dstPath error:nil];
+            }
+            if (![fm fileExistsAtPath:dstPath]) {
+                [fm copyItemAtPath:srcPath toPath:dstPath error:nil];
+                WorldOnlineExcludeFromBackup(dstPath);
+            }
+            continue;
         }
+
+        // Read-only directories (pack, lib, bgm) and data tables are symlinked to the signed .app bundle
+        // Always refresh the symlink on launch because iOS changes the .app bundle UUID across updates
+        [fm removeItemAtPath:dstPath error:nil];
+        [fm createSymbolicLinkAtPath:dstPath withDestinationPath:srcPath error:nil];
+        WorldOnlineExcludeFromBackup(dstPath);
     }
-
-    [def setObject:cache forKey:kPatchCachePrefKey];
-    [def synchronize];
-
-    if (todo.count > 0 && totalBytes > 0) {
-        if (![self requestUserDownloadConsentWithBytes:totalBytes fileCount:(int)todo.count]) {
-            [self updateUIStatus:@"تم إلغاء التحميل."
-                          detail:@"اضغط على إعادة المحاولة لتحميل ملفات اللعبة."
-                        progress:0.0f
-                       showRetry:YES];
-            return;
-        }
-    }
-
-    long long doneBytes = 0;
-    for (int i = 0; i < (int)todo.count; ++i) {
-        NSDictionary* it = todo[i];
-        NSString* rel = it[@"path"];
-        NSString* dst = [base stringByAppendingPathComponent:rel];
-        [fm createDirectoryAtPath:[dst stringByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:nil];
-        NSString* err = nil;
-        if (![self downloadEntry:it toPath:dst base:doneBytes total:totalBytes idx:i + 1 count:(int)todo.count err:&err]) {
-            [self updateUIStatus:[NSString stringWithFormat:@"خطأ في التحديث: %@", err ?: @"فشل التحميل"]
-                          detail:@"اضغط على إعادة المحاولة للمتابعة."
-                        progress:0.0f
-                       showRetry:YES];
-            return;
-        }
-        doneBytes += [it[@"size"] longLongValue];
-        NSDictionary* at = [fm attributesOfItemAtPath:dst error:nil];
-        cache[rel] = [NSString stringWithFormat:@"%lld:%lld:%@", [it[@"size"] longLongValue], (long long)[[at fileModificationDate] timeIntervalSince1970], [it[@"md5"] lowercaseString]];
-        [def setObject:cache forKey:kPatchCachePrefKey];
-    }
-
-    [def synchronize];
-    [self updateUIStatus:@"اكتمل التحديث! جاري تشغيل اللعبة..." detail:@"" progress:1.0f showRetry:NO];
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250000000LL), dispatch_get_main_queue(), ^{
-        chdir([base UTF8String]);
-        setenv("WORLDONLINE_IOS_DOCS_DIR", [base UTF8String], 1);
-        NSString* crashPath = [base stringByAppendingPathComponent:@"crash_report.txt"];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:crashPath]) {
-            NSData* d = [NSData dataWithContentsOfFile:crashPath];
-            NSString* rep = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: [[NSString alloc] initWithData:d encoding:NSISOLatin1StringEncoding] ?: @"[Unreadable crash report]";
-            UIAlertController* al = [UIAlertController alertControllerWithTitle:@"Crash Detected (Previous Run)" message:rep preferredStyle:UIAlertControllerStyleAlert];
-            [al addAction:[UIAlertAction actionWithTitle:@"COPY CRASH REPORT" style:UIAlertActionStyleDefault handler:^(UIAlertAction* a){
-                [UIPasteboard generalPasteboard].string = rep;
-                self.statusLabel.text = @"تم نسخ تقرير الخطأ! اضغط على إعادة المحاولة لتشغيل اللعبة.";
-                [[NSFileManager defaultManager] removeItemAtPath:crashPath error:nil];
-                self.retryButton.hidden = NO;
-            }]];
-            [al addAction:[UIAlertAction actionWithTitle:@"CLEAR & LAUNCH GAME" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* a){
-                [[NSFileManager defaultManager] removeItemAtPath:crashPath error:nil];
-                [self stopAndReleaseVideo];
-                UIWindow* w = [UIApplication sharedApplication].delegate.window ?: [UIApplication sharedApplication].windows.firstObject;
-                w.rootViewController = [[WorldOnlineIOSViewController alloc] init];
-                [w makeKeyAndVisible];
-            }]];
-            [self presentViewController:al animated:YES completion:nil];
-            return;
-        }
-        [self stopAndReleaseVideo];
-        UIWindow* w = [UIApplication sharedApplication].delegate.window;
-        if (!w) w = [UIApplication sharedApplication].windows.firstObject;
-        w.rootViewController = [[WorldOnlineIOSViewController alloc] init];
-        [w makeKeyAndVisible];
-    });
 }
-
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskLandscape; }
-- (BOOL)prefersStatusBarHidden { return YES; }
-@end
 
 @interface WorldOnlineAppDelegate : UIResponder <UIApplicationDelegate>
 @property (nonatomic, strong) UIWindow* window;
@@ -1025,11 +525,16 @@ static NSString* const kTrailerFileName = @"trailer.mp4";
 
 @implementation WorldOnlineAppDelegate
 - (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
+    [UIApplication sharedApplication].idleTimerDisabled = YES;
+    WorldOnlineSyncBundledAssetsToDocuments();
+
     NSString* docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
     chdir([docs UTF8String]);
     setenv("WORLDONLINE_IOS_DOCS_DIR", [docs UTF8String], 1);
+    setenv("PYTHONDONTWRITEBYTECODE", "1", 1);
+
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    self.window.rootViewController = [[WorldOnlinePatcherViewController alloc] init];
+    self.window.rootViewController = [[WorldOnlineIOSViewController alloc] init];
     [self.window makeKeyAndVisible];
     return YES;
 }

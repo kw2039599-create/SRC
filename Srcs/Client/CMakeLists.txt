@@ -87,7 +87,9 @@ file(WRITE "${PY_GEN_DIR}/pyconfig.h" "
 #define HAVE_ERRNO_H 1
 #define HAVE_UTIME_H 1
 #define HAVE_PTHREAD_H 1
+#ifndef __APPLE__
 #define HAVE_DLFCN_H 1
+#endif
 #define HAVE_WCHAR_H 1
 // FixiOSSystem
 #ifdef __APPLE__
@@ -563,8 +565,8 @@ if(APPLE)
         XCODE_ATTRIBUTE_MARKETING_VERSION "1.0.0"
         XCODE_ATTRIBUTE_CURRENT_PROJECT_VERSION "1"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
-        XCODE_ATTRIBUTE_INFOPLIST_KEY_UIFileSharingEnabled YES
-        XCODE_ATTRIBUTE_INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace YES
+        XCODE_ATTRIBUTE_INFOPLIST_KEY_UIFileSharingEnabled NO
+        XCODE_ATTRIBUTE_INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace NO
         XCODE_ATTRIBUTE_INFOPLIST_KEY_UIRequiresFullScreen YES
         XCODE_ATTRIBUTE_INFOPLIST_KEY_ITSAppUsesNonExemptEncryption NO
         "XCODE_ATTRIBUTE_INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=iphone*]" "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
