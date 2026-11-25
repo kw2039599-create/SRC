@@ -1,9 +1,13 @@
-import base64, hashlib, json, os, plistlib, shutil, subprocess, sys, time, zlib, struct
+import base64, hashlib, json, os, plistlib, re, shutil, subprocess, sys, time, zlib, struct
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import jwt, requests
 
 PATCH_BASE_URL = 'https://pub-9d9b6f14e1f345c98cb2d231a3471077.r2.dev/'
 BANNED_EXTENSIONS = ('.apk', '.exe', '.dll', '.so', '.pyd', '.bat', '.sh', '.msi')
+ALLOWED_ASSET_REGEX = re.compile(
+    r'^(locale\.cfg|mouse\.cfg|speedtree_cache\.bin|item_list\.txt|SkillTable\.txt|item_scale\.txt|pack/(Index|[^/]+\.MT\d+)|lib/.*\.pyc|bgm/.*\.(mp3|inf)|mark/.*\.tga)$',
+    re.IGNORECASE
+)
 
 def bundle_game_assets_from_r2(app_path):
     assets_root = os.path.join(app_path, 'GameAssets')
@@ -17,6 +21,9 @@ def bundle_game_assets_from_r2(app_path):
     for entry in files:
         rel = entry.get('path', '').replace('\\', '/').lstrip('/')
         if not rel or rel.lower() == 'trailer.mp4' or rel.lower().endswith(BANNED_EXTENSIONS):
+            continue
+        if not ALLOWED_ASSET_REGEX.match(rel):
+            print(f'Skipping non-whitelisted file from manifest: {rel}')
             continue
         todo.append((rel, int(entry.get('size', 0)), entry.get('md5', '').lower()))
 

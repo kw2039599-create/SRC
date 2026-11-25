@@ -173,6 +173,8 @@ extern "C" void IOSOpenURL(const char* urlStr) {
     });
 }
 
+extern "C" void IOSStopMusic();
+
 extern "C" void IOSCloseApp() {
     // Guideline 2.5.1 / 2.5.19 compliance: Do not invoke private UIApplication selectors or force-terminate on iOS
     IOSStopMusic();
