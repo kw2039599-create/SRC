@@ -30,9 +30,10 @@ inline bool PyTuple_GetPointer(PyObject* poArgs, int pos, T** ret)
 	long long val = 0;
 	if (!PyTuple_GetLongLong(poArgs, pos, &val))
 		return false;
-	if (!val)
+	uintptr_t uval = (uintptr_t)val;
+	if (uval < 0x1000u || uval == ~(uintptr_t)0)
 		return false;
-	*ret = (T*)(intptr_t)val;
+	*ret = (T*)uval;
 	return true;
 }
 #endif

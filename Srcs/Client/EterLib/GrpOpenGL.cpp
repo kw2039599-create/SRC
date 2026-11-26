@@ -5,6 +5,7 @@
 
 #if defined(__ANDROID__) && !defined(__APPLE__)
 #include <android/log.h>
+#include <EGL/egl.h>
 #define LOG_TAG "WorldOnline"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -1579,6 +1580,56 @@ namespace {
     }
 } // anonymous namespace
 
+extern "C" void CheckAndRestoreAndroidGLContext(IDirect3DDevice8* dev) {
+#if defined(__ANDROID__) && !defined(__APPLE__)
+    static EGLContext s_lastEGLContext = EGL_NO_CONTEXT;
+    EGLContext curCtx = eglGetCurrentContext();
+    if (curCtx == EGL_NO_CONTEXT)
+        return;
+
+    const bool bContextChanged = (s_lastEGLContext != EGL_NO_CONTEXT && curCtx != s_lastEGLContext);
+    const bool bProgramLost = (s_bProgramsInitialized && (s_progs[0].prog == 0 || !glIsProgram(s_progs[0].prog)));
+    if (bContextChanged || bProgramLost) {
+        ++g_AndroidGLContextGen;
+        s_bProgramsInitialized = false;
+        s_curProg = NULL;
+        s_enabledAttribMask = 0;
+        s_curArrayBuffer = 0;
+        s_curElementArrayBuffer = 0;
+        s_lastAttrVbo = 0;
+        s_lastAttrFvf = 0xFFFFFFFFu;
+        s_lastAttrStride = 0xFFFFFFFFu;
+        s_lastAttrBasePtr = (const BYTE*)0xFFFFFFFFu;
+        s_upVbo = 0;
+        s_upVboCapacity = 0;
+        s_upVboOffset = 0;
+        s_upIbo = 0;
+        s_upIboCapacity = 0;
+        s_upIboOffset = 0;
+
+        EnsureProgramInitialized();
+
+        if (dev) {
+            dev->m_pCurrentRenderTargetTex = NULL;
+            for (int i = 0; i < 8; ++i) dev->m_BoundGLTexId[i] = 0xFFFFFFFFu;
+            DWORD savedStates[256];
+            memcpy(savedStates, dev->m_RenderStates, sizeof(savedStates));
+            for (int i = 0; i < 256; ++i) dev->m_RenderStates[i] = 0xDEADBEEFu;
+            for (int i = 0; i < 256; ++i) {
+                if (savedStates[i] != 0xDEADBEEFu) {
+                    dev->SetRenderState((DWORD)i, savedStates[i]);
+                }
+            }
+            dev->m_DirtyFlags = 0xFFFFFFFFu;
+        }
+        LOGI("OpenGL ES context recreated -> restored shaders & textures (ctxGen=%u)", g_AndroidGLContextGen);
+    }
+    s_lastEGLContext = curCtx;
+#else
+    (void)dev;
+#endif
+}
+
 void NotifyAndroidGLBufferDeleted(GLuint vbo, GLuint ibo) {
     if (vbo != 0) {
         if (s_curArrayBuffer == vbo) s_curArrayBuffer = 0;
@@ -1680,6 +1731,7 @@ HRESULT IDirect3DDevice8::SetRenderTarget(LPDIRECT3DSURFACE8 pRenderTarget, LPDI
 }
 
 HRESULT IDirect3DDevice8::Clear(DWORD Count, const D3DRECT* pRects, DWORD Flags, D3DCOLOR Color, float Z, DWORD Stencil) {
+    CheckAndRestoreAndroidGLContext(this);
     EnsureProgramInitialized();
     GLbitfield mask = 0;
     if (Flags & D3DCLEAR_TARGET) {

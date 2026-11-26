@@ -1157,7 +1157,6 @@ bool AndroidRenderCharGlyph(int fontSize, unsigned short ch, int* outW, int* out
 #include <cxxabi.h>
 #include <fcntl.h>
 #include <exception>
-#endif
 
 static volatile const char* g_szCrashStage = "Startup";
 static char g_szLastCCall[256] = "None";
@@ -1225,6 +1224,10 @@ static void FormatAddressSymbol(void* addr, char* outBuf, size_t outSize) {
     }
 }
 
+#if !defined(__APPLE__)
+#include <fcntl.h>
+#endif
+
 static void WriteCrashLine(int fd, const char* fmt, ...) {
     char buf[1024];
     va_list ap;
@@ -1233,6 +1236,8 @@ static void WriteCrashLine(int fd, const char* fmt, ...) {
     va_end(ap);
     if (n > 0) {
         if (n > (int)sizeof(buf) - 2) n = (int)sizeof(buf) - 2;
+        buf[n] = '\0';
+        LOGE("%s", buf);
         buf[n++] = '\n';
         buf[n] = '\0';
         if (fd >= 0) write(fd, buf, (size_t)n);
@@ -1296,6 +1301,21 @@ static void AndroidCrashHandler(int sig, siginfo_t* info, void* ucontext) {
             (void*)uc->uc_mcontext->__ss.__x[6], (void*)uc->uc_mcontext->__ss.__x[7]);
     }
 #endif
+#elif defined(__aarch64__)
+    ucontext_t* uc = (ucontext_t*)ucontext;
+    if (uc) {
+        char pcSym[256], lrSym[256];
+        FormatAddressSymbol((void*)uc->uc_mcontext.pc, pcSym, sizeof(pcSym));
+        FormatAddressSymbol((void*)uc->uc_mcontext.regs[30], lrSym, sizeof(lrSym));
+        WriteCrashLine(fd, "--- ANDROID ARM64 CPU REGISTERS ---");
+        WriteCrashLine(fd, "PC (Fault)  : %s", pcSym);
+        WriteCrashLine(fd, "LR (Caller) : %s", lrSym);
+        WriteCrashLine(fd, "SP=%p  FP=%p  FaultAddr=%p",
+            (void*)uc->uc_mcontext.sp, (void*)uc->uc_mcontext.regs[29], (void*)uc->uc_mcontext.fault_address);
+        WriteCrashLine(fd, "X0=%p X1=%p X2=%p X3=%p",
+            (void*)uc->uc_mcontext.regs[0], (void*)uc->uc_mcontext.regs[1],
+            (void*)uc->uc_mcontext.regs[2], (void*)uc->uc_mcontext.regs[3]);
+    }
 #endif
 
     WriteCrashLine(fd, "--- NATIVE C++ CALL STACK ---");
@@ -1356,6 +1376,8 @@ static void AndroidCrashHandler(int sig, siginfo_t* info, void* ucontext) {
         close(fd);
     }
     fflush(NULL);
+    signal(sig, SIG_DFL);
+    raise(sig);
     _exit(1);
 }
 
@@ -1364,18 +1386,15 @@ static void InstallAndroidCrashHandler() {
     struct sigaction sa{};
     sa.sa_sigaction = AndroidCrashHandler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_SIGINFO;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigaction(SIGSEGV, &sa, nullptr);
     sigaction(SIGABRT, &sa, nullptr);
     sigaction(SIGBUS, &sa, nullptr);
     sigaction(SIGILL, &sa, nullptr);
     sigaction(SIGTRAP, &sa, nullptr);
     sigaction(SIGFPE, &sa, nullptr);
-    std::set_terminate([]() {
-        g_szCrashStage = "std::terminate (Uncaught C++ Exception)";
-        abort();
-    });
 }
+#endif // __APPLE__
 
 #ifdef ENABLE_OPENGL
 void initmobileInput(void);
@@ -1409,7 +1428,7 @@ static const char* GetMobileBaseDir() {
                         if (pathStr) {
                             const char* utf = env->GetStringUTFChars(pathStr, nullptr);
                             if (utf && *utf) s_cachedBaseDir = utf;
-                            if (utf) env->ReleaseStringChars(pathStr, (const jchar*)utf);
+                            if (utf) env->ReleaseStringUTFChars(pathStr, utf);
                             env->DeleteLocalRef(pathStr);
                         }
                         env->DeleteLocalRef(fileCls);
@@ -1431,8 +1450,11 @@ static const char* GetMobileBaseDir() {
 }
 
 extern "C" uint32_t g_AndroidGLContextGen;
+extern void CheckAndRestoreAndroidGLContext(IDirect3DDevice8* dev);
+static pthread_mutex_t s_engineInitMutex = PTHREAD_MUTEX_INITIALIZER;
 
 JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, jobject obj, jobject assetManager, jint width, jint height) {
+    pthread_mutex_lock(&s_engineInitMutex);
     if (s_bEngineReady) {
         if (width > 0 && height > 0) {
             g_AndroidPhysWidth = (int)width;
@@ -1440,21 +1462,25 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
             glViewport(0, 0, (GLsizei)width, (GLsizei)height);
         }
         if (IDirect3DDevice8* dev = GetCurrentGLDevice()) {
+            CheckAndRestoreAndroidGLContext(dev);
             dev->m_pCurrentRenderTargetTex = NULL;
             for (int i = 0; i < 8; ++i) dev->m_BoundGLTexId[i] = 0xFFFFFFFFu;
             dev->m_DirtyFlags = 0xFFFFFFFFu;
         }
         LOGI("WorldOnline surface resized (%dx%d) — keeping active session (ctxGen=%u)", width, height, g_AndroidGLContextGen);
+        pthread_mutex_unlock(&s_engineInitMutex);
         return;
     }
 
     LOGI("Initializing WorldOnline Engine (%dx%d)", width, height);
     srand((unsigned int)time(NULL) ^ (unsigned int)getpid());
-	if (width > 0 && height > 0) {
+    if (width > 0 && height > 0) {
         g_AndroidPhysWidth = (int)width;
         g_AndroidPhysHeight = (int)height;
+        int landW = (width >= height) ? (int)width : (int)height;
+        int landH = (width >= height) ? (int)height : (int)width;
         g_AndroidScreenHeight = 720;
-        g_AndroidScreenWidth = (int)(((float)width * 720.0f) / (float)height + 0.5f);
+        g_AndroidScreenWidth = (int)(((float)landW * 720.0f) / (float)landH + 0.5f);
         if (g_AndroidScreenWidth < 960) g_AndroidScreenWidth = 960;
     }
     s_bEngineReady = false;
@@ -1530,9 +1556,7 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
 
     // 1. Open syserr.txt only (disable verbose log.txt for release)
     SetLogLevel(0);
-    InstallAndroidCrashHandler(); g_szCrashStage = "Init: OpenLogFile"; OpenLogFile(false);
-    InstallAndroidCrashHandler();
-    Tracen("worldonline Mobile: Log initialized [BUILD v5 - IOS FIX].");
+    OpenLogFile(false);
 
     // 2. Initialize string table and locale.cfg
     ApplicationStringTable_Initialize(NULL);
@@ -1558,13 +1582,13 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
 #endif
 
     // 4. Initialize pack/ folder
-    g_szCrashStage = "Init: PackInitialize"; if (!PackInitialize("pack")) {
+    if (!PackInitialize("pack")) {
         LOGE("PackInitialize('pack') failed!");
         TraceError("PackInitialize('pack') failed!");
+        pthread_mutex_unlock(&s_engineInitMutex);
         return;
     }
     CEterPackManager::Instance().SetSearchMode(true);
-    Tracen("worldonline Mobile: PackInitialize('pack') succeeded.");
 
     if (LocaleService_LoadGlobal(NULL)) {
         SetDefaultCodePage(LocaleService_GetCodePage());
@@ -1579,9 +1603,8 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
     if (!s_pApp) {
         s_pApp = new CPythonApplication();
     }
-    g_szCrashStage = "Init: CPythonApplication::Initialize"; s_pApp->Initialize(NULL);
+    s_pApp->Initialize(NULL);
 
-    Tracen("worldonline Mobile: Starting CPythonLauncher...");
     if (s_pyLauncher.Create()) {
         PyRun_SimpleString(
             "import gc, sys, time as _time\n"
@@ -1672,7 +1695,7 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
             "sys.modules['logging'] = _log_mod\n"
         );
 #ifdef ENABLE_OPENGL
-        initmobileInput(); g_szCrashStage = "Init: RunMainScript (system.py)";
+        initmobileInput();
 #endif
         Tracen("worldonline Mobile: Running RunMainScript (system.py)...");
         if (!RunMainScript(s_pyLauncher, "")) {
@@ -1682,11 +1705,13 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
             fflush(stderr);
             LOGE("RunMainScript failed! Check syserr.txt");
             TraceError("RunMainScript failed!");
+            pthread_mutex_unlock(&s_engineInitMutex);
             return;
         }
     } else {
         LOGE("s_pyLauncher.Create() failed!");
         TraceError("s_pyLauncher.Create() failed!");
+        pthread_mutex_unlock(&s_engineInitMutex);
         return;
     }
 	PyRun_SimpleString(
@@ -1849,9 +1874,10 @@ JNIEXPORT void JNICALL Java_com_worldonline_client_NativeLib_init(JNIEnv* env, j
         "__builtin__.__import__ = _fast_import\n"
     );
 
-    g_szCrashStage = "Engine Ready / Render Loop"; s_bEngineReady = true;
+    s_bEngineReady = true;
     Tracen("worldonline Mobile: Engine Initialized Successfully!");
     LOGI("worldonline Mobile Engine Initialized Successfully");
+    pthread_mutex_unlock(&s_engineInitMutex);
 }
 
 struct AndroidTouchEvt {
@@ -1981,64 +2007,52 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
                 float radRatio = fminf(1.0f, d / (innerEdge > 1.0f ? innerEdge : 1.0f));
                 float sphereZ = sqrtf(fmaxf(0.0f, 1.0f - radRatio * radRatio));
 
-                if (iconType == MICON_JOY_KNOB) {
-                    // Frosted Pearl-White 3D Translucent Thumb Stick
-                    float pearlSpec = powf(fmaxf(0.0f, -0.42f * nx - 0.58f * ny + sphereZ * 0.68f), 2.4f);
-                    float topDome = SmoothStepF(-0.15f, -0.82f, ny) * (1.0f - SmoothStepF(0.0f, 0.85f, fabsf(nx)));
-                    float edgeRim = SmoothStepF(0.60f, 0.98f, radRatio);
-                    r = 214.0f + pearlSpec * 41.0f + topDome * 22.0f;
-                    g = 220.0f + pearlSpec * 35.0f + topDome * 20.0f;
-                    b = 230.0f + pearlSpec * 25.0f + topDome * 18.0f;
-                    float knobAlpha = (0.60f + 0.40f * pearlSpec + 0.35f * edgeRim) * (isPressed ? 252.0f : 230.0f);
-                    a = fmaxf(a, bodyMask * fminf(254.0f, knobAlpha));
-                } else if (iconType == MICON_JOY_BG) {
-                    // Smoked Dark-Slate Translucent Joystick Well
-                    float wellVig = 0.45f + 0.55f * (radRatio * radRatio);
-                    float topCrescent = SmoothStepF(-0.20f, -0.88f, ny) * SmoothStepF(0.95f, 0.45f, radRatio) * 0.35f;
-                    r = 16.0f * wellVig + topCrescent * 85.0f;
-                    g = 17.0f * wellVig + topCrescent * 88.0f;
-                    b = 20.0f * wellVig + topCrescent * 95.0f;
+                if (iconType == MICON_JOY_BG) {
+                    // Classic Dark Translucent Joystick Base from image1.jpeg
+                    float wellVig = 0.50f + 0.50f * (radRatio * radRatio);
+                    float topCrescent = SmoothStepF(-0.18f, -0.85f, ny) * SmoothStepF(0.95f, 0.35f, radRatio) * 0.25f;
+                    r = 16.0f * wellVig + topCrescent * 75.0f;
+                    g = 16.0f * wellVig + topCrescent * 72.0f;
+                    b = 18.0f * wellVig + topCrescent * 68.0f;
                     a = fmaxf(a, bodyMask * glassAlpha);
                 } else {
-                    // 3D Chiseled Dark Stone-Slate Sphere Interior + Top Glass Crescent Shade (No Red/Crimson!)
-                    float botStone = SmoothStepF(-0.15f, 0.88f, ny) * (0.30f + 0.70f * powf(radRatio, 1.25f));
-                    float boost = isPressed ? 1.45f : 1.0f;
-                    float stoneTex = grain * 10.0f;
+                    // Classic Dark Smoky Slot & Joystick Knob Interior from image1.jpeg + 3D Top Glass Crescent Shade
+                    float botGlow = SmoothStepF(-0.10f, 0.88f, ny) * (0.28f + 0.72f * powf(radRatio, 1.30f));
+                    float boost = isPressed ? 1.40f : 1.0f;
 
-                    r = (16.0f + botStone * 28.0f) * boost + stoneTex;
-                    g = (17.0f + botStone * 30.0f) * boost + stoneTex;
-                    b = (20.0f + botStone * 35.0f) * boost + stoneTex;
+                    r = (15.0f + botGlow * 24.0f) * boost;
+                    g = (15.0f + botGlow * 22.0f) * boost;
+                    b = (17.0f + botGlow * 20.0f) * boost;
 
                     float crescentEnv = hypotf(nx * 1.12f, (ny + 0.46f) * 1.75f);
                     float topCrescent = (1.0f - SmoothStepF(0.18f, 0.78f, crescentEnv)) * SmoothStepF(-0.05f, -0.78f, ny);
                     float hotSpot = powf(fmaxf(0.0f, -0.45f * nx - 0.65f * ny + sphereZ * 0.35f), 4.5f);
-                    float glassShade = fminf(1.0f, topCrescent * 0.56f + hotSpot * 0.48f);
+                    float glassShade = fminf(1.0f, topCrescent * 0.52f + hotSpot * 0.44f);
 
-                    r = r * (1.0f - glassShade * 0.50f) + 236.0f * (glassShade * 0.50f);
-                    g = g * (1.0f - glassShade * 0.50f) + 240.0f * (glassShade * 0.50f);
-                    b = b * (1.0f - glassShade * 0.50f) + 248.0f * (glassShade * 0.50f);
+                    r = r * (1.0f - glassShade * 0.48f) + 238.0f * (glassShade * 0.48f);
+                    g = g * (1.0f - glassShade * 0.48f) + 234.0f * (glassShade * 0.48f);
+                    b = b * (1.0f - glassShade * 0.48f) + 225.0f * (glassShade * 0.48f);
 
                     float innerVig = SmoothStepF(0.76f, 0.99f, radRatio) * (1.0f - 0.5f * topCrescent);
-                    r *= (1.0f - innerVig * 0.52f);
-                    g *= (1.0f - innerVig * 0.52f);
-                    b *= (1.0f - innerVig * 0.52f);
+                    r *= (1.0f - innerVig * 0.50f);
+                    g *= (1.0f - innerVig * 0.50f);
+                    b *= (1.0f - innerVig * 0.50f);
 
-                    a = fmaxf(a, bodyMask * fminf(250.0f, glassAlpha + glassShade * 24.0f + (isPressed ? 18.0f : 0.0f)));
+                    a = fmaxf(a, bodyMask * fminf(250.0f, glassAlpha + glassShade * 22.0f + (isPressed ? 18.0f : 0.0f)));
                 }
             }
 
-            // 2. Thin Chiseled Stone-Slate Bezel Rim (with procedural stone grain texture)
-            if (iconType != MICON_JOY_KNOB) {
+            // 2. Classic Warm Muted Bronze-Taupe Bezel Rim (matching image1.jpeg, including Joystick Knob)
+            {
                 float rimCenter = outerR - thinRimW * 0.5f;
                 float rimDist = fabsf(d - rimCenter);
                 if (rimDist < thinRimW * 0.90f) {
                     float rimMask = 1.0f - SmoothStepF(thinRimW * 0.25f, thinRimW * 0.90f, rimDist);
-                    float lGrad = 0.55f + 0.45f * (-0.55f * nx - 0.83f * ny);
-                    float stoneTex = grain * 26.0f;
-                    float specHighlight = powf(fmaxf(0.0f, -0.58f * nx - 0.81f * ny), 4.0f) * 45.0f;
-                    float cr = fminf(255.0f, fmaxf(20.0f, (isPressed ? ar : rr) * lGrad + stoneTex + specHighlight));
-                    float cg = fminf(255.0f, fmaxf(20.0f, (isPressed ? ag : rg) * lGrad + stoneTex + specHighlight));
-                    float cb = fminf(255.0f, fmaxf(22.0f, (isPressed ? ab : rb) * lGrad + stoneTex + specHighlight));
+                    float lGrad = 0.58f + 0.42f * (-0.55f * nx - 0.83f * ny);
+                    float specHighlight = powf(fmaxf(0.0f, -0.58f * nx - 0.81f * ny), 4.0f) * 36.0f;
+                    float cr = fminf(255.0f, fmaxf(20.0f, (isPressed ? ar : rr) * lGrad + specHighlight));
+                    float cg = fminf(255.0f, fmaxf(20.0f, (isPressed ? ag : rg) * lGrad + specHighlight * 0.92f));
+                    float cb = fminf(255.0f, fmaxf(20.0f, (isPressed ? ab : rb) * lGrad + specHighlight * 0.78f));
                     r = r * (1.0f - rimMask) + cr * rimMask;
                     g = g * (1.0f - rimMask) + cg * rimMask;
                     b = b * (1.0f - rimMask) + cb * rimMask;
@@ -2047,28 +2061,48 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
 
                 float grooveDist = fabsf(d - (innerEdge - 1.0f));
                 if (grooveDist < 1.1f) {
-                    float gm = (1.0f - grooveDist / 1.1f) * 0.72f;
+                    float gm = (1.0f - grooveDist / 1.1f) * 0.70f;
                     r *= (1.0f - gm); g *= (1.0f - gm); b *= (1.0f - gm);
                 }
             }
 
-            // 3. Crisp Sculpted Vector Icons (Polished Steel-Silver & Warm Ivory)
+            // 3. Crisp Vector Icons (Warm Champagne-Ivory matching image1.jpeg)
             auto EvalIconDetail = [&](float ix, float iy, float& outTone) -> float {
                 outTone = 1.0f;
                 float id = hypotf(ix, iy);
                 float m = 0.0f;
                 if (iconType == MICON_JOY_BG) {
+                    // Inner concentric ring + 4 Cardinal Directional Chevrons/Triangles from image1.jpeg
                     float recDist = fabsf(id - outerR * 0.44f);
-                    if (recDist < 1.2f) m = (1.0f - recDist / 1.2f) * 0.20f;
+                    if (recDist < 1.3f) m = (1.0f - recDist / 1.3f) * 0.32f;
+
+                    float ax = fabsf(ix), ay = fabsf(iy);
+                    float chevStart = outerR * 0.68f;
+                    float chevTip   = outerR * 0.81f;
+                    // Top & Bottom triangles
+                    if (ay >= chevStart && ay <= chevTip) {
+                        float t = ( chevTip - ay ) / (chevTip - chevStart);
+                        float halfW = t * (outerR * 0.10f);
+                        if (ax <= halfW + 0.8f)
+                            m = fmaxf(m, (1.0f - SmoothStepF(fmaxf(0.0f, halfW - 0.6f), halfW + 0.8f, ax)) * 0.62f);
+                    }
+                    // Left & Right triangles
+                    if (ax >= chevStart && ax <= chevTip) {
+                        float t = ( chevTip - ax ) / (chevTip - chevStart);
+                        float halfW = t * (outerR * 0.10f);
+                        if (ay <= halfW + 0.8f)
+                            m = fmaxf(m, (1.0f - SmoothStepF(fmaxf(0.0f, halfW - 0.6f), halfW + 0.8f, ay)) * 0.62f);
+                    }
                 } else if (iconType == MICON_JOY_KNOB) {
-                    float cRing = fabsf(id - outerR * 0.56f);
-                    if (cRing < 1.5f) m = (1.0f - cRing / 1.5f) * 0.38f;
+                    // Inner concentric ring + center dot on the dark translucent knob (matching image1.jpeg)
+                    float cRing = fabsf(id - outerR * 0.54f);
+                    if (cRing < 1.5f) m = (1.0f - cRing / 1.5f) * 0.52f;
+                    if (id < 3.2f) m = fmaxf(m, (1.0f - SmoothStepF(1.2f, 3.2f, id)) * 0.35f);
                 } else if (iconType == MICON_ATK_SWORDS) {
                     float s = outerR / 56.0f;
                     float ax = fabsf(ix), ay = fabsf(iy);
                     float rimInner = (outerR - thinRimW) / s;
 
-                    // 1. 4 Sculpted Cardinal Compass Spikes on the Inner Bezel + Concentric Combat Ring
                     if (ay >= (rimInner - 6.8f) * s && ay <= (rimInner + 0.4f) * s) {
                         float t = ((rimInner + 0.4f) * s - ay) / (7.2f * s);
                         float halfW = (1.0f - t) * 3.8f * s;
@@ -2091,7 +2125,6 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
                         m = fmaxf(m, (1.0f - runeRing / (1.3f * s)) * 0.40f);
                     }
 
-                    // Two Clean Crossed Tapered Broadswords
                     auto EvalSword = [&](float sx, float sy, float& sTone) -> float {
                         float sm = 0.0f;
                         sTone = 1.0f;
@@ -2142,7 +2175,6 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
                         if (sw2 * underShadow >= m) { m = sw2 * underShadow; outTone = t2 * underShadow; }
                     }
                 } else if (iconType == MICON_MOUNT) {
-                    // Clean Sculpted Horse Head & Neck Silhouette (facing right)
                     float ux = ix / (outerR / 28.0f);
                     float uy = iy / (outerR / 28.0f);
                     float hDist = 100.0f;
@@ -2162,7 +2194,6 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
                             m *= 0.15f;
                     }
                 } else if (iconType == MICON_LOOT) {
-                    // Clean Open Hand Silhouette (palm + thumb + 4 spread fingers)
                     float ux = ix / (outerR / 28.0f);
                     float uy = iy / (outerR / 28.0f);
                     float palmD = hypotf(ux * 0.92f, (uy - 4.2f) * 1.05f) - 6.2f;
@@ -2179,7 +2210,6 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
                         if (crease < 0.7f) outTone = 0.55f;
                     }
                 } else if (iconType == MICON_TARGET) {
-                    // Clean Crosshair Target Reticle
                     float s = outerR / 28.0f;
                     float rRing = fabsf(id - 11.0f * s);
                     if (rRing < 1.8f * s) m = 1.0f - SmoothStepF(0.6f * s, 1.8f * s, rRing);
@@ -2268,10 +2298,10 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
                 float iconMask = EvalIconDetail(px, py, iconTone);
                 if (iconMask > 0.0f) {
                     float vGrad = 0.5f - 0.5f * ny;
-                    // Crisp Silver-Ivory / Polished Steel Icon Palette (zero yellow-gold overload)
-                    float icR = fminf(255.0f, (isPressed ? 255.0f : (198.0f + vGrad * 52.0f)) * iconTone);
-                    float icG = fminf(255.0f, (isPressed ? 250.0f : (196.0f + vGrad * 52.0f)) * iconTone);
-                    float icB = fminf(255.0f, (isPressed ? 240.0f : (192.0f + vGrad * 52.0f)) * iconTone);
+                    // Classic Warm Champagne-Taupe Icon Palette from image1.jpeg
+                    float icR = fminf(255.0f, (isPressed ? 255.0f : (192.0f + vGrad * 46.0f)) * iconTone);
+                    float icG = fminf(255.0f, (isPressed ? 238.0f : (178.0f + vGrad * 44.0f)) * iconTone);
+                    float icB = fminf(255.0f, (isPressed ? 198.0f : (152.0f + vGrad * 38.0f)) * iconTone);
                     r = r * (1.0f - iconMask) + icR * iconMask;
                     g = g * (1.0f - iconMask) + icG * iconMask;
                     b = b * (1.0f - iconMask) + icB * iconMask;
@@ -2292,6 +2322,7 @@ static void WriteMobileRingTGA(const char* path, int size, float outerR, float r
 }
 
 static void WriteSquaredMiniMapTextures() {
+    const bool isClassicMask = (access("mark/minimap_classic.flag", F_OK) == 0);
     if (access("mark/m_minimap_mask.tga", F_OK) != 0) {
         FILE* fp = fopen("mark/m_minimap_mask.tga", "wb");
         if (fp) {
@@ -2301,10 +2332,19 @@ static void WriteSquaredMiniMapTextures() {
             std::vector<uint8_t> pix(128 * 128 * 4, 255);
             for (int y = 0; y < 128; ++y) {
                 for (int x = 0; x < 128; ++x) {
-                    int edgeDist = std::min(std::min(x, 127 - x), std::min(y, 127 - y));
-                    uint8_t a = (edgeDist <= 1) ? 0 : (edgeDist == 2 ? 180 : 255);
+                    uint8_t a = 255;
+                    if (isClassicMask) {
+                        float dx = (x + 0.5f) - 64.0f;
+                        float dy = (y + 0.5f) - 64.0f;
+                        float d = hypotf(dx, dy);
+                        float mask = 1.0f - SmoothStepF(57.0f, 60.0f, d);
+                        a = ClampU8(mask * 255.0f);
+                    } else {
+                        int edgeDist = std::min(std::min(x, 127 - x), std::min(y, 127 - y));
+                        a = (edgeDist <= 1) ? 0 : (edgeDist == 2 ? 180 : 255);
+                    }
                     size_t i = ((size_t)y * 128 + (size_t)x) * 4;
-                    pix[i + 0] = 255; pix[i + 1] = 255; pix[i + 2] = 255; pix[i + 3] = a;
+                    pix[i + 0] = a; pix[i + 1] = a; pix[i + 2] = a; pix[i + 3] = a;
                 }
             }
             fwrite(pix.data(), 1, pix.size(), fp);
@@ -2312,7 +2352,6 @@ static void WriteSquaredMiniMapTextures() {
         }
     }
 
-    // Thin Chiseled Dark Stone-Slate Squared MiniMap Frame (136x136, NO gold!)
     if (access("mark/m_minimap_frame.tga", F_OK) != 0) {
         const int sz = 136;
         FILE* fp = fopen("mark/m_minimap_frame.tga", "wb");
@@ -2328,19 +2367,14 @@ static void WriteSquaredMiniMapTextures() {
                     int d = std::min(dx, dy);
                     size_t i = ((size_t)y * sz + (size_t)x) * 4;
                     float grad = 0.72f + 0.28f * (1.0f - (float)(x + y) / (2.0f * sz));
-                    float stoneNoise = StoneGrainNoise(x, y) * 24.0f;
 
-                    // Thin 4px chiseled dark stone border around the 128x128 radar
                     if (d >= 1 && d <= 4) {
                         if (d == 1 || d == 4) {
-                            // Outer & inner dark stone mortar line
-                            pix[i+0] = 20; pix[i+1] = 21; pix[i+2] = 22; pix[i+3] = 245;
+                            pix[i+0] = 18; pix[i+1] = 20; pix[i+2] = 22; pix[i+3] = 245;
                         } else {
-                            // Thin 2px chiseled stone ridge with procedural stone grain
-                            float sVal = fminf(255.0f, fmaxf(30.0f, 118.0f * grad + stoneNoise));
-                            pix[i+0] = ClampU8(sVal * 0.96f);
-                            pix[i+1] = ClampU8(sVal * 0.98f);
-                            pix[i+2] = ClampU8(sVal);
+                            pix[i+0] = ClampU8(118.0f * grad);
+                            pix[i+1] = ClampU8(142.0f * grad);
+                            pix[i+2] = ClampU8(162.0f * grad);
                             pix[i+3] = 252;
                         }
                     }
@@ -2366,6 +2400,8 @@ enum ETopBarIcon {
     TICON_SPEC_BOXES = 11
 };
 
+// Reverted to the clean white/silver vector top-bar design from image1.jpeg
+// (keeping TICON_SHOP market stall and TICON_UTIL 4-tile star design!)
 static void WriteTopBarButtonTGA(const char* path, int iconType, bool isPressed) {
     if (access(path, F_OK) == 0)
         return;
@@ -2380,206 +2416,117 @@ static void WriteTopBarButtonTGA(const char* path, int iconType, bool isPressed)
 
     std::vector<uint8_t> pix((size_t)size * (size_t)size * 4, 0);
     float half = size * 0.5f;
-    // Larger 1.55x projection scale (size / 26.0f instead of 40.0f) so top-right icons match Royale2 size & detail!
-    float s = size / 26.0f;
+    float s = size / 34.0f; // Classic clean proportion from image1.jpeg
     size_t idx = 0;
 
-    auto EvalTopGlyph = [&](float gx, float gy, float& outTone) -> float {
-        outTone = 1.0f;
+    auto EvalTopGlyph = [&](float gx, float gy) -> float {
         float ax = fabsf(gx), ay = fabsf(gy);
         float gd = hypotf(gx, gy);
         float m = 0.0f;
 
         if (iconType == TICON_COLLAPSE) {
-            // Royale2 Winged Collapse Arrowhead ('>') with inner speed chevron
-            float d1 = DistToSegF(gx, gy, -5.2f, -6.8f,  5.8f, 0.0f);
-            float d2 = DistToSegF(gx, gy,  5.8f,  0.0f, -5.2f, 6.8f);
-            float d3 = DistToSegF(gx, gy, -6.8f, -3.2f, -0.5f, 0.0f);
-            float d4 = DistToSegF(gx, gy, -0.5f,  0.0f, -6.8f, 3.2f);
-            float mainV = fminf(d1, d2);
-            float subV  = fminf(d3, d4);
-            if (mainV < 2.1f) {
-                m = 1.0f - SmoothStepF(0.9f, 2.1f, mainV);
-                outTone = (gy < 0.0f) ? 1.15f : 0.88f;
-            }
-            if (subV < 1.5f) {
-                float sm = 1.0f - SmoothStepF(0.6f, 1.5f, subV);
-                if (sm > m) { m = sm; outTone = 0.78f; }
-            }
+            float d1 = DistToSegF(gx, gy, -3.5f, -5.8f,  4.2f, 0.0f);
+            float d2 = DistToSegF(gx, gy,  4.2f,  0.0f, -3.5f, 5.8f);
+            float md = fminf(d1, d2);
+            if (md < 1.85f) m = 1.0f - SmoothStepF(0.8f, 1.85f, md);
         } else if (iconType == TICON_EXPAND) {
-            // Royale2 Winged Expand Arrowhead ('<')
-            float d1 = DistToSegF(gx, gy,  5.2f, -6.8f, -5.8f, 0.0f);
-            float d2 = DistToSegF(gx, gy, -5.8f,  0.0f,  5.2f, 6.8f);
-            float d3 = DistToSegF(gx, gy,  6.8f, -3.2f,  0.5f, 0.0f);
-            float d4 = DistToSegF(gx, gy,  0.5f,  0.0f,  6.8f, 3.2f);
-            float mainV = fminf(d1, d2);
-            float subV  = fminf(d3, d4);
-            if (mainV < 2.1f) {
-                m = 1.0f - SmoothStepF(0.9f, 2.1f, mainV);
-                outTone = (gy < 0.0f) ? 1.15f : 0.88f;
-            }
-            if (subV < 1.5f) {
-                float sm = 1.0f - SmoothStepF(0.6f, 1.5f, subV);
-                if (sm > m) { m = sm; outTone = 0.78f; }
-            }
+            float d1 = DistToSegF(gx, gy,  3.5f, -5.8f, -4.2f, 0.0f);
+            float d2 = DistToSegF(gx, gy, -4.2f,  0.0f,  3.5f, 5.8f);
+            float md = fminf(d1, d2);
+            if (md < 1.85f) m = 1.0f - SmoothStepF(0.8f, 1.85f, md);
         } else if (iconType == TICON_SYS) {
-            // Sculpted 3D 8-Tooth Mechanical Settings Gear / Cogwheel
-            float ang = atan2f(gy, gx);
-            float teeth = 0.5f + 0.5f * cosf(ang * 8.0f);
-            float outerGearR = 6.5f + 1.85f * SmoothStepF(0.28f, 0.72f, teeth);
-            float holeR = 2.5f;
-            if (gd >= holeR - 0.6f && gd <= outerGearR + 0.6f) {
-                float inM = SmoothStepF(holeR - 0.6f, holeR + 0.45f, gd);
-                float outM = 1.0f - SmoothStepF(outerGearR - 0.55f, outerGearR + 0.6f, gd);
-                m = inM * outM;
-                if (fabsf(gd - 4.5f) < 0.75f)
-                    outTone = 0.52f;
-                else if (gd > 6.2f)
-                    outTone = 1.22f;
-                else
-                    outTone = (gy < 0.0f) ? 1.14f : 0.90f;
+            // Classic 3 Horizontal Bars from image1.jpeg
+            for (int bIdx = -1; bIdx <= 1; ++bIdx) {
+                float by = bIdx * 5.2f;
+                float barD = DistToSegF(gx, gy, -6.8f, by, 6.8f, by);
+                if (barD < 1.70f)
+                    m = fmaxf(m, 1.0f - SmoothStepF(0.85f, 1.70f, barD));
             }
         } else if (iconType == TICON_CHAR) {
-            // Detailed Knight / Spartan Helmet with Crest, Brow Ridge, Nasal Guard & Cheek Plates
-            float dome = hypotf(gx * 0.95f, gy + 0.8f);
-            if (dome < 8.4f && gy < 6.8f) {
-                // Carve T-shaped visor opening (eye slits + lower mouth gap)
-                bool inEyeSlit = (gy >= -2.2f && gy <= -0.2f && ax >= 1.3f && ax <= 5.8f);
-                bool inMouthGap = (gy > -0.2f && ax <= 2.3f + (gy + 0.2f) * 0.28f);
-                if (!inEyeSlit && !inMouthGap) {
-                    m = 1.0f - SmoothStepF(7.4f, 8.4f, dome);
-                    // Brow ridge & central crest highlight
-                    if (fabsf(gy + 2.6f) < 0.9f || (ax < 1.1f && gy < -2.2f))
-                        outTone = 1.22f;
-                    else
-                        outTone = 1.05f - 0.08f * ax;
-                }
+            // Classic Round Helmet Medallion with T-Visor Cutout from image1.jpeg
+            if (gd <= 7.6f) {
+                bool inEyeSlit = (gy >= -2.2f && gy <= -0.3f && ax <= 4.8f);
+                bool inNasalCut = (gy >= -0.3f && gy <= 6.2f && ax <= 1.55f);
+                if (!inEyeSlit && !inNasalCut)
+                    m = 1.0f - SmoothStepF(6.7f, 7.6f, gd);
             }
         } else if (iconType == TICON_INVEN) {
-            // Detailed RPG Treasure Chest with Domed Lid, Iron Straps & Lock Plate
-            bool inBox = (ax <= 8.2f && gy >= -5.8f && gy <= 7.2f);
-            if (inBox) {
-                float edgeBox = fmaxf(ax - 8.2f, fmaxf(-5.8f - gy, gy - 7.2f));
-                m = 1.0f - SmoothStepF(-0.8f, 0.2f, edgeBox);
-                // Horizontal lid seam & center lock clasp
-                if (fabsf(gy + 0.8f) < 0.85f && ax > 2.2f) {
-                    m *= 0.15f; // Dark seam between lid and base
-                } else if (ax <= 2.1f && fabsf(gy + 0.8f) <= 2.4f) {
-                    outTone = (ax < 0.8f && fabsf(gy + 0.8f) < 1.0f) ? 0.25f : 1.25f; // Lock plate & keyhole
-                } else if (fabsf(ax - 5.4f) < 1.0f) {
-                    outTone = 1.18f; // Vertical iron reinforcement bands
-                } else {
-                    outTone = (gy < -0.8f) ? 1.08f : 0.88f;
-                }
+            // Classic Chest Box with Horizontal Lid Line & Center Clasp from image1.jpeg
+            if (ax <= 7.2f && gy >= -5.2f && gy <= 6.2f) {
+                float edgeBox = fmaxf(ax - 7.2f, fmaxf(-5.2f - gy, gy - 6.2f));
+                m = 1.0f - SmoothStepF(-0.7f, 0.2f, edgeBox);
+                if (fabsf(gy + 0.6f) < 0.85f && ax > 1.8f)
+                    m = 0.0f;
+                else if (ax < 0.9f && fabsf(gy + 0.6f) < 0.9f)
+                    m = 0.0f;
             }
         } else if (iconType == TICON_SPEC_BOXES) {
-            // Twin Detailed Storage Coffers (Front-Right & Back-Left)
-            float b1x = gx + 2.8f, b1y = gy + 2.2f;
-            float b2x = gx - 2.6f, b2y = gy - 2.2f;
-            bool inFront = (fabsf(b2x) <= 5.8f && fabsf(b2y) <= 5.0f);
-            bool inBack  = (fabsf(b1x) <= 5.6f && fabsf(b1y) <= 4.8f) && !(fabsf(b2x) <= 6.7f && fabsf(b2y) <= 5.9f);
+            // Classic Twin Offset Storage Boxes from image1.jpeg
+            float b1x = gx + 2.6f, b1y = gy + 2.0f;
+            float b2x = gx - 2.4f, b2y = gy - 2.0f;
+            bool inFront = (fabsf(b2x) <= 5.2f && fabsf(b2y) <= 4.4f);
+            bool inBack  = (fabsf(b1x) <= 5.0f && fabsf(b1y) <= 4.2f) && !(fabsf(b2x) <= 6.2f && fabsf(b2y) <= 5.4f);
             if (inFront) {
                 m = 0.98f;
-                if (fabsf(b2y + 0.8f) < 0.7f && fabsf(b2x) > 1.5f) m = 0.15f;
-                else if (fabsf(b2x) <= 1.5f && fabsf(b2y + 0.8f) <= 1.8f) outTone = 1.25f;
+                if (fabsf(b2y + 0.6f) < 0.75f && fabsf(b2x) > 1.3f) m = 0.0f;
             } else if (inBack) {
                 m = 0.92f;
-                outTone = 0.78f;
-                if (fabsf(b1y + 0.8f) < 0.7f) m = 0.15f;
+                if (fabsf(b1y + 0.6f) < 0.75f) m = 0.0f;
             }
         } else if (iconType == TICON_COMM) {
-            // Detailed Two-Person Community Icon (Foreground & Background Busts)
-            float fgHead = hypotf(gx + 2.2f, gy + 3.8f) - 3.0f;
-            float fgBody = (gy >= 0.8f && gy <= 7.8f) ? (hypotf((gx + 2.2f) * 0.72f, gy - 5.4f) - 4.8f) : 10.0f;
+            // Classic Two-Person Community Silhouette from image1.jpeg
+            float fgHead = hypotf(gx + 2.0f, gy + 3.6f) - 2.8f;
+            float fgBody = (gy >= 0.8f && gy <= 7.2f) ? (hypotf((gx + 2.0f) * 0.72f, gy - 5.2f) - 4.5f) : 10.0f;
             float fgD = fminf(fgHead, fgBody);
 
-            float bgHead = hypotf(gx - 3.8f, gy + 4.8f) - 2.5f;
-            float bgBody = (gy >= -0.2f && gy <= 6.4f) ? (hypotf((gx - 3.8f) * 0.78f, gy - 4.2f) - 4.0f) : 10.0f;
+            float bgHead = hypotf(gx - 3.6f, gy + 4.4f) - 2.3f;
+            float bgBody = (gy >= 0.0f && gy <= 6.0f) ? (hypotf((gx - 3.6f) * 0.78f, gy - 4.0f) - 3.6f) : 10.0f;
             float bgD = fminf(bgHead, bgBody);
 
-            if (fgD < 0.6f) {
-                m = 1.0f - SmoothStepF(-0.5f, 0.6f, fgD);
-                outTone = 1.12f;
-            } else if (bgD < 0.6f && fgD > 1.4f) {
-                m = 1.0f - SmoothStepF(-0.5f, 0.6f, bgD);
-                outTone = 0.78f;
+            if (fgD < 0.5f) m = 1.0f - SmoothStepF(-0.5f, 0.5f, fgD);
+            else if (bgD < 0.5f && fgD > 1.3f) m = 1.0f - SmoothStepF(-0.5f, 0.5f, bgD);
+        } else if (iconType == TICON_DS) {
+            // Classic Double-Diamond Alchemy Icon from image1.jpeg
+            float dia = ax * 1.12f + ay * 0.86f;
+            if (dia <= 8.2f) {
+                if (dia >= 5.6f || dia <= 3.2f)
+                    m = 1.0f - SmoothStepF(7.4f, 8.2f, dia);
             }
         } else if (iconType == TICON_SHOP) {
-            // Sculpted Merchant Market Stall / Shop Booth (Striped Awning Roof + Pillars + Counter + Coin Emblem)
-            if (gy >= -7.4f && gy <= -1.2f) {
-                float t = (gy + 7.4f) / 6.2f; // 0 at roof top, 1 at awning valance
-                float halfW = 5.2f + t * 3.6f;
+            // Kept New Open IkarusShop Market Stall Design
+            if (gy >= -7.2f && gy <= -1.2f) {
+                float t = (gy + 7.2f) / 6.0f;
+                float halfW = 5.0f + t * 3.4f;
                 if (ax <= halfW) {
-                    // Scalloped bottom valance edge
-                    float scallop = (gy > -2.4f) ? (0.45f * cosf(gx * 1.45f)) : 0.0f;
-                    if (gy <= -1.6f + scallop) {
+                    float scallop = (gy > -2.3f) ? (0.42f * cosf(gx * 1.45f)) : 0.0f;
+                    if (gy <= -1.5f + scallop) {
                         m = 0.98f;
-                        // Carve striped market awning segments
-                        if (fabsf(gx) < 0.45f || fabsf(ax - 2.9f) < 0.45f || fabsf(ax - 5.8f) < 0.45f)
-                            outTone = 0.35f;
-                        else
-                            outTone = (gy < -2.6f) ? 1.18f : 0.95f;
+                        if (fabsf(gx) < 0.42f || fabsf(ax - 2.8f) < 0.42f || fabsf(ax - 5.6f) < 0.42f)
+                            m = 0.15f;
                     }
                 }
             }
-            // Side Support Posts (y = -1.4 to +3.8)
-            if (gy >= -1.4f && gy <= 3.8f && ax >= 5.5f && ax <= 7.1f) {
-                m = 0.96f;
-                outTone = 0.88f;
-            }
-            // Central Market Coin / Balance Emblem inside booth window
-            float coinD = hypotf(gx, gy - 1.2f);
-            if (coinD <= 2.35f) {
-                m = 1.0f - SmoothStepF(1.7f, 2.35f, coinD);
-                outTone = (coinD < 1.1f) ? 0.55f : 1.25f;
-            }
-            // Market Counter Base & Overhanging Counter Lip (y = +3.6 to +7.4)
-            if (gy >= 3.6f && gy <= 5.0f && ax <= 8.6f) {
-                m = 0.98f;
-                outTone = 1.22f;
-            } else if (gy > 5.0f && gy <= 7.4f && ax <= 7.8f) {
-                m = 0.98f;
-                outTone = (fabsf(gy - 6.2f) < 0.45f && ax < 5.5f) ? 0.48f : 0.96f;
-            }
-        } else if (iconType == TICON_AUTOHUNT) {
-            // Crossed Sword & Pickaxe / Combat Tools
-            float d1 = DistToSegF(gx, gy, -7.6f, 7.6f, 7.6f, -7.6f);
-            float d2 = DistToSegF(gx, gy, 7.6f, 7.6f, -7.6f, -7.6f);
-            float pickHead = DistToSegF(gx, gy, -8.2f, -2.2f, -2.2f, -8.2f);
-            float g1 = DistToSegF(gx, gy, -7.2f, 2.0f, -2.0f, 7.2f);
-            float g2 = DistToSegF(gx, gy,  2.0f, 7.2f,  7.2f, 2.0f);
-            float md = fminf(fminf(d1, d2), fminf(pickHead, fminf(g1, g2)));
-            if (md < 1.85f) {
-                m = 1.0f - SmoothStepF(0.8f, 1.85f, md);
-                outTone = (d1 < d2) ? 1.15f : 0.92f;
-            }
-        } else if (iconType == TICON_DS) {
-            // Faceted 3D Dragon Soul Diamond Crystal
-            float dia = ax * 1.10f + ay * 0.84f;
-            if (dia <= 8.8f) {
-                m = 1.0f - SmoothStepF(7.8f, 8.8f, dia);
-                if (dia > 5.4f && dia < 6.5f)
-                    outTone = 0.45f;
-                else if (dia <= 5.4f)
-                    outTone = (gx + gy < 0.0f) ? 1.25f : 0.85f;
-                else
-                    outTone = (gy < 0.0f) ? 1.15f : 0.82f;
+            if (gy >= -1.3f && gy <= 3.6f && ax >= 5.3f && ax <= 6.9f)
+                m = fmaxf(m, 0.96f);
+            float coinD = hypotf(gx, gy - 1.1f);
+            if (coinD <= 2.2f && coinD >= 0.85f)
+                m = fmaxf(m, 1.0f - SmoothStepF(1.6f, 2.2f, coinD));
+            if (gy >= 3.5f && gy <= 4.9f && ax <= 8.2f)
+                m = fmaxf(m, 0.98f);
+            else if (gy > 4.9f && gy <= 7.2f && ax <= 7.4f) {
+                if (!(fabsf(gy - 6.0f) < 0.45f && ax < 5.2f))
+                    m = fmaxf(m, 0.98f);
             }
         } else if (iconType == TICON_UTIL) {
-            // 4-Tile Bevelled Systems Hub Grid + Central 4-Point Diamond Star
-            float tx = fabsf(ax - 4.4f);
-            float ty = fabsf(ay - 4.4f);
+            // Kept New Utility 4-Tile Grid + Center Star Design (instead of old two swords)
+            float tx = fabsf(ax - 4.3f);
+            float ty = fabsf(ay - 4.3f);
             float tileBox = fmaxf(tx, ty);
             float centerStar = ax * 0.9f + ay * 0.9f;
-            if (centerStar <= 2.7f) {
-                m = 1.0f - SmoothStepF(1.9f, 2.7f, centerStar);
-                outTone = 1.28f;
-            } else if (ax >= 1.4f && ay >= 1.4f && tileBox <= 2.7f) {
-                m = 1.0f - SmoothStepF(2.1f, 2.7f, tileBox);
-                if (tileBox < 1.15f)
-                    outTone = 0.42f; // Recessed inner socket
-                else
-                    outTone = (tx + ty < 3.2f) ? 1.18f : 0.94f;
+            if (centerStar <= 2.5f) {
+                m = 1.0f - SmoothStepF(1.8f, 2.5f, centerStar);
+            } else if (ax >= 1.4f && ay >= 1.4f && tileBox <= 2.6f && tileBox >= 1.05f) {
+                m = 1.0f - SmoothStepF(2.0f, 2.6f, tileBox);
             }
         }
         return m;
@@ -2589,35 +2536,21 @@ static void WriteTopBarButtonTGA(const char* path, int iconType, bool isPressed)
         float py = ((y + 0.5f) - half) / s;
         for (int x = 0; x < size; ++x) {
             float px = ((x + 0.5f) - half) / s;
-            float d = hypotf(px, py);
 
-            float r = 8.0f, g = 9.0f, b = 11.0f, a = 0.0f;
-            // Subtle dark halo behind the white icon so it pops against bright skyboxes (matching 199Untitled_4.png)
-            if (d < 12.0f) {
-                float radial = 1.0f - SmoothStepF(4.2f, 12.0f, d);
-                a = radial * (isPressed ? 165.0f : 92.0f);
-            }
+            float r = 10.0f, g = 12.0f, b = 15.0f, a = 0.0f;
 
-            // Crisp Dark Drop-Shadow / Contour Outline around the white glyph
-            float dummyT = 1.0f;
-            float sh = fmaxf(EvalTopGlyph(px - 0.65f, py - 0.85f, dummyT),
-                             EvalTopGlyph(px + 0.45f, py + 0.55f, dummyT));
+            // Subtle 1px dark drop-shadow contour (no dark circular halo!)
+            float sh = fmaxf(EvalTopGlyph(px - 0.55f, py - 0.70f),
+                             EvalTopGlyph(px + 0.35f, py + 0.45f));
             if (sh > 0.05f) {
-                a = fmaxf(a, sh * 235.0f);
+                a = fmaxf(a, sh * 195.0f);
             }
 
-            float tone = 1.0f;
-            float ic = EvalTopGlyph(px, py, tone);
+            float ic = EvalTopGlyph(px, py);
             if (ic > 0.0f) {
-                float vGrad = 0.5f - 0.5f * (py / 8.5f);
-                // Royale2 Crisp Alabaster-White & Bright Silver-Ivory 3D Icon Palette (matching 199Untitled_4.png!)
-                float baseR = isPressed ? 255.0f : (226.0f + vGrad * 29.0f);
-                float baseG = isPressed ? 255.0f : (225.0f + vGrad * 30.0f);
-                float baseB = isPressed ? 255.0f : (222.0f + vGrad * 32.0f);
-                float shadeTone = (tone < 0.65f) ? tone : (0.86f + 0.14f * tone);
-                float icR = fminf(255.0f, baseR * shadeTone);
-                float icG = fminf(255.0f, baseG * shadeTone);
-                float icB = fminf(255.0f, baseB * shadeTone);
+                float icR = isPressed ? 255.0f : 238.0f;
+                float icG = isPressed ? 242.0f : 235.0f;
+                float icB = isPressed ? 205.0f : 228.0f;
                 r = r * (1.0f - ic) + icR * ic;
                 g = g * (1.0f - ic) + icG * ic;
                 b = b * (1.0f - ic) + icB * ic;
@@ -2672,22 +2605,20 @@ static void WriteExpSphereTGA(const char* path, bool isFilled, float cr, float c
                 float hotSpec = powf(fmaxf(0.0f, -0.45f * nx - 0.55f * ny + sphereZ * 0.62f), 3.6f);
 
                 if (!isFilled) {
-                    // 3D Dark Obsidian-Slate Sphere with Top Glass Crescent Shade & Thin Stone Rim
-                    float botBounce = SmoothStepF(0.15f, 0.90f, ny) * nr * 22.0f;
-                    float glass = fminf(1.0f, topCrescent * 0.55f + hotSpec * 0.45f);
-                    r = 16.0f + botBounce + glass * 155.0f;
-                    g = 17.0f + botBounce + glass * 158.0f;
-                    b = 20.0f + botBounce + glass * 165.0f;
+                    float botBounce = SmoothStepF(0.15f, 0.90f, ny) * nr * 20.0f;
+                    float glass = fminf(1.0f, topCrescent * 0.52f + hotSpec * 0.42f);
+                    r = 16.0f + botBounce + glass * 150.0f;
+                    g = 16.0f + botBounce + glass * 148.0f;
+                    b = 18.0f + botBounce + glass * 142.0f;
                     a = mask * 238.0f;
 
                     float rimD = fabsf(d - (outerR - 1.1f));
                     if (rimD < 1.4f) {
                         float rm = 1.0f - rimD / 1.4f;
                         float grad = 0.65f + 0.35f * (1.0f - (float)(x + y) / (2.0f * size));
-                        float stone = 132.0f * grad + StoneGrainNoise(x, y) * 18.0f;
-                        r = r * (1.0f - rm) + stone * rm;
-                        g = g * (1.0f - rm) + stone * rm;
-                        b = b * (1.0f - rm) + (stone + 4.0f) * rm;
+                        r = r * (1.0f - rm) + (162.0f * grad) * rm;
+                        g = g * (1.0f - rm) + (144.0f * grad) * rm;
+                        b = b * (1.0f - rm) + (114.0f * grad) * rm;
                         a = fmaxf(a, rm * 250.0f);
                     }
                 } else if (d <= innerR + 0.7f) {
@@ -2744,8 +2675,8 @@ static void WritePortraitRingTGA(const char* path) {
                 float topGlass = (1.0f - SmoothStepF(0.15f, 0.68f, crescentEnv)) * SmoothStepF(-0.08f, -0.72f, ny);
                 float innerShadow = SmoothStepF(innerR - 2.4f, innerR, d);
                 r = 245.0f * (1.0f - innerShadow) + 10.0f * innerShadow;
-                g = 248.0f * (1.0f - innerShadow) + 10.0f * innerShadow;
-                b = 252.0f * (1.0f - innerShadow) + 12.0f * innerShadow;
+                g = 245.0f * (1.0f - innerShadow) + 10.0f * innerShadow;
+                b = 240.0f * (1.0f - innerShadow) + 12.0f * innerShadow;
                 a = fminf(215.0f, topGlass * 48.0f + innerShadow * 185.0f);
             } else if (d < outerR + 2.2f) {
                 float sh = 1.0f - SmoothStepF(outerR - 0.5f, outerR + 2.2f, d);
@@ -2758,15 +2689,10 @@ static void WritePortraitRingTGA(const char* path) {
                 float ringMask = inMask * outMask;
 
                 float grad = 0.65f + 0.35f * (-0.55f * nx - 0.82f * ny);
-                float stone = StoneGrainNoise(x, y) * 22.0f;
                 if (d < innerR + 1.3f || d > outerR - 1.4f) {
-                    // Thin Chiseled Stone-Slate Bevel Ridge
-                    float sv = fminf(255.0f, fmaxf(35.0f, 146.0f * grad + stone));
-                    r = sv * 0.97f; g = sv * 0.98f; b = sv;
+                    r = 162.0f * grad; g = 144.0f * grad; b = 114.0f * grad;
                 } else {
-                    // Dark Slate Core Channel
-                    float sv = fminf(255.0f, fmaxf(15.0f, 48.0f * grad + stone * 0.5f));
-                    r = sv * 0.96f; g = sv * 0.98f; b = sv;
+                    r = 54.0f * grad;  g = 48.0f * grad;  b = 40.0f * grad;
                 }
                 a = fmaxf(a, ringMask * 252.0f);
             }
@@ -2781,7 +2707,7 @@ static void WritePortraitRingTGA(const char* path) {
     fclose(fp);
 }
 
-// Thin Chiseled Dark Stone Status Plate without Heart/Crystal/Lightning Icons (196x44)
+// Reverted Status Plate to the full-width rectangular plate from image1.jpeg (196x44)
 static void WriteStatusPlateTGA(const char* path) {
     if (access(path, F_OK) == 0) return;
     const int w = 196, h = 44;
@@ -2793,44 +2719,35 @@ static void WriteStatusPlateTGA(const char* path) {
 
     std::vector<uint8_t> pix((size_t)w * (size_t)h * 4, 0);
     for (int y = 0; y < h; ++y) {
-        int rowMaxX = w - 2;
-        if (y < 18) {
-            rowMaxX = (w - 2) - std::max(0, 5 - y);
-        } else if (y < 31) {
-            rowMaxX = (w - 14) - std::max(0, y - 24);
-        } else {
-            rowMaxX = (w - 26) - std::max(0, y - 36);
-        }
-
         for (int x = 0; x < w; ++x) {
-            if (x > rowMaxX) continue;
             size_t i = ((size_t)y * w + (size_t)x) * 4;
 
-            int distRight = rowMaxX - x;
-            bool isOuterDark = (y == 0 || y == h - 1 || x == 0 || distRight == 0);
-            bool isStoneBevel = (y == 1 || y == h - 2 || x == 1 || distRight == 1);
-            bool isDivider = (y == 17 || y == 18 || y == 30 || y == 31) && (x >= 18 && distRight >= 2);
-            float stoneNoise = StoneGrainNoise(x, y) * 22.0f;
+            bool isOuterDark = (y == 0 || y == h - 1 || x == 0 || x == w - 1);
+            bool isBevel     = (y == 1 || y == h - 2 || x == 1 || x == w - 2);
+            bool isDivider   = (y == 17 || y == 18 || y == 30 || y == 31) && (x >= 18 && x <= w - 3);
 
             float r = 14.0f, g = 15.0f, b = 18.0f, a = 244.0f;
 
             if (isOuterDark) {
                 r = 12.0f; g = 13.0f; b = 15.0f; a = 248.0f;
-            } else if (isStoneBevel) {
-                float grad = (y == 1 || distRight == 1) ? 1.12f : (0.72f + 0.28f * (1.0f - (float)y / (float)h));
-                float sv = fminf(255.0f, fmaxf(35.0f, 128.0f * grad + stoneNoise));
-                r = sv * 0.96f; g = sv * 0.98f; b = sv; a = 254.0f;
+            } else if (isBevel) {
+                float grad = (y == 1 || x == w - 2) ? 1.12f : (0.72f + 0.28f * (1.0f - (float)y / (float)h));
+                r = fminf(255.0f, 156.0f * grad);
+                g = fminf(255.0f, 140.0f * grad);
+                b = fminf(255.0f, 112.0f * grad);
+                a = 254.0f;
             } else if (isDivider) {
-                float divGrad = (y == 17 || y == 30) ? 0.88f : 0.42f;
-                float sv = fminf(255.0f, fmaxf(25.0f, 112.0f * divGrad + stoneNoise * 0.5f));
-                r = sv * 0.96f; g = sv * 0.98f; b = sv; a = 248.0f;
+                float divGrad = (y == 17 || y == 30) ? 0.85f : 0.40f;
+                r = 132.0f * divGrad;
+                g = 118.0f * divGrad;
+                b =  96.0f * divGrad;
+                a = 248.0f;
             } else {
                 bool inSlot = (y >= 4 && y <= 16) || (y >= 19 && y <= 29) || (y >= 32 && y <= 39);
-                if (inSlot && x >= 22 && distRight >= 3) {
+                if (inSlot && x >= 22 && x <= w - 4) {
                     r = 8.0f; g = 9.0f; b = 11.0f; a = 248.0f;
                 } else {
-                    float sv = 24.0f + stoneNoise * 0.35f;
-                    r = sv; g = sv; b = sv + 2.0f; a = 246.0f;
+                    r = 22.0f; g = 22.0f; b = 24.0f; a = 246.0f;
                 }
             }
             pix[i + 0] = ClampU8(b); pix[i + 1] = ClampU8(g); pix[i + 2] = ClampU8(r); pix[i + 3] = ClampU8(a);
@@ -2840,7 +2757,7 @@ static void WriteStatusPlateTGA(const char* path) {
     fclose(fp);
 }
 
-// Smooth, Slow-Drifting Silk-Liquid Bar Fill Shader (3D Glass Tube + Gentle Caustic Flow, No Noisy Boiling Bubbles)
+// Full-width rectangular HP/SP/ST Bar Fill with 8-frame animated silk-liquid caustic wave
 static void WriteGlossyBarFillTGA(const char* path, int w, int h, float cr, float cg, float cb, int frameIdx = 0) {
     if (access(path, F_OK) == 0) return;
     FILE* fp = fopen(path, "wb");
@@ -2856,17 +2773,15 @@ static void WriteGlossyBarFillTGA(const char* path, int w, int h, float cr, floa
         float ny = (float)y / (float)(h > 1 ? h - 1 : 1);
         float cyl = 0.52f + 0.48f * sinf(ny * 3.14159265f);
         float topSpec = (ny >= 0.10f && ny <= 0.32f) ? 46.0f : 0.0f;
-        int rowMaxW = w - std::max(0, y - (h / 2));
 
         for (int x = 0; x < w; ++x) {
-            if (x >= rowMaxW) continue;
             size_t i = ((size_t)y * w + (size_t)x) * 4;
 
-            // Gentle, wide silk-liquid caustic wave
-            float wave1 = 0.5f + 0.5f * sinf(((float)x / 57.0f + ny * 0.28f) * 6.2831853f - phase);
-            float wave2 = 0.5f + 0.5f * cosf(((float)x / 85.5f - ny * 0.22f) * 6.2831853f + phase);
-            float caustic = powf(0.6f * wave1 + 0.4f * wave2, 2.6f) * 32.0f * sinf(ny * 3.14159265f);
-            float bodyBoost = 0.90f + 0.16f * wave1;
+            // Both harmonics travel in the SAME forward direction (-phase) with exact integer cycles across w=171 so 7->0 loops seamlessly
+            float wave1 = 0.5f + 0.5f * sinf(((float)x / 57.0f + ny * 0.24f) * 6.2831853f - phase);
+            float wave2 = 0.5f + 0.5f * cosf(((float)x / 85.5f - ny * 0.18f) * 6.2831853f - phase);
+            float caustic = powf(0.62f * wave1 + 0.38f * wave2, 2.4f) * 40.0f * sinf(ny * 3.14159265f);
+            float bodyBoost = 0.88f + 0.20f * wave1;
 
             float r = fminf(255.0f, cr * cyl * bodyBoost + topSpec + caustic);
             float g = fminf(255.0f, cg * cyl * bodyBoost + topSpec + caustic * 0.95f);
@@ -2878,7 +2793,7 @@ static void WriteGlossyBarFillTGA(const char* path, int w, int h, float cr, floa
     fclose(fp);
 }
 
-// 3D Glass Sphere Dome + Chiseled Dark Stone-Slate Collar & Bezel ON TOP of QuickSlots (Zero Red/Crimson!)
+// 3D Glass Sphere Dome + Classic Dark Smoky Collar & Warm Muted Bronze-Taupe Bezel ON TOP of QuickSlots
 static void WriteCircularBezelOverlayTGA(const char* path, int size, float holeR, float outerR, float rimW, bool isJadeAffect = false) {
     if (access(path, F_OK) == 0)
         return;
@@ -2906,7 +2821,6 @@ static void WriteCircularBezelOverlayTGA(const char* path, int size, float holeR
             float px = (x + 0.5f) - half;
             float nx = px / outerR;
             float d = hypotf(px, py);
-            float grain = StoneGrainNoise(x, y);
 
             float r = 12.0f, g = 13.0f, b = 15.0f, a = 0.0f;
 
@@ -2916,55 +2830,53 @@ static void WriteCircularBezelOverlayTGA(const char* path, int size, float holeR
                 float nr = d / holeR;
                 float sphereZ = sqrtf(fmaxf(0.0f, 1.0f - nr * nr));
 
-                // 1. Top Crescent Glass Dome Shade over the skill/potion icon
+                // 1. Top Crescent Glass Dome Shade over the skill/potion/weapon icon
                 float crescentEnv = hypotf(hnx * 1.12f, (hny + 0.48f) * 1.85f);
                 float topCrescent = (1.0f - SmoothStepF(0.16f, 0.76f, crescentEnv)) * SmoothStepF(-0.08f, -0.82f, hny);
                 float hotSpec = powf(fmaxf(0.0f, -0.45f * hnx - 0.65f * hny + sphereZ * 0.35f), 4.8f);
-                float glassAlphaVal = fminf(132.0f, topCrescent * 95.0f + hotSpec * 56.0f);
+                float glassAlphaVal = fminf(128.0f, topCrescent * 92.0f + hotSpec * 52.0f);
 
-                // 2. 3D Spherical Stone Rim Vignette around the icon perimeter
+                // 2. 3D Spherical Rim Vignette around the icon perimeter
                 float innerVig = SmoothStepF(holeR - 5.0f, holeR, d);
-                float vigR = 10.0f, vigG = 12.0f, vigB = 14.0f;
-                float vigA = innerVig * 222.0f;
+                float vigR = 12.0f, vigG = 12.0f, vigB = 14.0f;
+                float vigA = innerVig * 220.0f;
 
                 float totalA = fminf(246.0f, glassAlphaVal + vigA);
                 if (totalA > 0.5f) {
                     float wGlass = glassAlphaVal / totalA;
                     r = 248.0f * wGlass + vigR * (1.0f - wGlass);
-                    g = 250.0f * wGlass + vigG * (1.0f - wGlass);
-                    b = 255.0f * wGlass + vigB * (1.0f - wGlass);
+                    g = 244.0f * wGlass + vigG * (1.0f - wGlass);
+                    b = 235.0f * wGlass + vigB * (1.0f - wGlass);
                     a = totalA;
                 }
             } else if (d <= outerR) {
-                // Opaque Chiseled Dark Stone-Slate Collar + Thin Stone Bezel Rim
                 float outFade = 1.0f - SmoothStepF(outerR - 1.0f, outerR + 0.4f, d);
-                float lGrad = 0.56f + 0.44f * (-0.58f * nx - 0.82f * ny);
-                float stoneTex = grain * 24.0f;
+                float lGrad = 0.58f + 0.42f * (-0.58f * nx - 0.82f * ny);
 
-                r = (20.0f + grain * 8.0f) * lGrad;
-                g = (22.0f + grain * 8.0f) * lGrad;
-                b = (25.0f + grain * 8.0f) * lGrad;
+                r = 20.0f * lGrad;
+                g = 20.0f * lGrad;
+                b = 22.0f * lGrad;
                 a = 255.0f * outFade;
 
-                float rimR = isJadeAffect ? 120.0f : 138.0f;
-                float rimG = isJadeAffect ? 158.0f : 142.0f;
-                float rimB = isJadeAffect ? 156.0f : 148.0f;
+                float rimR = isJadeAffect ? 120.0f : 162.0f;
+                float rimG = isJadeAffect ? 158.0f : 144.0f;
+                float rimB = isJadeAffect ? 156.0f : 114.0f;
 
                 float inLipD = fabsf(d - (holeR + 1.1f));
                 if (inLipD < 1.5f) {
                     float im = (1.0f - inLipD / 1.5f) * 0.78f;
-                    r = r * (1.0f - im) + fmaxf(25.0f, rimR * lGrad + stoneTex) * im;
-                    g = g * (1.0f - im) + fmaxf(25.0f, rimG * lGrad + stoneTex) * im;
-                    b = b * (1.0f - im) + fmaxf(28.0f, rimB * lGrad + stoneTex) * im;
+                    r = r * (1.0f - im) + (rimR * lGrad) * im;
+                    g = g * (1.0f - im) + (rimG * lGrad) * im;
+                    b = b * (1.0f - im) + (rimB * lGrad) * im;
                 }
 
                 float outRimD = fabsf(d - (outerR - rimW * 0.42f));
                 if (outRimD < rimW * 0.68f) {
                     float rm = 1.0f - SmoothStepF(rimW * 0.18f, rimW * 0.68f, outRimD);
-                    float spec = powf(fmaxf(0.0f, -0.60f * nx - 0.80f * ny), 3.5f) * 38.0f;
-                    r = r * (1.0f - rm) + fminf(255.0f, fmaxf(30.0f, rimR * lGrad + stoneTex + spec)) * rm;
-                    g = g * (1.0f - rm) + fminf(255.0f, fmaxf(30.0f, rimG * lGrad + stoneTex + spec)) * rm;
-                    b = b * (1.0f - rm) + fminf(255.0f, fmaxf(32.0f, rimB * lGrad + stoneTex + spec)) * rm;
+                    float spec = powf(fmaxf(0.0f, -0.60f * nx - 0.80f * ny), 3.5f) * 34.0f;
+                    r = r * (1.0f - rm) + fminf(255.0f, rimR * lGrad + spec) * rm;
+                    g = g * (1.0f - rm) + fminf(255.0f, rimG * lGrad + spec * 0.92f) * rm;
+                    b = b * (1.0f - rm) + fminf(255.0f, rimB * lGrad + spec * 0.78f) * rm;
                 }
             } else if (d < outerR + 2.8f) {
                 float sh = 1.0f - SmoothStepF(outerR, outerR + 2.8f, d);
@@ -3115,7 +3027,6 @@ static void WriteTooltipActionIconTGA(const char* path, int iconType, bool isPre
     fclose(fp);
 }
 
-// High-Detail 88x88 Full-Color Illustrated Visual Medallions for the Quick Access Drawer (No Text Needed!)
 static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, float ag, float ab) {
     if (access(path, F_OK) == 0)
         return;
@@ -3141,7 +3052,6 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
         float m = 0.0f;
 
         if (sysType == 0) {
-            // 0: Auto-Hunt (Glowing Crimson Target Reticle + Crossed Golden-Steel Broadswords + Lightning Bolt)
             float ringD = fabsf(ud - 14.2f);
             if (ringD < 1.6f && ax > 2.8f && ay > 2.8f) {
                 m = 1.0f - SmoothStepF(0.6f, 1.6f, ringD);
@@ -3163,7 +3073,6 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
                 }
             }
         } else if (sysType == 1) {
-            // 1: Switchbot (Glowing Violet-Gold Enchantment Cycle Arrows + Central 4-Point Magic Star)
             float orbD = fabsf(ud - 13.5f);
             if (orbD < 2.1f && ax > 2.4f) {
                 m = 1.0f - SmoothStepF(0.8f, 2.1f, orbD);
@@ -3184,7 +3093,6 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
                 }
             }
         } else if (sysType == 2) {
-            // 2: Dragon Soul Alchemy (Golden Wheel + 6 Colored Elemental Cor Gems + Central Diamond)
             float wheelD = fabsf(ud - 13.8f);
             if (wheelD < 1.4f) {
                 m = 0.88f;
@@ -3215,7 +3123,6 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
                 }
             }
         } else if (sysType == 3) {
-            // 3: Ikarus Shop Search (Golden Magnifying Glass over Turquoise Market Booth / Coin)
             float lx = ux + 2.5f, ly = uy + 2.5f;
             float ld = hypotf(lx, ly);
             float rimD = fabsf(ld - 9.6f);
@@ -3238,17 +3145,16 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
                 }
             }
         } else if (sysType == 4) {
-            // 4: Won & Yang Exchange (Sapphire-Silver Won Coin + Golden Yang Coin + Exchange Arrows)
             float c1 = hypotf(ux + 4.4f, uy + 3.4f);
             float c2 = hypotf(ux - 4.4f, uy - 3.4f);
             if (c2 <= 8.2f) {
                 m = 1.0f - SmoothStepF(7.0f, 8.2f, c2);
                 float ring = (fabsf(c2 - 5.4f) < 0.85f || c2 < 2.0f) ? 0.55f : 1.0f;
-                outR = 255.0f * ring; outG = 208.0f * ring; outB = 82.0f * ring; // Gold Yang Coin
+                outR = 255.0f * ring; outG = 208.0f * ring; outB = 82.0f * ring;
             } else if (c1 <= 8.0f && c2 > 8.8f) {
                 m = 1.0f - SmoothStepF(6.8f, 8.0f, c1);
                 float ring = (fabsf(c1 - 5.2f) < 0.85f) ? 0.55f : 1.0f;
-                outR = 125.0f * ring; outG = 215.0f * ring; outB = 255.0f * ring; // Blue-Silver Won Coin
+                outR = 125.0f * ring; outG = 215.0f * ring; outB = 255.0f * ring;
             }
             float arr1 = DistToSegF(ux, uy,  3.5f, -11.0f, 11.0f, -3.5f);
             float arr2 = DistToSegF(ux, uy, -11.0f,  3.5f, -3.5f, 11.0f);
@@ -3257,7 +3163,6 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
                 outR = 255.0f; outG = 245.0f; outB = 215.0f;
             }
         } else if (sysType == 5) {
-            // 5: Special Storage (Twin Layered Treasure Chests — Bronze Back Chest & Golden-Trimmed Front Chest)
             float b1x = ux + 3.6f, b1y = uy + 3.0f;
             float b2x = ux - 3.4f, b2y = uy - 3.0f;
             bool inFront = (fabsf(b2x) <= 8.2f && fabsf(b2y) <= 6.8f);
@@ -3277,7 +3182,6 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
                 if (fabsf(b1y + 1.0f) < 0.85f) m = 0.15f;
             }
         } else if (sysType == 6) {
-            // 6: Safebox / Warehouse (Heavy Steel-Reinforced Vault Door with Golden Lock Wheel)
             if (ax <= 11.6f && ay <= 10.6f) {
                 m = 0.98f;
                 float border = fmaxf(ax - 9.2f, ay - 8.2f);
@@ -3296,7 +3200,6 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
                 }
             }
         } else if (sysType == 7) {
-            // 7: Companion Pet (Glowing Golden-Amber Beast Paw Emblem)
             float padD = hypotf(ux * 0.84f, (uy - 4.4f) * 1.08f) - 5.8f;
             float t1 = hypotf((ux + 8.0f) * 1.12f, (uy + 2.2f) * 0.88f) - 3.0f;
             float t2 = hypotf((ux + 2.9f) * 1.12f, (uy + 7.0f) * 0.88f) - 3.2f;
@@ -3311,17 +3214,16 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
                 outB = fminf(255.0f,  88.0f * bev);
             }
         } else if (sysType == 8) {
-            // 8: PickUp Filter (Crimson & Silver Horseshoe Magnet + Golden Loot Sparkles)
             float archR = hypotf(ax, fminf(0.0f, uy + 1.5f));
             float armD = (uy > -1.5f) ? fabsf(ax - 8.0f) : fabsf(archR - 8.0f);
             if (uy <= 9.8f && armD <= 3.0f) {
                 m = 1.0f - SmoothStepF(2.0f, 3.0f, armD);
                 if (uy > 4.5f) {
-                    outR = 230.0f; outG = 235.0f; outB = 242.0f; // Silver magnet tips
+                    outR = 230.0f; outG = 235.0f; outB = 242.0f;
                 } else if (fabsf(uy - 4.2f) < 0.7f) {
                     outR = 45.0f; outG = 25.0f; outB = 25.0f;
                 } else {
-                    outR = 235.0f; outG = 68.0f; outB = 62.0f; // Crimson magnet body
+                    outR = 235.0f; outG = 68.0f; outB = 62.0f;
                 }
             }
             float spk = fminf(ax * 0.5f + fabsf(uy - 10.8f), ax + fabsf(uy - 10.8f) * 0.5f);
@@ -3333,7 +3235,6 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
                 }
             }
         } else if (sysType == 10) {
-            // 10: Render Target Preview (Golden Mirror Frame + Glowing Cyan-Sapphire 3D Eye)
             float eyeY = 6.8f * (1.0f - (ux * ux) / 152.0f);
             if (ax <= 12.4f && fabsf(ay - eyeY) <= 2.0f) {
                 m = 1.0f - SmoothStepF(1.0f, 2.0f, fabsf(ay - eyeY));
@@ -3376,13 +3277,11 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
                 float radRatio = fminf(1.0f, d / innerEdge);
                 float sphereZ = sqrtf(fmaxf(0.0f, 1.0f - radRatio * radRatio));
 
-                // Warm uicharacter-style Dark Espresso-Brown & System-Tinted Lower Bowl
                 float botGlow = SmoothStepF(-0.20f, 0.88f, ny) * (0.30f + 0.70f * radRatio);
                 r = 18.0f + botGlow * ar * 0.42f + grain * 4.0f;
                 g = 13.0f + botGlow * ag * 0.36f + grain * 3.0f;
                 b = 10.0f + botGlow * ab * 0.32f + grain * 3.0f;
 
-                // Top 3D Glass Crescent Shade
                 float crescentEnv = hypotf(nx * 1.12f, (ny + 0.46f) * 1.78f);
                 float topCrescent = (1.0f - SmoothStepF(0.16f, 0.76f, crescentEnv)) * SmoothStepF(-0.05f, -0.78f, ny);
                 float hotSpot = powf(fmaxf(0.0f, -0.45f * nx - 0.65f * ny + sphereZ * 0.35f), 4.5f);
@@ -3392,7 +3291,6 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
                 b = b * (1.0f - glass * 0.48f) + 208.0f * (glass * 0.48f);
                 a = fmaxf(a, bodyMask * 250.0f);
 
-                // Warm Antique Bronze-Gold Outer Bezel matching uicharacter
                 float rimDist = fabsf(d - (outerR - rimW * 0.5f));
                 if (rimDist < rimW * 0.88f) {
                     float rm = 1.0f - SmoothStepF(rimW * 0.25f, rimW * 0.88f, rimDist);
@@ -3433,7 +3331,7 @@ static void WriteUtilitySystemIconTGA(const char* path, int sysType, float ar, f
 }
 
 static void WriteMobileStatusHUDTextures() {
-    WriteMobileRingTGA("mark/m_portrait_bg.tga", 64, 28.5f, 2.2f, 238.0f, 136,140,148, 182,188,196, MICON_NONE, false);
+    WriteMobileRingTGA("mark/m_portrait_bg.tga", 64, 28.5f, 2.2f, 238.0f, 162,144,114, 212,188,144, MICON_NONE, false);
     WritePortraitRingTGA("mark/m_portrait_ring.tga");
     WriteExpSphereTGA("mark/m_exp_orb_empty_v3.tga", false, 0.0f, 0.0f, 0.0f);
     WriteExpSphereTGA("mark/m_exp_orb_full_v3.tga",  true, 232.0f, 184.0f, 42.0f);
@@ -3444,9 +3342,10 @@ static void WriteMobileStatusHUDTextures() {
         snprintf(hpPath, sizeof(hpPath), "mark/m_hud_hp_v4_%d.tga", f);
         snprintf(spPath, sizeof(spPath), "mark/m_hud_sp_v4_%d.tga", f);
         snprintf(enPath, sizeof(enPath), "mark/m_hud_en_v4_%d.tga", f);
+        // Full 171px width for all 3 bars matching image1.jpeg
         WriteGlossyBarFillTGA(hpPath, 171, 13, 218.0f,  32.0f,  32.0f, f);
-        WriteGlossyBarFillTGA(spPath, 159, 11,  32.0f, 122.0f, 235.0f, f);
-        WriteGlossyBarFillTGA(enPath, 147,  8, 224.0f, 174.0f,  38.0f, f);
+        WriteGlossyBarFillTGA(spPath, 171, 11,  32.0f, 122.0f, 235.0f, f);
+        WriteGlossyBarFillTGA(enPath, 171,  8, 224.0f, 174.0f,  38.0f, f);
     }
 
     WriteCircularBezelOverlayTGA("mark/m_slot_bezel_v6.tga",   144, 46.0f, 67.5f, 4.0f, false);
@@ -3479,7 +3378,7 @@ static void WriteMobileStatusHUDTextures() {
 }
 
 void GenerateMobileHUDTextures() {
-    if (access("mark/theme_wo_stone_v13.flag", F_OK) != 0) {
+    if (access("mark/theme_wo_classic_v16.flag", F_OK) != 0) {
         static const char* s_oldTgas[] = {
             "mark/m_minimap_frame.tga", "mark/m_portrait_bg.tga", "mark/m_portrait_ring.tga",
             "mark/m_hud_plate_v2.tga", "mark/m_hud_plate_v3.tga", "mark/m_hud_plate_v4.tga",
@@ -3523,20 +3422,21 @@ void GenerateMobileHUDTextures() {
             snprintf(p3, sizeof(p3), "mark/m_hud_en_v4_%d.tga", f);
             unlink(p1); unlink(p2); unlink(p3);
         }
-        if (FILE* f = fopen("mark/theme_wo_stone_v13.flag", "wb")) fclose(f);
+        if (FILE* f = fopen("mark/theme_wo_classic_v16.flag", "wb")) fclose(f);
     }
 
-    WriteMobileRingTGA("mark/m_joy_bg_v2.tga",        160, 72.0f, 3.6f, 160.0f, 136,140,148, 182,188,196, MICON_JOY_BG,      false);
-    WriteMobileRingTGA("mark/m_joy_knob_norm_v2.tga",  76, 31.0f, 2.8f, 225.0f, 245,248,255, 255,255,255, MICON_JOY_KNOB,    false);
-    WriteMobileRingTGA("mark/m_joy_knob_down_v2.tga",  76, 33.0f, 3.2f, 250.0f, 255,255,255, 255,255,255, MICON_JOY_KNOB,    true);
+    // Reverted Joystick Base & Dark Smoky Knob with Warm Muted Bronze-Taupe Rims (matching image1.jpeg)
+    WriteMobileRingTGA("mark/m_joy_bg_v2.tga",        160, 72.0f, 3.6f, 155.0f, 162,144,114, 212,188,144, MICON_JOY_BG,      false);
+    WriteMobileRingTGA("mark/m_joy_knob_norm_v2.tga",  76, 31.0f, 3.2f, 225.0f, 162,144,114, 212,188,144, MICON_JOY_KNOB,    false);
+    WriteMobileRingTGA("mark/m_joy_knob_down_v2.tga",  76, 33.0f, 3.6f, 248.0f, 212,188,144, 242,218,172, MICON_JOY_KNOB,    true);
 
     WriteSquaredMiniMapTextures();
     WriteMobileStatusHUDTextures();
 
-    WriteMobileRingTGA("mark/m_mm_plus_norm.tga",  24, 10.5f, 1.4f, 225.0f, 136,140,148, 182,188,196, MICON_PLUS,  false);
-    WriteMobileRingTGA("mark/m_mm_plus_down.tga",  24, 11.0f, 1.8f, 248.0f, 185,190,198, 225,230,238, MICON_PLUS,  true);
-    WriteMobileRingTGA("mark/m_mm_minus_norm.tga", 24, 10.5f, 1.4f, 225.0f, 136,140,148, 182,188,196, MICON_MINUS, false);
-    WriteMobileRingTGA("mark/m_mm_minus_down.tga", 24, 11.0f, 1.8f, 248.0f, 185,190,198, 225,230,238, MICON_MINUS, true);
+    WriteMobileRingTGA("mark/m_mm_plus_norm.tga",  24, 10.5f, 1.4f, 225.0f, 162,144,114, 212,188,144, MICON_PLUS,  false);
+    WriteMobileRingTGA("mark/m_mm_plus_down.tga",  24, 11.0f, 1.8f, 248.0f, 212,188,144, 242,218,172, MICON_PLUS,  true);
+    WriteMobileRingTGA("mark/m_mm_minus_norm.tga", 24, 10.5f, 1.4f, 225.0f, 162,144,114, 212,188,144, MICON_MINUS, false);
+    WriteMobileRingTGA("mark/m_mm_minus_down.tga", 24, 11.0f, 1.8f, 248.0f, 212,188,144, 242,218,172, MICON_MINUS, true);
 
     WriteTopBarButtonTGA("mark/m_top_char_norm_v4.tga",  TICON_CHAR,       false);
     WriteTopBarButtonTGA("mark/m_top_char_down_v4.tga",  TICON_CHAR,       true);
@@ -3555,29 +3455,29 @@ void GenerateMobileHUDTextures() {
     WriteTopBarButtonTGA("mark/m_top_spec_norm_v4.tga",  TICON_SPEC_BOXES, false);
     WriteTopBarButtonTGA("mark/m_top_spec_down_v4.tga",  TICON_SPEC_BOXES, true);
 
-    // Chiseled Dark Stone-Slate Spheres + Thin Stone Rims (136, 140, 148)
-    WriteMobileRingTGA("mark/m_atk_norm_v3.tga",        280, 128.0f,  9.2f, 238.0f, 136,140,148, 185,190,198, MICON_ATK_SWORDS,   false);
-    WriteMobileRingTGA("mark/m_atk_down_v3.tga",        280, 132.0f, 10.6f, 250.0f, 185,190,198, 225,230,238, MICON_ATK_SWORDS,   true);
-    WriteMobileRingTGA("mark/m_atk_norm_v5.tga",        288, 132.0f,  9.2f, 238.0f, 136,140,148, 185,190,198, MICON_ATK_SWORDS,   false);
-    WriteMobileRingTGA("mark/m_atk_down_v5.tga",        288, 136.0f, 10.6f, 252.0f, 185,190,198, 225,230,238, MICON_ATK_SWORDS,   true);
-    WriteMobileRingTGA("mark/m_slot_norm_v3.tga",       144,  67.5f,  6.2f, 236.0f, 136,140,148, 182,188,196, MICON_NONE,         false);
-    WriteMobileRingTGA("mark/m_slot_over_v3.tga",       144,  69.0f,  7.2f, 248.0f, 185,190,198, 225,230,238, MICON_NONE,         true);
-    WriteMobileRingTGA("mark/m_btn_lock_norm_v3.tga",   128,  55.0f,  6.0f, 236.0f, 136,140,148, 182,188,196, MICON_TARGET,       false);
-    WriteMobileRingTGA("mark/m_btn_lock_down_v3.tga",   128,  57.0f,  7.0f, 250.0f, 185,190,198, 225,230,238, MICON_TARGET,       true);
-    WriteMobileRingTGA("mark/m_btn_loot_norm_v3.tga",   128,  55.0f,  6.0f, 236.0f, 136,140,148, 182,188,196, MICON_LOOT,         false);
-    WriteMobileRingTGA("mark/m_btn_loot_down_v3.tga",   128,  57.0f,  7.0f, 250.0f, 185,190,198, 225,230,238, MICON_LOOT,         true);
-    WriteMobileRingTGA("mark/m_btn_page_norm_v3.tga",   128,  55.0f,  6.0f, 236.0f, 136,140,148, 182,188,196, MICON_PAGE,         false);
-    WriteMobileRingTGA("mark/m_btn_page_down_v3.tga",   128,  57.0f,  7.0f, 250.0f, 185,190,198, 225,230,238, MICON_PAGE,         true);
-    WriteMobileRingTGA("mark/m_btn_mount_norm_v3.tga",  128,  57.0f,  6.2f, 236.0f, 136,140,148, 182,188,196, MICON_MOUNT,        false);
-    WriteMobileRingTGA("mark/m_btn_mount_down_v3.tga",  128,  59.0f,  7.2f, 250.0f, 185,190,198, 225,230,238, MICON_MOUNT,        true);
-    WriteMobileRingTGA("mark/m_btn_chat_norm_v3.tga",   112,  49.0f,  5.6f, 236.0f, 136,140,148, 182,188,196, MICON_CHAT_BUBBLE,  false);
-    WriteMobileRingTGA("mark/m_btn_chat_down_v3.tga",   112,  51.0f,  6.8f, 250.0f, 185,190,198, 225,230,238, MICON_CHAT_BUBBLE,  true);
-    WriteMobileRingTGA("mark/m_btn_emote_norm_v6.tga",  112,  49.0f,  5.6f, 236.0f, 136,140,148, 182,188,196, MICON_EMOTE_SMILEY, false);
-    WriteMobileRingTGA("mark/m_btn_emote_down_v6.tga",  112,  51.0f,  6.8f, 250.0f, 185,190,198, 225,230,238, MICON_EMOTE_SMILEY, true);
-    WriteMobileRingTGA("mark/m_btn_auto_norm_v6.tga",   112,  49.0f,  5.6f, 236.0f, 136,140,148, 182,188,196, MICON_AUTO_COMBAT,  false);
-    WriteMobileRingTGA("mark/m_btn_auto_down_v6.tga",   112,  51.0f,  6.8f, 250.0f, 185,190,198, 225,230,238, MICON_AUTO_COMBAT,  true);
-    WriteMobileRingTGA("mark/m_btn_quest_norm_v6.tga",  112,  49.0f,  5.6f, 236.0f, 136,140,148, 182,188,196, MICON_QUEST_SCROLL, false);
-    WriteMobileRingTGA("mark/m_btn_quest_down_v6.tga",  112,  51.0f,  6.8f, 250.0f, 185,190,198, 225,230,238, MICON_QUEST_SCROLL, true);
+    // Attack Button uses MICON_NONE (Empty Shaded Slot!) so Python renders the character's equipped weapon icon inside it!
+    WriteMobileRingTGA("mark/m_atk_norm_v3.tga",        280, 128.0f,  9.2f, 236.0f, 162,144,114, 212,188,144, MICON_NONE,         false);
+    WriteMobileRingTGA("mark/m_atk_down_v3.tga",        280, 132.0f, 10.6f, 250.0f, 212,188,144, 242,218,172, MICON_NONE,         true);
+    WriteMobileRingTGA("mark/m_atk_norm_v5.tga",        288, 132.0f,  9.2f, 236.0f, 162,144,114, 212,188,144, MICON_NONE,         false);
+    WriteMobileRingTGA("mark/m_atk_down_v5.tga",        288, 136.0f, 10.6f, 252.0f, 212,188,144, 242,218,172, MICON_NONE,         true);
+    WriteMobileRingTGA("mark/m_slot_norm_v3.tga",       144,  67.5f,  6.2f, 236.0f, 162,144,114, 212,188,144, MICON_NONE,         false);
+    WriteMobileRingTGA("mark/m_slot_over_v3.tga",       144,  69.0f,  7.2f, 248.0f, 212,188,144, 242,218,172, MICON_NONE,         true);
+    WriteMobileRingTGA("mark/m_btn_lock_norm_v3.tga",   128,  55.0f,  6.0f, 236.0f, 162,144,114, 212,188,144, MICON_TARGET,       false);
+    WriteMobileRingTGA("mark/m_btn_lock_down_v3.tga",   128,  57.0f,  7.0f, 250.0f, 212,188,144, 242,218,172, MICON_TARGET,       true);
+    WriteMobileRingTGA("mark/m_btn_loot_norm_v3.tga",   128,  55.0f,  6.0f, 236.0f, 162,144,114, 212,188,144, MICON_LOOT,         false);
+    WriteMobileRingTGA("mark/m_btn_loot_down_v3.tga",   128,  57.0f,  7.0f, 250.0f, 212,188,144, 242,218,172, MICON_LOOT,         true);
+    WriteMobileRingTGA("mark/m_btn_page_norm_v3.tga",   128,  55.0f,  6.0f, 236.0f, 162,144,114, 212,188,144, MICON_PAGE,         false);
+    WriteMobileRingTGA("mark/m_btn_page_down_v3.tga",   128,  57.0f,  7.0f, 250.0f, 212,188,144, 242,218,172, MICON_PAGE,         true);
+    WriteMobileRingTGA("mark/m_btn_mount_norm_v3.tga",  128,  57.0f,  6.2f, 236.0f, 162,144,114, 212,188,144, MICON_MOUNT,        false);
+    WriteMobileRingTGA("mark/m_btn_mount_down_v3.tga",  128,  59.0f,  7.2f, 250.0f, 212,188,144, 242,218,172, MICON_MOUNT,        true);
+    WriteMobileRingTGA("mark/m_btn_chat_norm_v3.tga",   112,  49.0f,  5.6f, 236.0f, 162,144,114, 212,188,144, MICON_CHAT_BUBBLE,  false);
+    WriteMobileRingTGA("mark/m_btn_chat_down_v3.tga",   112,  51.0f,  6.8f, 250.0f, 212,188,144, 242,218,172, MICON_CHAT_BUBBLE,  true);
+    WriteMobileRingTGA("mark/m_btn_emote_norm_v6.tga",  112,  49.0f,  5.6f, 236.0f, 162,144,114, 212,188,144, MICON_EMOTE_SMILEY, false);
+    WriteMobileRingTGA("mark/m_btn_emote_down_v6.tga",  112,  51.0f,  6.8f, 250.0f, 212,188,144, 242,218,172, MICON_EMOTE_SMILEY, true);
+    WriteMobileRingTGA("mark/m_btn_auto_norm_v6.tga",   112,  49.0f,  5.6f, 236.0f, 162,144,114, 212,188,144, MICON_AUTO_COMBAT,  false);
+    WriteMobileRingTGA("mark/m_btn_auto_down_v6.tga",   112,  51.0f,  6.8f, 250.0f, 212,188,144, 242,218,172, MICON_AUTO_COMBAT,  true);
+    WriteMobileRingTGA("mark/m_btn_quest_norm_v6.tga",  112,  49.0f,  5.6f, 236.0f, 162,144,114, 212,188,144, MICON_QUEST_SCROLL, false);
+    WriteMobileRingTGA("mark/m_btn_quest_down_v6.tga",  112,  51.0f,  6.8f, 250.0f, 212,188,144, 242,218,172, MICON_QUEST_SCROLL, true);
 }
 
 // ============================================================================
@@ -4939,6 +4839,11 @@ static PyObject* mobileInput_OpenURL(PyObject* self, PyObject* args) {
 }
 
 static PyObject* mobileInput_CloseApp(PyObject* /*self*/, PyObject* /*args*/) {
+    s_bEngineReady = false;
+    signal(SIGSEGV, SIG_DFL);
+    signal(SIGABRT, SIG_DFL);
+    signal(SIGBUS, SIG_DFL);
+    unlink("crash_report.txt");
 #if defined(__APPLE__)
     IOSCloseApp();
 #else

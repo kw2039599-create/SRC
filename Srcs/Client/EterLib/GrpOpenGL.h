@@ -2539,7 +2539,9 @@ inline HRESULT IDirect3DTexture8::UnlockRect(UINT Level) {
 #ifdef __ANDROID__
 			if (bNeedFullAlloc) glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
 			else glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+#if !defined(__APPLE__)
 			m_rgbaBackup = std::move(rgba);
+#endif
 			contextGen = g_AndroidGLContextGen;
 #else
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_BGRA_EXT, GL_UNSIGNED_BYTE, rgba.data());
@@ -2551,7 +2553,9 @@ inline HRESULT IDirect3DTexture8::UnlockRect(UINT Level) {
 			SwizzleBGRAtoRGBAInPlace(pix, w * h, forceOpaque);
 			if (bNeedFullAlloc) glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pix);
 			else glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pix);
+#if !defined(__APPLE__)
 			m_rgbaBackup.assign(pix, pix + (size_t)w * (size_t)h);
+#endif
 			contextGen = g_AndroidGLContextGen;
 #else
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_BGRA_EXT, GL_UNSIGNED_BYTE, pLockedData);
@@ -3194,7 +3198,9 @@ inline HRESULT D3DXCreateTextureFromFileInMemoryEx(LPDIRECT3DDEVICE8 pDev, LPCVO
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 			}
+#if !defined(__APPLE__)
 			tex->m_rgbaBackup = std::move(bgra);
+#endif
 			glBindTexture(GL_TEXTURE_2D, prevTex);
 			*ppTex = tex;
 			return S_OK;

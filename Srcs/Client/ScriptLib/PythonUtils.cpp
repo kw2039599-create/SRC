@@ -1,7 +1,43 @@
 #include "StdAfx.h"
 #include "PythonUtils.h"
+#ifdef __ANDROID__
+static long long Android_PyObject_AsInt64(PyObject* poItem)
+{
+	if (!poItem || poItem == Py_None)
+		return 0;
+	if (PyInt_Check(poItem))
+		return (long long)PyInt_AS_LONG(poItem);
+	if (PyLong_Check(poItem))
+	{
+		unsigned long long uval = PyLong_AsUnsignedLongLongMask(poItem);
+		if (PyErr_Occurred())
+			PyErr_Clear();
+		return (long long)uval;
+	}
+	long long val = PyLong_AsLongLong(poItem);
+	if (PyErr_Occurred())
+	{
+		PyErr_Clear();
+		unsigned long long uval = PyInt_AsUnsignedLongLongMask(poItem);
+		if (PyErr_Occurred())
+		{
+			PyErr_Clear();
+			return 0;
+		}
+		return (long long)uval;
+	}
+	return val;
+}
+#undef PyLong_AsLong
+#undef PyLong_AsUnsignedLong
+#undef PyLong_AsLongLong
+#define PyLong_AsLongLong(op) Android_PyObject_AsInt64(op)
+#define PyLong_AsLong(op) Android_PyObject_AsInt64(op)
+#define PyLong_AsUnsignedLong(op) ((unsigned long)Android_PyObject_AsInt64(op))
+#else
 #define PyLong_AsLong PyLong_AsLongLong
 #define PyLong_AsUnsignedLong (unsigned long)PyLong_AsLongLong // it may return random values without the explicit cast
+#endif
 IPythonExceptionSender * g_pkExceptionSender = NULL;
 
 bool __PyCallClassMemberFunc_ByCString(PyObject* poClass, const char* c_szFunc, PyObject* poArgs, PyObject** poRet);
